@@ -3,7 +3,7 @@ import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
-import { extractJson } from "../util/extract.ts";
+import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
@@ -78,7 +78,12 @@ Exercise the artifact for real, check every assertion with evidence, score the r
     traceSeq: args.traceSeq,
   });
 
-  const parsed = extractJson<Verdict>(res.resultText);
+  // Shape-aware: the verdict is the JSON with rubric scores — not just the last
+  // fenced block (evaluator output is full of incidental JSON/command snippets).
+  const parsed = extractJsonWhere<Verdict>(
+    res.resultText,
+    (v) => v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v)
+  );
   let verdict: Verdict;
   if (!parsed || !parsed.scores) {
     warn(`Evaluator for ${item.id} returned no parseable verdict — treating as FAIL.`);

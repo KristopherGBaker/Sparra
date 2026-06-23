@@ -1,16 +1,10 @@
-/** Pull the last fenced ```json block (or the last bare {...}/[...]) and parse it. */
-export function extractJson<T = unknown>(text: string): T | null {
-  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
-  for (let i = fences.length - 1; i >= 0; i--) {
-    const body = fences[i]![1]!.trim();
-    const parsed = tryParse<T>(body);
-    if (parsed !== null) return parsed;
-  }
-  // Fallback: last balanced object/array in the text.
-  const candidate = lastBalanced(text);
-  if (candidate) return tryParse<T>(candidate);
-  return null;
-}
+/**
+ * Robust JSON extraction from noisy LLM output. Real agent transcripts (especially
+ * an evaluator that runs many commands) contain dozens of ``` fences and incidental
+ * JSON snippets, so "grab the last fenced block" is unreliable. We collect ALL
+ * parseable JSON values (from fenced blocks AND a string-aware balanced scan) and
+ * let callers pick by shape.
+ */
 
 function tryParse<T>(s: string): T | null {
   try {
@@ -20,34 +14,72 @@ function tryParse<T>(s: string): T | null {
   }
 }
 
-function lastBalanced(text: string): string | null {
-  const opens = [text.lastIndexOf("{"), text.lastIndexOf("[")].filter((i) => i >= 0);
-  if (opens.length === 0) return null;
-  const start = Math.min(...opens.map((i) => firstOpen(text, i)));
-  for (const open of ["{", "["]) {
-    const idx = text.indexOf(open, start);
-    if (idx < 0) continue;
+/** Every parseable JSON object/array found in the text, in source order. */
+export function extractAllJson(text: string): unknown[] {
+  const out: unknown[] = [];
+
+  // 1) Fenced ``` blocks (with or without a language tag).
+  for (const m of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+    const parsed = tryParse(m[1]!.trim());
+    if (parsed !== null && typeof parsed === "object") out.push(parsed);
+  }
+
+  // 2) String-aware balanced scan for top-level { } and [ ] regions. Tracks string
+  //    literals/escapes so braces inside strings don't throw off the balance.
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== "{" && open !== "[") continue;
     const close = open === "{" ? "}" : "]";
     let depth = 0;
-    for (let i = idx; i < text.length; i++) {
-      if (text[i] === open) depth++;
-      else if (text[i] === close) {
+    let inStr = false;
+    let esc = false;
+    let end = -1;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === open) depth++;
+      else if (c === close) {
         depth--;
-        if (depth === 0) return text.slice(idx, i + 1);
+        if (depth === 0) {
+          end = j;
+          break;
+        }
       }
     }
+    if (end > i) {
+      const parsed = tryParse(text.slice(i, end + 1));
+      if (parsed !== null && typeof parsed === "object") {
+        out.push(parsed);
+        i = end; // skip past this region
+      }
+    }
+  }
+
+  return out;
+}
+
+/** The last parseable JSON value (back-compat default). */
+export function extractJson<T = unknown>(text: string): T | null {
+  const all = extractAllJson(text);
+  return all.length ? (all[all.length - 1] as T) : null;
+}
+
+/** The last parseable JSON value that matches a shape predicate (e.g. a verdict). */
+export function extractJsonWhere<T = unknown>(text: string, pred: (v: any) => boolean): T | null {
+  const all = extractAllJson(text);
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (pred(all[i])) return all[i] as T;
   }
   return null;
 }
 
-function firstOpen(text: string, hint: number): number {
-  // Walk back to the earliest top-level opening brace/bracket near the hint.
-  let i = hint;
-  while (i > 0 && text[i] !== "{" && text[i] !== "[") i--;
-  return i;
-}
-
-/** Does the model output contain an explicit agreement marker? */
+/** Does the model output contain an explicit agreement marker (on its own line)? */
 export function hasMarker(text: string, marker: string): boolean {
   return new RegExp(`^\\s*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m").test(text);
 }

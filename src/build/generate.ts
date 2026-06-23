@@ -2,7 +2,7 @@ import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
-import { extractJson } from "../util/extract.ts";
+import { extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
 import { info } from "../util/log.ts";
 import { deviationPolicy } from "./modeText.ts";
@@ -74,7 +74,11 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     traceSeq: args.traceSeq,
   });
 
-  const parsed = extractJson<{ report?: string; deviations?: Deviation[] }>(res.resultText) ?? {};
+  const parsed =
+    extractJsonWhere<{ report?: string; deviations?: Deviation[] }>(
+      res.resultText,
+      (v) => v && typeof v === "object" && ("report" in v || "deviations" in v)
+    ) ?? {};
   const deviations = Array.isArray(parsed.deviations) ? parsed.deviations : [];
   return {
     report: parsed.report ?? res.resultText.slice(0, 500),
