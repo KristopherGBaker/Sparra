@@ -1,0 +1,43 @@
+# Example config — tuned for a fast, watchable end-to-end run.
+# Uses sonnet for the roles that write/judge code, haiku for the lightweight roles.
+roles:
+  orienter:          { model: haiku }
+  planner:           { model: haiku }
+  prototyper:        { model: haiku }
+  contractGenerator: { model: haiku }
+  contractEvaluator: { model: sonnet }
+  generator:         { model: sonnet }
+  evaluator:         { model: sonnet }
+  reflector:         { model: haiku }
+
+permission:
+  mode: auto                # auto if available on your plan, else acceptEdits; never bypass
+  denyBashContains: ["rm -rf /", "git push", "shutdown", "mkfs"]
+
+git:
+  strategy: inplace        # greenfield example builds into the work dir directly
+  branchPrefix: "sparra/"
+  autoCommit: false
+
+rubric:
+  weights: { design: 0.2, originality: 0.1, craft: 0.3, functionality: 0.4 }
+  passThreshold: 70
+  useCalibration: false
+
+pivot: { N: 3, threshold: 40 }
+
+contract: { assertionMin: 8, assertionMax: 16, maxNegotiationRounds: 2 }
+
+build: { maxRoundsPerItem: 3, maxTurnsPerSession: 50, maxBudgetUsdPerItem: 0 }
+
+exercise:
+  mechanism: cli
+  runExistingTests: false
+  existingTestCommand: ""
+  customRecipe: ""
+  web: { startCommand: "", baseUrl: "" }
+  ios: { scheme: "", simulator: "" }
+
+deviation: { strictness: free }
+
+batch: { K: 2 }
