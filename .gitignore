@@ -1,7 +1,15 @@
 node_modules/
 dist/
 *.log
-
-# Sparra runtime artifacts created inside a *target* project are NOT ignored there
-# (they are the source of truth). These ignores apply to this harness repo only.
 .DS_Store
+
+# --- Self-host (running Sparra on itself) ---
+# In a normal *target* project these are the committed source of truth. But when
+# Sparra runs on THIS repo, they are throwaway runtime state — don't commit them.
+# (Anchored to the root so the templates under selfhost/ and examples/ are kept.)
+.sparra/
+/PLAN.md
+/CODEBASE_MAP.md
+/CHANGELOG.md
+/prototypes/
+# git worktrees are created as siblings (../Sparra-build-*), outside this repo.

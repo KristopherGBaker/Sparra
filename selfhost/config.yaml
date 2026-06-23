@@ -1,0 +1,48 @@
+# Sparra self-host config — for running Sparra on its OWN codebase.
+# Copied into .sparra/config.yaml by selfhost/setup.sh.
+roles:
+  orienter:          { model: sonnet, effort: high }
+  planner:           { model: sonnet, effort: high }
+  prototyper:        { model: sonnet }
+  contractGenerator: { model: haiku }
+  contractEvaluator: { model: sonnet, effort: high }
+  generator:         { model: sonnet, effort: high }
+  evaluator:         { model: sonnet, effort: high }
+  reflector:         { model: sonnet }
+
+permission:
+  mode: auto                 # auto if available on your plan, else acceptEdits + deny-hook
+  denyBashContains: ["rm -rf /", "git push", "shutdown", "mkfs", "sudo ", ":(){"]
+
+git:
+  strategy: worktree         # SAFEST: build in a sibling worktree, never touch your tree
+  branchPrefix: "sparra/"
+  autoCommit: false          # never commits to your branch
+
+rubric:
+  weights: { design: 0.2, originality: 0.1, craft: 0.35, functionality: 0.35 }
+  passThreshold: 75
+  useCalibration: false
+
+pivot: { N: 3, threshold: 50 }
+
+contract: { assertionMin: 10, assertionMax: 20, maxNegotiationRounds: 3 }
+
+build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 0 }
+
+exercise:
+  mechanism: custom
+  runExistingTests: true
+  # The only pre-existing safety check today is the type checker; treat a new
+  # typecheck failure as a hard fail.
+  existingTestCommand: "npm run typecheck"
+  # The worktree has no node_modules (it's gitignored), so install first.
+  customRecipe: "npm install --no-audit --no-fund --silent && npm run typecheck && npm test --silent"
+  web: { startCommand: "", baseUrl: "" }
+  ios: { scheme: "", simulator: "" }
+
+# Brownfield: improve within an item's scope, but no out-of-scope refactors —
+# those are logged as proposals for you in .sparra/proposals/.
+deviation: { strictness: moderate }
+
+batch: { K: 2 }
