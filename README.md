@@ -52,6 +52,23 @@ sparra status        # where am I? what's next?
 
 There's a **runnable end-to-end example** you can watch in [`examples/cli-greenfield/`](examples/cli-greenfield/).
 
+### Interactive terminal UI
+
+Prefer a live dashboard over raw commands? Run the Ink TUI:
+
+```bash
+npm run tui                 # or: sparra-tui   (in a Sparra project dir)
+sparra-tui --root /path/to/project
+```
+
+It has three panes (switch with `Tab` or `d`/`p`/`l`):
+
+- **Dashboard** — phase, per-item status/score/pivots, running session cost, and a live tail of the active agent's trace (updates as a build runs).
+- **Plan** — the collaborative interview, in-process: type answers, watch the planner stream its reply, `/snapshot` · `/freeze` · `/exit`. Same resumable session as `sparra plan`.
+- **Logs** — output from actions you trigger by key: `o`rient · `s`napshot · `f`reeze · `b`uild · `r`eflect (`k` cancels a running one).
+
+The TUI is a thin front-end over the same filesystem state and phase functions — it reads `.sparra/` to display and calls the harness to act, so anything it does is identical to the CLI and equally resumable.
+
 ---
 
 ## The phases in detail
