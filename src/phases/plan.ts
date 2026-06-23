@@ -4,7 +4,7 @@ import { stdin, stdout } from "node:process";
 import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
-import { runSession } from "../sdk/session.ts";
+import { runSession, type SessionEvent } from "../sdk/session.ts";
 import { resolvePermissionMode, plannerWriteScope } from "../sdk/permissions.ts";
 import { banner, color, info, ok, detail } from "../util/log.ts";
 import { exists } from "../util/io.ts";
@@ -17,6 +17,64 @@ const HELP = `Planning commands:
   /exit  /quit      leave the interview (resume later with \`sparra plan\`)
   /help             show this`;
 
+/** The opening kick for a fresh interview (null/skip when resuming). */
+export function planningOpeningPrompt(ctx: Ctx): string {
+  return `Begin the planning interview. Read PLAN.md${exists(ctx.paths.codebaseMap) ? " and CODEBASE_MAP.md" : ""} first, then ask me your single most important opening question — with your recommended answer.`;
+}
+
+export interface PlanTurnResult {
+  sessionId: string;
+  resultText: string;
+  ok: boolean;
+  subtype: string;
+  errors: string[];
+}
+
+/**
+ * One planner turn, decoupled from stdin/stdout so both the CLI REPL and the
+ * Ink TUI can drive the SAME interview (resume-based, so it survives restarts).
+ * Persists the planning session id + turn count to state on success.
+ */
+export async function planTurn(args: {
+  ctx: Ctx;
+  userText: string;
+  sessionId?: string;
+  traceDir: string;
+  traceSeq: number;
+  onText?: (t: string) => void;
+  onEvent?: (e: SessionEvent) => void;
+}): Promise<PlanTurnResult> {
+  const { ctx } = args;
+  const role = ctx.config.roles.planner;
+  const system = fill(await loadPrompt(ctx.paths, "planner"), { MODE: ctx.store.data.mode });
+  const canUse = plannerWriteScope(ctx.paths.plan, ctx.config.permission.denyBashContains);
+
+  const res = await runSession({
+    role: "planner",
+    prompt: args.userText,
+    systemPrompt: system,
+    model: role.model,
+    effort: role.effort,
+    cwd: ctx.root,
+    tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+    permissionMode: resolvePermissionMode("default"),
+    canUseTool: canUse,
+    resume: args.sessionId,
+    maxTurns: ctx.config.build.maxTurnsPerSession,
+    traceDir: args.traceDir,
+    traceSeq: args.traceSeq,
+    onAssistantText: args.onText,
+    onEvent: args.onEvent,
+  });
+
+  const sessionId = res.sessionId || args.sessionId || "";
+  ctx.store.data.planning.sessionId = sessionId;
+  ctx.store.data.planning.turns = args.traceSeq;
+  await ctx.store.save();
+
+  return { sessionId, resultText: res.resultText, ok: res.ok, subtype: res.subtype, errors: res.errors };
+}
+
 export async function cmdPlan(ctx: Ctx): Promise<void> {
   banner("Phase A · COLLABORATIVE PLANNING");
   if (ctx.store.data.phase === "orient") {
@@ -25,10 +83,8 @@ export async function cmdPlan(ctx: Ctx): Promise<void> {
   if (ctx.store.canTransition("plan")) await ctx.store.transition("plan").catch(() => {});
 
   const role = ctx.config.roles.planner;
-  const system = fill(await loadPrompt(ctx.paths, "planner"), { MODE: ctx.store.data.mode });
   const runId = newRunId("plan");
   const traceDir = ctx.paths.traceDir(runId);
-  const canUse = plannerWriteScope(ctx.paths.plan, ctx.config.permission.denyBashContains);
 
   const resuming = !!ctx.store.data.planning.sessionId;
   info(`Planner: ${color.bold(role.model)}${role.effort ? ` (effort ${role.effort})` : ""}`);
@@ -41,9 +97,7 @@ export async function cmdPlan(ctx: Ctx): Promise<void> {
   let sessionId = ctx.store.data.planning.sessionId;
 
   // The first turn auto-kicks the interview; subsequent turns are human-led.
-  let pending: string | null = resuming
-    ? null
-    : `Begin the planning interview. Read PLAN.md${exists(ctx.paths.codebaseMap) ? " and CODEBASE_MAP.md" : ""} first, then ask me your single most important opening question — with your recommended answer.`;
+  let pending: string | null = resuming ? null : planningOpeningPrompt(ctx);
 
   try {
     while (true) {
@@ -73,28 +127,17 @@ export async function cmdPlan(ctx: Ctx): Promise<void> {
 
       seq += 1;
       process.stdout.write(color.cyan("\nplanner › "));
-      const res = await runSession({
-        role: "planner",
-        prompt: pending,
-        systemPrompt: system,
-        model: role.model,
-        effort: role.effort,
-        cwd: ctx.root,
-        tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
-        permissionMode: resolvePermissionMode("default"),
-        canUseTool: canUse,
-        resume: sessionId,
-        maxTurns: ctx.config.build.maxTurnsPerSession,
+      const res = await planTurn({
+        ctx,
+        userText: pending,
+        sessionId,
         traceDir,
         traceSeq: seq,
-        onAssistantText: (t) => process.stdout.write(t),
+        onText: (t) => process.stdout.write(t),
       });
       process.stdout.write("\n\n");
 
       sessionId = res.sessionId || sessionId;
-      ctx.store.data.planning.sessionId = sessionId;
-      ctx.store.data.planning.turns = seq;
-      await ctx.store.save();
       pending = null;
 
       if (!res.ok && res.errors.length) detail(color.gray(`(session ${res.subtype}; you can keep going)`));

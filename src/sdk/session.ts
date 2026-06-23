@@ -43,10 +43,18 @@ export interface RunSessionParams {
 
   /** Called with each assistant text block as it streams (for live interactive UX). */
   onAssistantText?: (text: string) => void;
+  /** Structured event stream for non-console front-ends (e.g. the Ink TUI). */
+  onEvent?: (e: SessionEvent) => void;
   /** Print a compact live activity line for tool use (default true for non-interactive). */
   echoActivity?: boolean;
   abortController?: AbortController;
 }
+
+export type SessionEvent =
+  | { kind: "init"; sessionId: string; model: string }
+  | { kind: "text"; text: string }
+  | { kind: "tool"; name: string; summary: string }
+  | { kind: "result"; ok: boolean; costUsd: number; subtype: string };
 
 export interface RunResult {
   ok: boolean;
@@ -105,20 +113,24 @@ export async function runSession(p: RunSessionParams): Promise<RunResult> {
     tracePath: trace.file,
   };
 
-  const echo = p.echoActivity ?? !p.onAssistantText;
+  // Console echo is suppressed when a front-end consumes events/text instead.
+  const echo = p.echoActivity ?? !(p.onAssistantText || p.onEvent);
 
   for await (const msg of query({ prompt: p.prompt, options })) {
     await trace.record(msg as SDKMessage);
 
     if (msg.type === "system" && (msg as any).subtype === "init") {
       result.sessionId = (msg as any).session_id;
+      p.onEvent?.({ kind: "init", sessionId: result.sessionId, model: (msg as any).model });
     } else if (msg.type === "assistant") {
       const content = (msg as any).message?.content ?? [];
       for (const block of content) {
         if (block.type === "text" && block.text) {
           if (p.onAssistantText) p.onAssistantText(block.text);
-        } else if (block.type === "tool_use" && echo) {
-          detail(`${color.gray("·")} ${color.cyan(block.name)} ${summarizeToolInput(block.name, block.input)}`);
+          p.onEvent?.({ kind: "text", text: block.text });
+        } else if (block.type === "tool_use") {
+          if (echo) detail(`${color.gray("·")} ${color.cyan(block.name)} ${summarizeToolInput(block.name, block.input)}`);
+          p.onEvent?.({ kind: "tool", name: block.name, summary: summarizeToolInput(block.name, block.input).replace(/\x1b\[[0-9;]*m/g, "") });
         }
       }
     } else if (msg.type === "result") {
@@ -127,6 +139,7 @@ export async function runSession(p: RunSessionParams): Promise<RunResult> {
       result.sessionId = m.session_id ?? result.sessionId;
       result.costUsd = Number(m.total_cost_usd ?? 0);
       result.numTurns = Number(m.num_turns ?? 0);
+      p.onEvent?.({ kind: "result", ok: m.subtype === "success", costUsd: result.costUsd, subtype: m.subtype });
       if (m.subtype === "success") {
         result.ok = true;
         result.resultText = m.result ?? "";
