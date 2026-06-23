@@ -15,5 +15,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tui/**/*.ts", "tui/**/*.tsx"]
+  "include": ["src/**/*.ts", "tui/**/*.ts", "tui/**/*.tsx", "test/**/*.ts"]
 }

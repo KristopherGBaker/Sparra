@@ -10,7 +10,8 @@
   "scripts": {
     "sparra": "tsx src/cli.ts",
     "tui": "tsx tui/index.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "engines": {
     "node": ">=20"
@@ -29,6 +30,7 @@
     "@types/react": "^19.2.17",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.0"
   }
 }

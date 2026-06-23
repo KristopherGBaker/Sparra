@@ -157,7 +157,7 @@ export function defaultConfig(): SparraConfig {
 }
 
 /** Deep-merge a partial parsed-YAML object over defaults (objects merge, scalars/arrays replace). */
-function deepMerge<T>(base: T, over: unknown): T {
+export function deepMerge<T>(base: T, over: unknown): T {
   if (over == null || typeof over !== "object" || Array.isArray(over)) {
     return (over ?? base) as T;
   }
