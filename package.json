@@ -4,10 +4,12 @@
   "description": "A long-running autonomous build harness on the Claude Agent SDK: plan collaboratively, optionally prototype, then hand off to an adversarial generator/evaluator build loop. Works on greenfield and existing codebases.",
   "type": "module",
   "bin": {
-    "sparra": "./bin/sparra.mjs"
+    "sparra": "./bin/sparra.mjs",
+    "sparra-tui": "./bin/sparra-tui.mjs"
   },
   "scripts": {
     "sparra": "tsx src/cli.ts",
+    "tui": "tsx tui/index.tsx",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
@@ -15,11 +17,17 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.186",
+    "chokidar": "^5.0.0",
+    "ink": "^7.1.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.7",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
+    "ink-testing-library": "^4.0.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
