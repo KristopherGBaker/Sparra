@@ -33,9 +33,9 @@ build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 0 }
 exercise:
   mechanism: custom
   runExistingTests: true
-  # The only pre-existing safety check today is the type checker; treat a new
-  # typecheck failure as a hard fail.
-  existingTestCommand: "npm run typecheck"
+  # Existing safety gate: typecheck + the vitest suite. A new failure in either is
+  # treated as a hard fail (no regressions).
+  existingTestCommand: "npm run typecheck && npm test"
   # The worktree has no node_modules (it's gitignored), so install first.
   customRecipe: "npm install --no-audit --no-fund --silent && npm run typecheck && npm test --silent"
   web: { startCommand: "", baseUrl: "" }
