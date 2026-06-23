@@ -28,7 +28,14 @@ pivot: { N: 3, threshold: 50 }
 
 contract: { assertionMin: 10, assertionMax: 20, maxNegotiationRounds: 3 }
 
-build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 0 }
+# "Start closed": per-item USD cap. When an item's accumulated cost crosses it,
+# the item halts as BUDGET_EXCEEDED and the run moves on (set to 0 to opt out).
+build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 5 }
+
+# PostToolUse formatter: format/lint each written file BEFORE the evaluator runs,
+# so formatting never costs an evaluator round. command="" → auto-detect (this repo
+# is TS, so prettier). Missing formatter = no-op + warning, never a build failure.
+format: { enabled: true, command: "", autodetect: true }
 
 exercise:
   mechanism: custom

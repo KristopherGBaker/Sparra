@@ -28,7 +28,14 @@ pivot: { N: 3, threshold: 40 }
 
 contract: { assertionMin: 8, assertionMax: 16, maxNegotiationRounds: 2 }
 
+# Per-item USD budget — the loop "starts closed". When an item's cost crosses the
+# cap it halts as BUDGET_EXCEEDED and the run continues. 0 = opt out (no cap).
+# (This tiny example builds one cheap CLI, so leave it uncapped.)
 build: { maxRoundsPerItem: 3, maxTurnsPerSession: 50, maxBudgetUsdPerItem: 0 }
+
+# PostToolUse formatter: format each written file before the evaluator exercises it.
+# command="" → auto-detect by file type (prettier for JS/TS). Missing tool = no-op + warning.
+format: { enabled: true, command: "", autodetect: true }
 
 exercise:
   mechanism: cli

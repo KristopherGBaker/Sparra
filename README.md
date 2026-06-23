@@ -193,7 +193,17 @@ pivot: { N: 3, threshold: 50 }            # GAN restart after N rounds below thr
 
 contract: { assertionMin: 15, assertionMax: 30, maxNegotiationRounds: 4 }
 
-build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 0 }
+# "Start closed": maxBudgetUsdPerItem caps each item's cumulative cost. When an item
+# crosses it, the item halts as BUDGET_EXCEEDED and the run moves on. 0 = no cap.
+build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5 }
+
+# PostToolUse formatter — formats/lints each file the generator writes BEFORE the
+# evaluator exercises it, so formatting never costs an evaluator round.
+#   command   "" → auto-detect (greenfield: prettier by file type; existing repos
+#                   detect the formatter from CODEBASE_MAP.md, e.g. swiftformat/swiftlint).
+#                   Or set explicitly, e.g. "prettier --write {file}".
+#   A missing formatter is a no-op + warning — never a build failure.
+format: { enabled: true, command: "", autodetect: true }
 
 exercise:
   mechanism: cli            # cli | web | ios | computer-use | custom
@@ -207,6 +217,12 @@ deviation: { strictness: moderate }       # strict | moderate | free (default by
 
 batch: { K: 3 }
 ```
+
+### Three loop-discipline knobs (how Boris Cherny runs loops)
+
+- **Bounded by default (`build.maxBudgetUsdPerItem`)** — the loop *starts closed*. Each item has a real USD cap (default **5**); when its accumulated cost crosses the cap the item is marked **`BUDGET_EXCEEDED`** and the build continues to the next item instead of burning unbounded budget. Set it to `0` to explicitly opt out.
+- **Format on write (`format`)** — a `PostToolUse` hook runs a formatter/linter on every file the generator writes, *before* the adversarial evaluator exercises the artifact, so trivial formatting issues never cost an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint` for iOS). No formatter installed → no-op + warning, never a failure.
+- **Cross-run memory (`.sparra/memory.md`)** — *repos don't forget*. A durable, append-only log of short learnings (what was tried for an item and whether it passed/failed/pivoted/ran out of budget). Every autonomous role reads it at the start of each item so prior failures inform new work, and `sparra reflect` appends to it. It is capped: once it grows past its limits the oldest entries collapse into a one-line summary so it never grows unbounded.
 
 ### Calibration (matching your taste)
 Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparra/calibration/slop/` (avoid this). When `rubric.useCalibration` is on, the evaluator reads them before scoring originality/craft, so its taste matches yours.
@@ -223,7 +239,8 @@ your-project/
 ├─ prototypes/         # throwaway prototypes (greenfield)
 └─ .sparra/
    ├─ config.yaml      # every knob
-   ├─ state.json       # phase machine + per-item status + session ids (resume)
+   ├─ state.json       # phase machine + per-item status + cost + session ids (resume)
+   ├─ memory.md        # durable cross-run learnings (capped); roles read it each item
    ├─ frozen/          # PLAN.frozen.md, CODEBASE_MAP.frozen.md (build input)
    ├─ snapshots/       # timestamped PLAN/MAP checkpoints
    ├─ workitems/       # decomposition (items.json)

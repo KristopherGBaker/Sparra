@@ -3,6 +3,9 @@ dist/
 *.log
 .DS_Store
 
+# Local Claude Code session state (scheduled tasks, locks)
+.claude/
+
 # --- Self-host (running Sparra on itself) ---
 # In a normal *target* project these are the committed source of truth. But when
 # Sparra runs on THIS repo, they are throwaway runtime state — don't commit them.
