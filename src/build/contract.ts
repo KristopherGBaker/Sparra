@@ -5,6 +5,7 @@ import { readOnlyGuard } from "../sdk/guard.ts";
 import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
+import { readMemory, memorySection } from "../memory.ts";
 import { contractModeClauses } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 
@@ -27,7 +28,9 @@ export async function negotiateContract(
   ctx: Ctx,
   item: WorkItem,
   traceDir: string,
-  traceSeqStart: number
+  traceSeqStart: number,
+  /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
+  priorLearnings?: string
 ): Promise<ContractResult> {
   const file = ctx.paths.contractFile(item.id);
 
@@ -51,6 +54,7 @@ export async function negotiateContract(
 
   const plan = (await readText(ctx.paths.frozenPlan)) ?? "";
   const map = await readText(ctx.paths.frozenMap);
+  const memory = memorySection(priorLearnings ?? (await readMemory(ctx.paths)));
 
   await writeText(
     file,
@@ -66,7 +70,7 @@ export async function negotiateContract(
   for (let round = 1; round <= maxRounds; round++) {
     info(`Contract ${item.id}: round ${round}/${maxRounds}`);
 
-    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${round > 1 ? `\nThe evaluator critiqued your previous proposal. REVISE the contract to address every point.\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
+    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. REVISE the contract to address every point.\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
 
     const genRes = await runSession({
       role: "contract-generator",
@@ -84,7 +88,7 @@ export async function negotiateContract(
     proposal = genRes.resultText.trim();
     await appendText(file, `### Round ${round} — proposal\n\n${proposal}\n\n`);
 
-    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n\nPROPOSED CONTRACT:\n${proposal}`;
+    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\nPROPOSED CONTRACT:\n${proposal}`;
     const evalRes = await runSession({
       role: "contract-evaluator",
       prompt: evalTask,

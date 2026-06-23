@@ -184,6 +184,7 @@ function statusMark(s: string) {
   if (s === "passed") return <Text color="green">✓</Text>;
   if (s === "failed") return <Text color="red">✗</Text>;
   if (s === "abandoned") return <Text dimColor>⊘</Text>;
+  if (s === "budget_exceeded") return <Text color="yellow">$</Text>;
   return <Text color="yellow">•</Text>;
 }
 

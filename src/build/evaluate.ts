@@ -1,11 +1,13 @@
 import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
+import { readMemory, memorySection } from "../memory.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
 
@@ -38,9 +40,16 @@ export async function evaluateItem(args: {
   round: number;
   traceDir: string;
   traceSeq: number;
+  /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
+  priorLearnings?: string;
+  /** Per-session USD budget (remaining item budget). Defaults to the per-item cap. */
+  maxBudgetUsd?: number;
+  /** Injectable for tests; defaults to the real SDK session. */
+  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
   const role = ctx.config.roles.evaluator;
+  const run = args.runSessionFn ?? runSession;
   const exerciser = buildExerciser(ctx.config, workspaceDir);
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
@@ -49,6 +58,7 @@ export async function evaluateItem(args: {
     RUBRIC: rubricText(ctx),
     CALIBRATION: calibrationText(ctx),
   });
+  const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
 
   const task = `Adversarially evaluate work item ${item.id}: ${item.title} (round ${round}).
 
@@ -58,10 +68,10 @@ AGREED CONTRACT (grade against THIS, not the plan prose):
 ---
 ${contractText}
 ---
-Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
+${memory}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
 
   info(`Evaluating ${item.id} (round ${round}) with ${role.model} — exercising via ${ctx.config.exercise.mechanism}…`);
-  const res = await runSession({
+  const res = await run({
     role: `evaluator-${item.id}-r${round}`,
     prompt: task,
     systemPrompt: system,
@@ -74,6 +84,7 @@ Exercise the artifact for real, check every assertion with evidence, score the r
     mcpServers: exerciser.mcpServers,
     ...evaluatorGuard(ctx),
     maxTurns: ctx.config.build.maxTurnsPerSession,
+    maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir: args.traceDir,
     traceSeq: args.traceSeq,
   });

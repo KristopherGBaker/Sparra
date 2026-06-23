@@ -81,8 +81,33 @@ export interface SparraConfig {
     maxRoundsPerItem: number;
     /** Per-SDK-session turn cap; sessions that hit it are resumed. */
     maxTurnsPerSession: number;
-    /** Per-item cumulative USD budget guard (0 = unlimited). */
+    /**
+     * Per-item cumulative USD budget guard. The loop "starts closed": when an
+     * item's accumulated cost crosses this cap it halts as BUDGET_EXCEEDED and the
+     * run moves on to the next item. Set to 0 to explicitly opt out (no cap).
+     */
     maxBudgetUsdPerItem: number;
+  };
+
+  format: {
+    /**
+     * Run a formatter/linter on each file the generator writes (a PostToolUse hook),
+     * so formatting problems are fixed BEFORE the evaluator exercises the artifact and
+     * never cost an evaluator round. A missing formatter is a no-op + warning, never a
+     * build failure.
+     */
+    enabled: boolean;
+    /**
+     * Explicit formatter command. Use the `{file}` placeholder for the touched path
+     * (e.g. "prettier --write {file}"). Empty → auto-detect (see `autodetect`).
+     */
+    command: string;
+    /**
+     * Auto-detect the formatter when `command` is empty: greenfield defaults to a
+     * prettier-style formatter by file type; existing repos detect from CODEBASE_MAP.md
+     * (e.g. swiftformat/swiftlint for iOS).
+     */
+    autodetect: boolean;
   };
 
   exercise: {
@@ -142,7 +167,9 @@ export function defaultConfig(): SparraConfig {
     },
     pivot: { N: 3, threshold: 50 },
     contract: { assertionMin: 15, assertionMax: 30, maxNegotiationRounds: 4 },
-    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 0 },
+    // Start closed: a real per-item budget by default; set to 0 to opt out (no cap).
+    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5 },
+    format: { enabled: true, command: "", autodetect: true },
     exercise: {
       mechanism: "cli",
       runExistingTests: true,

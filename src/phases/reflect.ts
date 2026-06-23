@@ -8,6 +8,7 @@ import { runSession } from "../sdk/session.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { banner, color, detail, info, ok, warn } from "../util/log.ts";
 import { ensureDir, exists, writeText } from "../util/io.ts";
+import { appendLearning } from "../memory.ts";
 
 function listReflectDirs(reflectRoot: string): string[] {
   try {
@@ -94,6 +95,12 @@ with a short before/after for the key edits. Write ONLY inside ${path.relative(c
   }
 
   ok(`Proposed changes to ${candidates.length} prompt(s):`);
+  await appendLearning(ctx.paths, {
+    item: "reflect",
+    kind: "note",
+    detail: `reflection on run ${runId} proposed prompt edits to: ${candidates.map((f) => f.replace(/\.md$/, "")).join(", ")}.`,
+    at: new Date().toISOString(),
+  });
   for (const f of candidates) {
     const role = f.replace(/\.md$/, "");
     process.stdout.write(`\n${color.bold("── " + role + " ──")}\n`);

@@ -1,8 +1,10 @@
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { Ctx } from "../context.ts";
 import { warn, detail } from "../util/log.ts";
+import { readTextSync } from "../util/io.ts";
 import { probeAutoSupported } from "./capabilities.ts";
-import { evaluatorHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig } from "./hooks.ts";
+import { evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig } from "./hooks.ts";
+import { makeFormatHook, type FormatOptions } from "./format.ts";
 
 /**
  * Resolve the autonomous permissionMode per the user's policy:
@@ -41,9 +43,19 @@ export interface Guard {
   hooks: HookConfig;
 }
 
-/** Writer scoped to writeRoots (generator, prototyper, reflector output dir). */
-export function scopedWriterGuard(ctx: Ctx, writeRoots: string[]): Guard {
-  return { permissionMode: autonomousPermissionMode(ctx), hooks: scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains) };
+/** Resolve format-hook options from config + project mode + the codebase map. */
+export function formatOptions(ctx: Ctx): FormatOptions {
+  const f = ctx.config.format;
+  const map = readTextSync(ctx.paths.frozenMap) ?? readTextSync(ctx.paths.codebaseMap);
+  return { enabled: f.enabled, command: f.command, autodetect: f.autodetect, mode: ctx.store.data.mode, codebaseMap: map };
+}
+
+/** Writer scoped to writeRoots (generator, prototyper, reflector output dir).
+ *  Pass `{ format: true }` to also run the PostToolUse formatter on written files. */
+export function scopedWriterGuard(ctx: Ctx, writeRoots: string[], opts: { format?: boolean } = {}): Guard {
+  let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains);
+  if (opts.format) hooks = mergeHooks(hooks, makeFormatHook(formatOptions(ctx)));
+  return { permissionMode: autonomousPermissionMode(ctx), hooks };
 }
 
 /** Writer permitted to touch a single file (planner-family, when run autonomously). */

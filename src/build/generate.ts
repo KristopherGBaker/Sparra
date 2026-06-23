@@ -1,10 +1,12 @@
 import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
 import { info } from "../util/log.ts";
+import { readMemory, memorySection } from "../memory.ts";
 import { deviationPolicy } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 
@@ -36,15 +38,23 @@ export async function generateItem(args: {
   feedback?: string;
   resumeSessionId?: string;
   fresh?: boolean; // GAN restart: start a new session ignoring prior context
+  /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
+  priorLearnings?: string;
+  /** Per-session USD budget (remaining item budget). Defaults to the per-item cap. */
+  maxBudgetUsd?: number;
+  /** Injectable for tests; defaults to the real SDK session. */
+  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
 }): Promise<GenerateOutput> {
   const { ctx, item, contractText, workspaceDir } = args;
   const role = ctx.config.roles.generator;
+  const run = args.runSessionFn ?? runSession;
   const system = fill(await loadPrompt(ctx.paths, "generator"), {
     MODE: ctx.store.data.mode,
     DEVIATION: ctx.config.deviation.strictness,
     DEVIATION_POLICY: deviationPolicy(ctx),
   });
   const map = await readText(ctx.paths.frozenMap);
+  const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
 
   const task = `Implement work item ${item.id}: ${item.title}
 
@@ -54,10 +64,10 @@ AGREED CONTRACT (your spec — satisfy every assertion):
 ---
 ${contractText}
 ---
-${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n` : ""}`;
+${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${memory}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n` : ""}`;
 
   info(`Generating ${item.id} with ${role.model}${args.fresh ? " (fresh restart)" : args.resumeSessionId ? " (resumed)" : ""}…`);
-  const res = await runSession({
+  const res = await run({
     role: `generator-${item.id}`,
     prompt: task,
     systemPrompt: system,
@@ -66,10 +76,10 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     cwd: workspaceDir,
     additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
-    ...scopedWriterGuard(ctx, [workspaceDir]),
+    ...scopedWriterGuard(ctx, [workspaceDir], { format: true }),
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,
-    maxBudgetUsd: ctx.config.build.maxBudgetUsdPerItem,
+    maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir: args.traceDir,
     traceSeq: args.traceSeq,
   });

@@ -1,0 +1,98 @@
+import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Paths } from "../src/paths.ts";
+import { appendLearning, readMemory, formatLearning, capEntries, memorySection } from "../src/memory.ts";
+
+describe("formatLearning", () => {
+  it("renders a compact one-line entry and collapses whitespace", () => {
+    expect(
+      formatLearning({ item: "item-002", kind: "pivot", detail: "craft  stuck\nrebuilt", at: "2026-06-24T10:00:00Z" })
+    ).toBe("- [2026-06-24] item-002 · PIVOT: craft stuck rebuilt");
+  });
+
+  it("omits the date when no timestamp is given", () => {
+    expect(formatLearning({ item: "x", kind: "note", detail: "hi" })).toBe("- x · NOTE: hi");
+  });
+});
+
+describe("appendLearning + readMemory", () => {
+  it("appends a learning and reads it back", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mem-"));
+    const paths = new Paths(dir);
+    await appendLearning(paths, { item: "item-001", kind: "failed", detail: "no good", at: "2026-06-24T00:00:00Z" });
+    const mem = await readMemory(paths);
+    expect(mem).toContain("item-001");
+    expect(mem).toMatch(/FAILED/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns empty string when there is no memory file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mem-"));
+    expect(await readMemory(new Paths(dir))).toBe("");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("memorySection", () => {
+  it("returns empty string for empty memory", () => {
+    expect(memorySection("")).toBe("");
+    expect(memorySection("   ")).toBe("");
+  });
+  it("wraps memory text in a labeled prompt section", () => {
+    const s = memorySection("- [d] item-001 · PIVOT: x");
+    expect(s).toMatch(/PRIOR LEARNINGS/);
+    expect(s).toContain("PIVOT");
+  });
+});
+
+describe("capEntries", () => {
+  it("collapses oldest entries into a summary when over maxEntries", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => `- [d] item-00${i} · FAILED: e${i}`);
+    const { keptEntries, summaryLine } = capEntries(entries, null, { maxEntries: 3, maxChars: 10000 });
+    expect(keptEntries).toHaveLength(3);
+    expect(keptEntries[0]).toContain("item-002");
+    expect(summaryLine).toMatch(/failed:2/);
+    expect(summaryLine).toMatch(/total 2/);
+  });
+
+  it("merges collapsed counts into a pre-existing summary", () => {
+    const existing = "> older learnings summarized — pivot:1 budget_exceeded:0 passed:0 failed:0 note:0 (total 1)";
+    const entries = Array.from({ length: 4 }, (_, i) => `- [d] item-00${i} · PASSED: e${i}`);
+    const { keptEntries, summaryLine } = capEntries(entries, existing, { maxEntries: 2, maxChars: 10000 });
+    expect(keptEntries).toHaveLength(2);
+    expect(summaryLine).toMatch(/pivot:1/);
+    expect(summaryLine).toMatch(/passed:2/);
+    expect(summaryLine).toMatch(/total 3/);
+  });
+
+  it("keeps everything when under the caps", () => {
+    const entries = ["- a · NOTE: 1", "- b · NOTE: 2"];
+    const { keptEntries, summaryLine } = capEntries(entries, null, { maxEntries: 10, maxChars: 10000 });
+    expect(keptEntries).toEqual(entries);
+    expect(summaryLine).toBeNull();
+  });
+});
+
+describe("memory stays bounded", () => {
+  it("does not grow unbounded across many appends and retains the newest", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mem-"));
+    const paths = new Paths(dir);
+    const caps = { maxEntries: 10, maxChars: 2000 };
+    for (let i = 0; i < 100; i++) {
+      await appendLearning(
+        paths,
+        { item: `item-${i}`, kind: "failed", detail: "x".repeat(40), at: "2026-06-24T00:00:00Z" },
+        caps
+      );
+    }
+    const text = fs.readFileSync(paths.memory, "utf8");
+    const entryLines = text.split("\n").filter((l) => l.startsWith("- "));
+    expect(entryLines.length).toBeLessThanOrEqual(caps.maxEntries);
+    expect(text).toMatch(/older learnings summarized/);
+    expect(text).toContain("item-99"); // newest retained
+    expect(text).not.toContain("item-0 "); // oldest collapsed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

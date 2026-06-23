@@ -43,6 +43,19 @@ export function makeDenyHook(deciders: Decider[]): HookConfig {
   };
 }
 
+/** Merge several hook configs, concatenating the matcher arrays per event. */
+export function mergeHooks(...configs: HookConfig[]): HookConfig {
+  const out: HookConfig = {};
+  for (const cfg of configs) {
+    for (const ev of Object.keys(cfg) as HookEvent[]) {
+      const matchers = cfg[ev];
+      if (!matchers) continue;
+      (out[ev] ??= []).push(...matchers);
+    }
+  }
+  return out;
+}
+
 /** Writer scoped to writeRoots; blocks out-of-scope writes and dangerous Bash. */
 export function scopedWriterHooks(writeRoots: string[], denyBashContains: string[]): HookConfig {
   return makeDenyHook([

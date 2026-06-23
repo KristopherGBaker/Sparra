@@ -33,6 +33,9 @@ export class Paths {
   get state() {
     return path.join(this.dir, "state.json");
   }
+  get memory() {
+    return path.join(this.dir, "memory.md");
+  }
   get frozen() {
     return path.join(this.dir, "frozen");
   }

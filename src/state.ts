@@ -15,12 +15,14 @@ export type Phase =
   | "done";
 
 export interface ItemState {
-  status: "pending" | "contracting" | "building" | "passed" | "failed" | "abandoned";
+  status: "pending" | "contracting" | "building" | "passed" | "failed" | "abandoned" | "budget_exceeded";
   round: number;
   pivots: number;
   /** Consecutive rounds each rubric criterion stayed below the pivot threshold. */
   criterionFailStreak: Record<string, number>;
   lastScore?: number;
+  /** Cumulative USD spent on this item across all rounds (feeds the budget guard + TUI). */
+  costUsd?: number;
   generatorSessionId?: string;
 }
 
