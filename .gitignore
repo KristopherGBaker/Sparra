@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+
+# Sparra runtime artifacts created inside a *target* project are NOT ignored there
+# (they are the source of truth). These ignores apply to this harness repo only.
+.DS_Store
