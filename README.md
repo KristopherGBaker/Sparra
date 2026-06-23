@@ -52,6 +52,28 @@ sparra status        # where am I? what's next?
 
 There's a **runnable end-to-end example** you can watch in [`examples/cli-greenfield/`](examples/cli-greenfield/).
 
+### Run `sparra` / `sparra-tui` from anywhere
+
+The package declares both commands as `bin` entries. To put them on your PATH, run **`npm link`** once from this repo:
+
+```bash
+cd /path/to/Sparra
+npm link
+# now usable in any folder:
+cd ~/some/project && sparra init
+```
+
+`npm link` symlinks the two bins into your global npm bin dir (already on your PATH). The launchers resolve `tsx` and `node_modules` relative to their real location in the repo, so the symlink doesn't break anything, and edits / `git pull` take effect immediately (no rebuild — it runs via `tsx`). **Keep the repo where it is**; the global commands point back to it.
+
+- **Undo:** `npm rm -g sparra`
+- **Switched Node versions (nvm)?** The global bin dir changes — just re-run `npm link` under the new version.
+- **Prefer not to symlink?** Either add a shell alias in `~/.zshrc`:
+  ```bash
+  alias sparra='node /path/to/Sparra/bin/sparra.mjs'
+  alias sparra-tui='node /path/to/Sparra/bin/sparra-tui.mjs'
+  ```
+  or run `npm install -g .` from the repo (a global install instead of a symlink — but then reinstall after each change, so `npm link` is better while developing).
+
 ### Interactive terminal UI
 
 Prefer a live dashboard over raw commands? Run the Ink TUI:
