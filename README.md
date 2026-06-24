@@ -158,6 +158,39 @@ The evaluator exercises the real artifact via `config.exercise.mechanism`:
 
 Under the hood the evaluator gets an in-process MCP server (`mcp__exercise__run_command`, plus `http_request` for web) so every exercise is structured and logged.
 
+### Using it on a real iOS / macOS project
+
+Sparra exercises Apple-platform apps through the [`xcodebuildmcp`](https://www.xcodebuildmcp.com) CLI. Install it once:
+
+```bash
+brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp
+# or: npm install -g xcodebuildmcp@latest
+```
+
+Then point your project's `.sparra/config.yaml` at it:
+
+```yaml
+exercise:
+  mechanism: ios
+  ios:
+    cli: xcodebuildmcp        # default; set "" to use raw xcrun/xcodebuild instead
+    scheme: YourScheme        # the Xcode scheme to build/run (leave blank to let the evaluator discover it)
+    simulator: iPhone 16      # simulator to boot
+  runExistingTests: true      # also run the repo's own test suite; new failures = hard fail
+
+format:
+  # SwiftLint is a linter, SwiftFormat is a formatter — run both before the evaluator sees a file.
+  command: "sh -c 'swiftformat {file}; swiftlint --fix --path {file}'"
+```
+
+Notes:
+
+- **Runs on your Mac.** The evaluator's shell runs locally, so it needs Xcode + a simulator available (Sparra runs natively on macOS). In a container/CI without Xcode this mechanism degrades to a warning rather than failing.
+- **`settingSources: []`** means Sparra does **not** inherit your global Claude Code MCP/skill config — the `xcodebuildmcp` workflow is baked into the evaluator's guidance instead, so you don't need to wire anything beyond the config above.
+- **UI changes get real evidence.** The evaluator builds & runs the app, screenshots the relevant screen into the artifact dir and *reads the image* to judge it, drives flows with the CLI's UI automation, and cites the `describe-ui` hierarchy for deterministic assertions. No screenshot/hierarchy evidence → the assertion fails.
+- **Builds are slow.** The exercise command timeout allows up to 10 minutes. Building + booting a simulator every evaluator round costs time/tokens; if the loop feels heavy, caching the build/boot across rounds is the natural next optimization.
+- **Auto-detection.** If you ran Phase 0 (`orient`) and your `CODEBASE_MAP.md` mentions `swiftformat`/`swiftlint`, the format hook picks the right tool automatically — the explicit `format.command` above is only needed to run *both*.
+
 ---
 
 ## Configuration — every knob
