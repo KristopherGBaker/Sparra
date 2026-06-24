@@ -14,6 +14,7 @@ describe("iosGuidance", () => {
     expect(g).toMatch(/Read tool/); // screenshot → multimodal read
     expect(g).toMatch(/hierarchy/i); // deterministic assertions
     expect(g).toMatch(/build-and-run/);
+    expect(g).toMatch(/xcodegen generate/); // regenerate XcodeGen projects before building
   });
 
   it("falls back to raw Apple tooling when no CLI is configured", () => {

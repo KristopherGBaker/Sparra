@@ -28,6 +28,7 @@ else
   echo "      brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp"
   echo "    (the evaluator will fall back to raw xcrun/xcodebuild, which is rougher.)"
 fi
+command -v xcodegen >/dev/null 2>&1 && echo "  ✓ xcodegen present" || echo "  ! xcodegen not found — install with: brew install xcodegen (the plan generates the project with it)"
 
 echo "▶ Setting up a fresh greenfield project in: $WORK"
 rm -rf "$WORK"

@@ -18,6 +18,11 @@ multimodal evaluator that *looks at the running UI*.
   brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp
   # or: npm install -g xcodebuildmcp@latest
   ```
+- **XcodeGen** — the plan defines the project with a `project.yml` and runs
+  `xcodegen generate` (rather than hand-authoring the `.pbxproj`):
+  ```bash
+  brew install xcodegen
+  ```
 - (Optional) **SwiftFormat** + **SwiftLint** for the format-on-write hook
   (`brew install swiftformat swiftlint`). Missing → the hook no-ops with a warning.
 - An Anthropic credential (`ANTHROPIC_API_KEY` or a Claude Code login).
@@ -41,7 +46,7 @@ That will, in a throwaway `examples/ios-greenfield/.work/` directory:
 4. `sparra build` — the autonomous loop:
    - decompose the plan,
    - **negotiate a "done" contract** (generator proposes assertions; adversarial evaluator hardens them),
-   - **generate** the Swift app (scaffolding the Xcode project via `xcodebuildmcp`),
+   - **generate** the Swift app (defines the project with **XcodeGen** → `xcodegen generate`, then writes the SwiftUI code),
    - **exercise it for real**: build & launch in the simulator, drive the UI, and
      **screenshot the result** — the evaluator *reads the image* and the `describe-ui`
      hierarchy to check assertions like "bill 100 @ 20% → Total `$120.00`",
