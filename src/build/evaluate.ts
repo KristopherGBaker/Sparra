@@ -16,6 +16,7 @@ export interface EvalOutput {
   raw: string;
   sessionId: string;
   costUsd: number;
+  tokens: number;
 }
 
 /** Normalize the rubric weights and compute the weighted total ourselves (don't trust model arithmetic). */
@@ -134,5 +135,5 @@ ${memory}Exercise the artifact for real, check every assertion with evidence, sc
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);
   else warn(`${item.id} FAILED round ${round} (${verdict.weightedTotal}); ${verdict.blocking.length} blocking issue(s).`);
 
-  return { verdict, raw: res.resultText, sessionId: res.sessionId, costUsd: res.costUsd };
+  return { verdict, raw: res.resultText, sessionId: res.sessionId, costUsd: res.costUsd, tokens: res.tokens };
 }

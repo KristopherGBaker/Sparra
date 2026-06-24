@@ -62,6 +62,8 @@ export interface RunResult {
   resultText: string;
   sessionId: string;
   costUsd: number;
+  /** Total tokens used this session (input+output+cache, summed across models). */
+  tokens: number;
   numTurns: number;
   hitMaxTurns: boolean;
   hitBudget: boolean;
@@ -106,6 +108,7 @@ export async function runSession(p: RunSessionParams): Promise<RunResult> {
     resultText: "",
     sessionId: "",
     costUsd: 0,
+    tokens: 0,
     numTurns: 0,
     hitMaxTurns: false,
     hitBudget: false,
@@ -138,6 +141,7 @@ export async function runSession(p: RunSessionParams): Promise<RunResult> {
       result.subtype = m.subtype;
       result.sessionId = m.session_id ?? result.sessionId;
       result.costUsd = Number(m.total_cost_usd ?? 0);
+      result.tokens = totalTokens(m.modelUsage);
       result.numTurns = Number(m.num_turns ?? 0);
       p.onEvent?.({ kind: "result", ok: m.subtype === "success", costUsd: result.costUsd, subtype: m.subtype });
       if (m.subtype === "success") {
@@ -152,6 +156,20 @@ export async function runSession(p: RunSessionParams): Promise<RunResult> {
   }
 
   return result;
+}
+
+/** Sum input+output+cache tokens across all models in a result's modelUsage map. */
+function totalTokens(modelUsage: any): number {
+  if (!modelUsage || typeof modelUsage !== "object") return 0;
+  let total = 0;
+  for (const u of Object.values(modelUsage) as any[]) {
+    total +=
+      Number(u?.inputTokens ?? 0) +
+      Number(u?.outputTokens ?? 0) +
+      Number(u?.cacheReadInputTokens ?? 0) +
+      Number(u?.cacheCreationInputTokens ?? 0);
+  }
+  return total;
 }
 
 function summarizeToolInput(name: string, input: any): string {

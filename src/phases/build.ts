@@ -11,7 +11,7 @@ import { negotiateContract } from "../build/contract.ts";
 import { generateItem } from "../build/generate.ts";
 import { evaluateItem } from "../build/evaluate.ts";
 import { updateStreaksAndDecide } from "../build/pivot.ts";
-import { budgetExceeded, remainingBudget } from "../build/budget.ts";
+import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
 import { appendLearning, readMemory } from "../memory.ts";
 import type { WorkItem } from "../build/types.ts";
@@ -44,7 +44,7 @@ const defaultDeps: BuildDeps = {
 };
 
 function freshItemState(): ItemState {
-  return { status: "pending", round: 0, pivots: 0, criterionFailStreak: {}, costUsd: 0 };
+  return { status: "pending", round: 0, pivots: 0, criterionFailStreak: {}, costUsd: 0, tokensUsed: 0 };
 }
 
 export async function cmdBuild(
@@ -109,11 +109,14 @@ export async function cmdBuild(
 
   let totalCost = 0;
   const cap = ctx.config.build.maxBudgetUsdPerItem; // 0 = unlimited (opt-out)
+  const tokenCap = ctx.config.build.maxTokensPerItem; // 0 = unlimited (opt-out)
+  const overBudget = (s: ItemState) => budgetExceeded(cap, s.costUsd ?? 0) || tokensExceeded(tokenCap, s.tokensUsed ?? 0);
   const stamp = () => new Date().toISOString();
 
   for (const item of items) {
     const st = (b.build.items[item.id] ??= freshItemState());
     if (st.costUsd == null) st.costUsd = 0;
+    if (st.tokensUsed == null) st.tokensUsed = 0;
     if (st.status === "passed" || st.status === "abandoned" || st.status === "budget_exceeded") {
       detail(`${item.id} already ${st.status} — skipping.`);
       continue;
@@ -128,15 +131,18 @@ export async function cmdBuild(
     // Prior cross-run learnings — read once per item, threaded into every role.
     const priorLearnings = await d.readMemory(ctx.paths);
 
-    // Halt this item (not the run) when its accumulated cost crosses the cap.
+    // Halt this item (not the run) when its accumulated cost OR tokens cross the cap.
     const haltOnBudget = async (phase: string): Promise<void> => {
       st.status = "budget_exceeded";
       await ctx.store.save();
-      warn(`${item.id} halted on budget: spent $${(st.costUsd ?? 0).toFixed(3)} ≥ cap $${cap} (during ${phase}).`);
+      const which = tokensExceeded(tokenCap, st.tokensUsed ?? 0)
+        ? `${st.tokensUsed} tokens ≥ cap ${tokenCap}`
+        : `$${(st.costUsd ?? 0).toFixed(3)} ≥ cap $${cap}`;
+      warn(`${item.id} halted on budget: ${which} (during ${phase}).`);
       await d.appendLearning(ctx.paths, {
         item: item.id,
         kind: "budget_exceeded",
-        detail: `halted (${phase}) after $${(st.costUsd ?? 0).toFixed(3)} ≥ cap $${cap}; best score ${st.lastScore ?? 0} in ${st.round} round(s).`,
+        detail: `halted (${phase}) at ${which}; spent $${(st.costUsd ?? 0).toFixed(3)} / ${st.tokensUsed ?? 0} tokens; best score ${st.lastScore ?? 0} in ${st.round} round(s).`,
         at: stamp(),
       });
     };
@@ -155,7 +161,7 @@ export async function cmdBuild(
     let resumeSessionId = st.generatorSessionId;
 
     while (st.round < ctx.config.build.maxRoundsPerItem) {
-      if (budgetExceeded(cap, st.costUsd ?? 0)) {
+      if (overBudget(st)) {
         await haltOnBudget("pre-round");
         break;
       }
@@ -175,11 +181,12 @@ export async function cmdBuild(
       });
       totalCost += gen.costUsd;
       st.costUsd = (st.costUsd ?? 0) + gen.costUsd;
+      st.tokensUsed = (st.tokensUsed ?? 0) + gen.tokens;
       st.generatorSessionId = gen.sessionId;
       resumeSessionId = gen.sessionId;
       await ctx.store.save();
 
-      if (budgetExceeded(cap, st.costUsd)) {
+      if (overBudget(st)) {
         await haltOnBudget("generate");
         break;
       }
@@ -199,6 +206,7 @@ export async function cmdBuild(
       });
       totalCost += ev.costUsd;
       st.costUsd = (st.costUsd ?? 0) + ev.costUsd;
+      st.tokensUsed = (st.tokensUsed ?? 0) + ev.tokens;
       st.lastScore = ev.verdict.weightedTotal;
 
       if (ev.verdict.verdict === "pass") {
@@ -219,7 +227,7 @@ export async function cmdBuild(
       st.criterionFailStreak = decision.streaks;
       await ctx.store.save();
 
-      if (budgetExceeded(cap, st.costUsd)) {
+      if (overBudget(st)) {
         await haltOnBudget("evaluate");
         break;
       }
@@ -285,7 +293,7 @@ export async function cmdBuild(
         ? color.yellow("$")
         : color.yellow("•");
     detail(
-      `${mark} ${item.id} ${item.title} — ${s?.status} (rounds ${s?.round}, pivots ${s?.pivots}, score ${s?.lastScore ?? "-"}, $${(s?.costUsd ?? 0).toFixed(3)})`
+      `${mark} ${item.id} ${item.title} — ${s?.status} (rounds ${s?.round}, pivots ${s?.pivots}, score ${s?.lastScore ?? "-"}, $${(s?.costUsd ?? 0).toFixed(3)}, ${s?.tokensUsed ?? 0} tok)`
     );
   }
   info(`traces:    ${path.relative(ctx.root, traceDir)}`);

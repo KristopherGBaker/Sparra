@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { budgetExceeded, remainingBudget } from "../src/build/budget.ts";
+import { budgetExceeded, tokensExceeded, remainingBudget } from "../src/build/budget.ts";
 
 describe("budgetExceeded", () => {
   it("is false when the cap is 0 (unlimited) regardless of spend", () => {
@@ -12,6 +12,17 @@ describe("budgetExceeded", () => {
   it("is true when spend reaches or passes the cap", () => {
     expect(budgetExceeded(5, 5)).toBe(true);
     expect(budgetExceeded(5, 6)).toBe(true);
+  });
+});
+
+describe("tokensExceeded", () => {
+  it("is false when the cap is 0 (unlimited)", () => {
+    expect(tokensExceeded(0, 10_000_000)).toBe(false);
+  });
+  it("is false below the cap and true at/above it", () => {
+    expect(tokensExceeded(1000, 999)).toBe(false);
+    expect(tokensExceeded(1000, 1000)).toBe(true);
+    expect(tokensExceeded(1000, 5000)).toBe(true);
   });
 });
 

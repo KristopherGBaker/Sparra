@@ -21,6 +21,7 @@ export interface GenerateOutput {
   sessionId: string;
   hitMaxTurns: boolean;
   costUsd: number;
+  tokens: number;
 }
 
 /**
@@ -96,5 +97,6 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     sessionId: res.sessionId,
     hitMaxTurns: res.hitMaxTurns,
     costUsd: res.costUsd,
+    tokens: res.tokens,
   };
 }

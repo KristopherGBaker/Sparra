@@ -8,6 +8,8 @@ import { StateStore } from "../src/state.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
+import type { GenerateOutput } from "../src/build/generate.ts";
+import type { EvalOutput } from "../src/build/evaluate.ts";
 
 function makeVerdict(pass: boolean, scores: Partial<Verdict["scores"]> = {}): Verdict {
   return {
@@ -18,6 +20,13 @@ function makeVerdict(pass: boolean, scores: Partial<Verdict["scores"]> = {}): Ve
     blocking: pass ? [] : ["something is wrong"],
     notes: "n",
   };
+}
+
+function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {
+  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001, tokens: 100, ...over };
+}
+function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
+  return { verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100, ...over };
 }
 
 async function makeCtx(buildOver: Partial<SparraConfig["build"]> = {}): Promise<{ ctx: Ctx; dir: string }> {
@@ -48,7 +57,7 @@ const items: WorkItem[] = [
 ];
 
 describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
-  it("halts an item as budget_exceeded when its cost crosses the cap, and continues to the next item", async () => {
+  it("halts an item as budget_exceeded when its USD cost crosses the cap, and continues to the next item", async () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0.01, maxRoundsPerItem: 6 });
     const genCalls: string[] = [];
     const deps: Partial<BuildDeps> = {
@@ -57,15 +66,9 @@ describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
       generateItem: async (args) => {
         genCalls.push(args.item.id);
         // item-001 immediately blows the tiny cap; item-002 is cheap.
-        const costUsd = args.item.id === "item-001" ? 5 : 0.001;
-        return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd };
+        return genOut({ costUsd: args.item.id === "item-001" ? 5 : 0.001 });
       },
-      evaluateItem: async (args) => ({
-        verdict: makeVerdict(args.item.id === "item-002"),
-        raw: "",
-        sessionId: "e",
-        costUsd: 0.001,
-      }),
+      evaluateItem: async (args) => evalOut(args.item.id === "item-002"),
     };
 
     const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
@@ -80,13 +83,35 @@ describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("does not cap when maxBudgetUsdPerItem is 0 (explicit opt-out)", async () => {
-    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+  it("halts on the TOKEN cap (the subscription lever) and continues the run", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxTokensPerItem: 1000, maxRoundsPerItem: 6 });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => items,
+      generateItem: async (args) =>
+        // item-001 blows the token cap on the first round; item-002 stays small.
+        genOut({ tokens: args.item.id === "item-001" ? 5000 : 50, costUsd: 0 }),
+      evaluateItem: async (args) => evalOut(args.item.id === "item-002", { tokens: 50, costUsd: 0 }),
+    };
+
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("budget_exceeded");
+    expect(ctx.store.data.build.items["item-001"]!.tokensUsed).toBeGreaterThanOrEqual(1000);
+    expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
+    expect(res.budgetExceeded).toBe(1);
+    expect(res.passed).toBe(1);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not cap when both budgets are 0 (explicit opt-out)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxTokensPerItem: 0, maxRoundsPerItem: 2 });
     const deps: Partial<BuildDeps> = {
       ...baseDeps(),
       decompose: async () => [items[0]!],
-      generateItem: async () => ({ report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 1000 }),
-      evaluateItem: async () => ({ verdict: makeVerdict(true), raw: "", sessionId: "e", costUsd: 1000 }),
+      generateItem: async () => genOut({ costUsd: 1000, tokens: 10_000_000 }),
+      evaluateItem: async () => evalOut(true, { costUsd: 1000, tokens: 10_000_000 }),
     };
     const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(res.budgetExceeded).toBe(0);
@@ -104,13 +129,11 @@ describe("cmdBuild — cross-run memory on pivot (CHANGE 3)", () => {
       decompose: async () => items,
       generateItem: async (args) => {
         injected[args.item.id] = args.priorLearnings ?? "";
-        return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001 };
+        return genOut();
       },
-      evaluateItem: async (args) => {
+      evaluateItem: async (args) =>
         // item-001 keeps failing on the SAME criterion (craft) → GAN pivot at N=3.
-        if (args.item.id === "item-002") return { verdict: makeVerdict(true), raw: "", sessionId: "e", costUsd: 0.001 };
-        return { verdict: makeVerdict(false, { craft: 10 }), raw: "", sessionId: "e", costUsd: 0.001 };
-      },
+        args.item.id === "item-002" ? evalOut(true) : evalOut(false, { verdict: makeVerdict(false, { craft: 10 }) }),
     };
 
     await cmdBuild(ctx, { workspaceOverride: dir }, deps);

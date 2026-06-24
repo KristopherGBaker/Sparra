@@ -13,6 +13,15 @@ export function budgetExceeded(capUsd: number, spentUsd: number): boolean {
 }
 
 /**
+ * Token-based variant of the same guard. On a subscription account the dollar
+ * figure is only a notional proxy (you're billed in tokens against rate limits,
+ * not in USD), so a token cap is the more direct lever. Same convention: 0 = no cap.
+ */
+export function tokensExceeded(capTokens: number, usedTokens: number): boolean {
+  return capTokens > 0 && usedTokens >= capTokens;
+}
+
+/**
  * The budget still available for the next session, given a per-item cap and what
  * the item has already spent. Returns 0 when there is no cap (0 = unlimited),
  * which the session layer also treats as "no per-session budget".

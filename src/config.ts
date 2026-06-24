@@ -85,8 +85,18 @@ export interface SparraConfig {
      * Per-item cumulative USD budget guard. The loop "starts closed": when an
      * item's accumulated cost crosses this cap it halts as BUDGET_EXCEEDED and the
      * run moves on to the next item. Set to 0 to explicitly opt out (no cap).
+     *
+     * NOTE: total_cost_usd is a notional figure (tokens × list price). On a
+     * subscription you're billed in tokens against rate limits, not USD, so this
+     * cap is a proxy — use `maxTokensPerItem` for a direct token bound.
      */
     maxBudgetUsdPerItem: number;
+    /**
+     * Per-item cumulative TOKEN budget guard (input+output+cache, summed across
+     * models). The direct lever for subscription accounts. Same semantics as the
+     * USD cap: crossing it halts the item as BUDGET_EXCEEDED. 0 = no cap.
+     */
+    maxTokensPerItem: number;
   };
 
   format: {
@@ -167,8 +177,10 @@ export function defaultConfig(): SparraConfig {
     },
     pivot: { N: 3, threshold: 50 },
     contract: { assertionMin: 15, assertionMax: 30, maxNegotiationRounds: 4 },
-    // Start closed: a real per-item budget by default; set to 0 to opt out (no cap).
-    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5 },
+    // Start closed: a real per-item USD budget by default; set to 0 to opt out.
+    // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
+    // for a direct token ceiling, which is the meaningful lever on a subscription.
+    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0 },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {
       mechanism: "cli",

@@ -23,6 +23,8 @@ export interface ItemState {
   lastScore?: number;
   /** Cumulative USD spent on this item across all rounds (feeds the budget guard + TUI). */
   costUsd?: number;
+  /** Cumulative tokens spent on this item across all rounds (feeds the token budget guard). */
+  tokensUsed?: number;
   generatorSessionId?: string;
 }
 
