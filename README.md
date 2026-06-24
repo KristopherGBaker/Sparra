@@ -50,7 +50,7 @@ sparra reflect       # propose prompt improvements from the run's traces
 sparra status        # where am I? what's next?
 ```
 
-There's a **runnable end-to-end example** you can watch in [`examples/cli-greenfield/`](examples/cli-greenfield/).
+There are **runnable end-to-end examples** you can watch: [`examples/cli-greenfield/`](examples/cli-greenfield/) (a tiny Node CLI) and [`examples/ios-greenfield/`](examples/ios-greenfield/) (a SwiftUI tip calculator that builds, runs, and is screenshot-graded in the iOS Simulator — needs Xcode + `xcodebuildmcp`).
 
 ### Run `sparra` / `sparra-tui` from anywhere
 

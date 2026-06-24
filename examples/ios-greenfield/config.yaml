@@ -1,0 +1,20 @@
+# Example config — greenfield iOS app (TipJar).
+#
+# Deliberately minimal: it inherits Sparra's BUILT-IN DEFAULTS for everything not
+# listed here — including the opus-heavy roles (planner/contractEvaluator/evaluator/
+# reflector = opus; generator/orienter = sonnet/high), the $5/item budget, rubric,
+# pivot, and contract limits. Only the iOS-specific knobs below differ.
+#
+# If a greenfield Xcode scaffold + build runs long, bump build.maxTurnsPerSession
+# and build.maxBudgetUsdPerItem (defaults: 60 turns, $5/item).
+
+exercise:
+  mechanism: ios
+  # Defaults already are { cli: xcodebuildmcp, scheme: "", simulator: "iPhone 16" } —
+  # shown here so you can point it at your scheme/simulator.
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" }
+
+format:
+  # SwiftFormat reflows; SwiftLint --fix auto-corrects lint. Run both before the
+  # evaluator builds. Missing tools = no-op + warning, never a build failure.
+  command: "sh -c 'swiftformat {file}; swiftlint --fix --path {file}'"
