@@ -152,7 +152,7 @@ The evaluator exercises the real artifact via `config.exercise.mechanism`:
 
 - **`cli`** — runs the built tool with real arguments; asserts on stdout/stderr/exit codes (an `eh`-style CLI). *Default.*
 - **`web`** — starts the app, probes it over HTTP (`http_request` tool); wire in Playwright / Chrome MCP via config for richer flows.
-- **`ios`** — drives `xcrun simctl` / `xcodebuild test` / XCUITest; wire in XcodeBuildMCP for accessibility automation.
+- **`ios`** — Apple-platform apps (iOS/macOS/etc.). Drives the [`xcodebuildmcp`](https://www.xcodebuildmcp.com) CLI (`config.exercise.ios.cli`, default `xcodebuildmcp`; falls back to raw `xcrun`/`xcodebuild` if unset/missing). Because the evaluator is **multimodal**, it screenshots the running UI into the artifact dir and *reads the image* to judge it visually, and uses the UI hierarchy (`describe-ui`) for deterministic assertions — so it can verify UI changes, not just that the app builds. Configure `ios.scheme` / `ios.simulator`. (Native builds are slow; the exerciser allows up to a 10-minute command timeout.)
 - **`computer-use`** — exercise end-to-end as a user would.
 - **`custom`** — your own shell recipe.
 
@@ -213,7 +213,7 @@ exercise:
   existingTestCommand: ""    # auto-detected from CODEBASE_MAP.md if empty
   customRecipe: ""
   web: { startCommand: "", baseUrl: "http://localhost:3000" }
-  ios: { scheme: "", simulator: "iPhone 15" }
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" }   # cli="" → raw xcrun/xcodebuild
 
 deviation: { strictness: moderate }       # strict | moderate | free (default by mode)
 
