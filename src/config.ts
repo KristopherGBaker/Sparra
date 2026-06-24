@@ -131,8 +131,14 @@ export interface SparraConfig {
     customRecipe: string;
     /** For mechanism: web — base URL / start command. */
     web: { startCommand: string; baseUrl: string };
-    /** For mechanism: ios — simulator + scheme hints. */
-    ios: { scheme: string; simulator: string };
+    /**
+     * For mechanism: ios — Apple-platform build/run/UI-automation.
+     *   cli       the executable to drive (default "xcodebuildmcp"; preferred over
+     *             raw xcodebuild/xcrun/simctl). Empty → use raw Apple tooling.
+     *   scheme    the Xcode scheme to build/run.
+     *   simulator the simulator name (e.g. "iPhone 16").
+     */
+    ios: { cli: string; scheme: string; simulator: string };
   };
 
   deviation: {
@@ -188,7 +194,7 @@ export function defaultConfig(): SparraConfig {
       existingTestCommand: "",
       customRecipe: "",
       web: { startCommand: "", baseUrl: "http://localhost:3000" },
-      ios: { scheme: "", simulator: "iPhone 15" },
+      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" },
     },
     deviation: { strictness: "moderate" },
     batch: { K: 3 },
