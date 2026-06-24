@@ -193,9 +193,11 @@ pivot: { N: 3, threshold: 50 }            # GAN restart after N rounds below thr
 
 contract: { assertionMin: 15, assertionMax: 30, maxNegotiationRounds: 4 }
 
-# "Start closed": maxBudgetUsdPerItem caps each item's cumulative cost. When an item
-# crosses it, the item halts as BUDGET_EXCEEDED and the run moves on. 0 = no cap.
-build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5 }
+# "Start closed": each item is capped by cost AND/OR tokens. Crossing either halts
+# the item as BUDGET_EXCEEDED and the run moves on. 0 = no cap.
+#   maxBudgetUsdPerItem  notional USD (tokens × list price); fires on API + subscription.
+#   maxTokensPerItem     direct token ceiling — the meaningful lever on a subscription.
+build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0 }
 
 # PostToolUse formatter — formats/lints each file the generator writes BEFORE the
 # evaluator exercises it, so formatting never costs an evaluator round.
@@ -220,7 +222,7 @@ batch: { K: 3 }
 
 ### Three loop-discipline knobs (how Boris Cherny runs loops)
 
-- **Bounded by default (`build.maxBudgetUsdPerItem`)** — the loop *starts closed*. Each item has a real USD cap (default **5**); when its accumulated cost crosses the cap the item is marked **`BUDGET_EXCEEDED`** and the build continues to the next item instead of burning unbounded budget. Set it to `0` to explicitly opt out.
+- **Bounded by default (`build.maxBudgetUsdPerItem` / `build.maxTokensPerItem`)** — the loop *starts closed*. Each item has a real USD cap (default **5**); when its accumulated cost crosses the cap the item is marked **`BUDGET_EXCEEDED`** and the build continues to the next item instead of burning unbounded budget. Set it to `0` to opt out. **On a subscription**, `total_cost_usd` is a *notional* figure (tokens × list price) — you're billed in tokens against your rate limits, not dollars — so the USD cap is only a proxy; set **`maxTokensPerItem`** for a direct token ceiling (the meaningful lever there). Either cap crossing halts the item. Both default-bound runaways; the turn/round caps (`maxTurnsPerSession`, `maxRoundsPerItem`) bound things regardless of pricing.
 - **Format on write (`format`)** — a `PostToolUse` hook runs a formatter/linter on every file the generator writes, *before* the adversarial evaluator exercises the artifact, so trivial formatting issues never cost an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint` for iOS). No formatter installed → no-op + warning, never a failure.
 - **Cross-run memory (`.sparra/memory.md`)** — *repos don't forget*. A durable, append-only log of short learnings (what was tried for an item and whether it passed/failed/pivoted/ran out of budget). Every autonomous role reads it at the start of each item so prior failures inform new work, and `sparra reflect` appends to it. It is capped: once it grows past its limits the oldest entries collapse into a one-line summary so it never grows unbounded.
 

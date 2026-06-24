@@ -28,9 +28,11 @@ pivot: { N: 3, threshold: 50 }
 
 contract: { assertionMin: 10, assertionMax: 20, maxNegotiationRounds: 3 }
 
-# "Start closed": per-item USD cap. When an item's accumulated cost crosses it,
-# the item halts as BUDGET_EXCEEDED and the run moves on (set to 0 to opt out).
-build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 5 }
+# "Start closed": per-item budget. When an item's accumulated cost/tokens cross a
+# cap, the item halts as BUDGET_EXCEEDED and the run moves on (0 = opt out).
+# maxBudgetUsdPerItem is notional USD (tokens × list price). On a subscription you
+# pay in tokens against rate limits, so set maxTokensPerItem for a direct ceiling.
+build: { maxRoundsPerItem: 4, maxTurnsPerSession: 80, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0 }
 
 # PostToolUse formatter: format/lint each written file BEFORE the evaluator runs,
 # so formatting never costs an evaluator round. command="" → auto-detect (this repo
