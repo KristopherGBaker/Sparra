@@ -67,6 +67,7 @@ ${deviations.map((d) => `- [${d.scope}] ${d.summary} — ${d.rationale}`).join("
     role: `reconcile-${item.id}`,
     prompt: task,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,

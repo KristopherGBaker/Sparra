@@ -291,9 +291,26 @@ your-project/
 
 ---
 
+## Agent backends (Claude · Codex)
+
+Every model-driven step goes through a pluggable **`AgentBackend`** (`src/sdk/backend.ts`), so the orchestration loop is independent of which coding agent runs a task. Two backends ship:
+
+- **`claude`** (default) — the Claude Agent SDK: hooks, MCP, fine-grained permission modes, USD + token cost.
+- **`codex`** — OpenAI's Codex via [`@openai/codex-sdk`](https://developers.openai.com/codex/sdk) (an **optional** peer dep, loaded lazily): native OS sandbox, native `outputSchema`, thread resume, token cost. Install with `npm i @openai/codex-sdk` (+ the `codex` CLI on PATH) only if you use it.
+
+Pick the backend **per role** in `config.yaml` — so you can have Claude plan/judge and Codex build, or cross-check (one builds, the other evaluates):
+
+```yaml
+roles:
+  generator: { backend: codex,  model: gpt-5-codex }
+  evaluator: { backend: claude, model: opus, effort: high }   # independent grader
+```
+
+Backends expose a normalized intent (`writeScope` / `readOnly` / `outputSchema`) that each satisfies natively — Claude via hooks + permission mode, Codex via its sandbox. The **git worktree remains the outer boundary for every backend**, with `writeScopeViolations()` as a backend-independent post-hoc backstop.
+
 ## How it maps to the SDK
 
-Every role is a separate `query()` call through one wrapper (`src/sdk/session.ts`) — own `systemPrompt` (from `.sparra/prompts/`), own `model`/`effort`. Sessions never share memory; they hand off through files.
+Every role is a separate backend task through one wrapper (`src/sdk/session.ts` → `AgentBackend.runTask`) — own `systemPrompt` (from `.sparra/prompts/`), own `backend`/`model`/`effort`. Sessions never share memory; they hand off through files.
 
 - **Interactive planning** uses **resume-based multi-turn** (`resume: <sessionId>` per turn) rather than a single streaming session, specifically so the interview survives process restarts (the design goal: resumable from filesystem state at any phase).
 - **Autonomous roles** are one-shot `query()` calls in a loop; sessions that hit `maxTurns` are resumed; GAN restarts use a fresh session.

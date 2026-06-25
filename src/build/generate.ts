@@ -74,6 +74,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     role: `generator-${item.id}`,
     prompt: task,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: workspaceDir,

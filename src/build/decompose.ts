@@ -50,6 +50,7 @@ Order matters: earlier items should not depend on later ones.`;
     role: "decomposer",
     prompt: task,
     systemPrompt: DECOMPOSE_SYSTEM,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,

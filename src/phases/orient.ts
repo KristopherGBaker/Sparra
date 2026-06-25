@@ -29,6 +29,7 @@ export async function cmdOrient(ctx: Ctx, opts: { light?: boolean }): Promise<vo
     role: "orienter",
     prompt: task,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,

@@ -75,4 +75,27 @@ describe("generateItem — Apple conventions injection", () => {
     expect(prompt).not.toMatch(/HOUSE CONVENTIONS/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("routes the generator role to its configured backend", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.roles.generator.backend = "codex";
+    let backend: string | undefined = "unset";
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (backend = p.backend)),
+    });
+    expect(backend).toBe("codex");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves the backend unset (→ claude default) when not configured", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    let backend: string | undefined = "unset";
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (backend = p.backend)),
+    });
+    expect(backend).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

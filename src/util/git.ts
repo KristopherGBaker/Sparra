@@ -20,6 +20,21 @@ export function hasCommits(root: string): boolean {
   return git(root, ["rev-parse", "HEAD"]).ok;
 }
 
+/** Absolute paths of files changed (vs HEAD + untracked) in a repo, via `git status --porcelain`. */
+export function changedFiles(root: string): string[] {
+  if (!isGitRepo(root)) return [];
+  const r = git(root, ["status", "--porcelain", "--untracked-files=all"]);
+  if (!r.ok) return [];
+  const out: string[] = [];
+  for (const line of r.out.split("\n")) {
+    const rest = line.slice(3).trim(); // strip the 2-char status code + space
+    if (!rest) continue;
+    const rel = rest.includes(" -> ") ? rest.split(" -> ")[1]!.trim() : rest; // handle renames
+    out.push(path.resolve(root, rel.replace(/^"|"$/g, "")));
+  }
+  return out;
+}
+
 /**
  * Prepare an isolated working location for the build per gitStrategy.
  * Returns the directory the build should run in.

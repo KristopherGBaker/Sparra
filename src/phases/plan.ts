@@ -53,6 +53,7 @@ export async function planTurn(args: {
     role: "planner",
     prompt: args.userText,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,

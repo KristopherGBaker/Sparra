@@ -57,6 +57,20 @@ export function denyBashMutation(toolName: string, input: any, extra: string[]):
   return hit ? `Read-mostly phase: Bash mutation blocked ("${hit}").` : null;
 }
 
+/**
+ * Backend-independent backstop: given the files that actually changed, return those
+ * outside every writeRoot. Works whether scoping was enforced by Claude PreToolUse
+ * hooks or by Codex's OS sandbox — you verify the result, not the mechanism. Empty
+ * writeRoots = unscoped (no violations). Paths are resolved against the first root.
+ */
+export function writeScopeViolations(changedPaths: string[], writeRoots: string[]): string[] {
+  if (writeRoots.length === 0) return [];
+  return changedPaths.filter((p) => {
+    const abs = path.isAbsolute(p) ? p : path.resolve(writeRoots[0]!, p);
+    return !writeRoots.some((r) => within(abs, r));
+  });
+}
+
 /** Compose deciders: first non-null reason wins; null means allow. */
 export function firstDeny(toolName: string, input: any, deciders: Array<(t: string, i: any) => string | null>): string | null {
   for (const d of deciders) {

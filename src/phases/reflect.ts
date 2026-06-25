@@ -78,6 +78,7 @@ with a short before/after for the key edits. Write ONLY inside ${path.relative(c
     role: "reflector",
     prompt: task,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,

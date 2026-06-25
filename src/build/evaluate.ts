@@ -76,6 +76,7 @@ ${memory}Exercise the artifact for real, check every assertion with evidence, sc
     role: `evaluator-${item.id}-r${round}`,
     prompt: task,
     systemPrompt: system,
+    backend: role.backend,
     model: role.model,
     effort: role.effort,
     cwd: workspaceDir,

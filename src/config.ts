@@ -6,6 +6,8 @@ import type { Paths } from "./paths.ts";
 export type ModelRef = string;
 
 export interface RoleConfig {
+  /** Which agent backend runs this role ("claude" default, "codex", …). */
+  backend?: string;
   model: ModelRef;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
 }

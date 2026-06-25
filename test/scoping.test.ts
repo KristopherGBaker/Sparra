@@ -7,7 +7,25 @@ import {
   denyAnyWrite,
   denyBash,
   denyBashMutation,
+  writeScopeViolations,
 } from "../src/sdk/scoping.ts";
+
+describe("writeScopeViolations (sandbox-first backstop)", () => {
+  it("returns nothing when all changes are inside a write root", () => {
+    expect(writeScopeViolations(["/work/a.ts", "/work/sub/b.ts"], ["/work"])).toEqual([]);
+  });
+  it("flags changes outside every write root", () => {
+    const v = writeScopeViolations(["/work/a.ts", "/etc/passwd", "/other/x"], ["/work"]);
+    expect(v).toEqual(["/etc/passwd", "/other/x"]);
+  });
+  it("treats empty writeRoots as unscoped (no violations)", () => {
+    expect(writeScopeViolations(["/anything"], [])).toEqual([]);
+  });
+  it("resolves relative paths against the first root (and reports the original path)", () => {
+    expect(writeScopeViolations(["a.ts"], ["/work"])).toEqual([]); // resolves inside → ok
+    expect(writeScopeViolations(["../escape.ts"], ["/work"])).toEqual(["../escape.ts"]); // resolves outside → flagged
+  });
+});
 
 describe("within", () => {
   it("returns true when child is inside parent", () => {

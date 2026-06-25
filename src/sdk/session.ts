@@ -1,5 +1,6 @@
 import { getBackend } from "./backend.ts";
 import "./backends/claude.ts"; // side-effect: registers the "claude" backend
+import "./backends/codex.ts"; // side-effect: registers the "codex" backend (SDK loaded lazily)
 import type { AgentRequest, AgentResult } from "./backend.ts";
 
 // Back-compat names: the rest of the harness still talks in terms of "sessions".

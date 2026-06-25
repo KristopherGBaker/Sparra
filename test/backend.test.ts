@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend } from "../src/sdk/backend.ts";
-import "../src/sdk/session.ts"; // side-effect: registers the claude backend
+import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
 
 describe("agent backend registry (the AgentBackend seam)", () => {
   it("registers the claude backend with expected capabilities", () => {
@@ -58,5 +61,34 @@ describe("agent backend registry (the AgentBackend seam)", () => {
     });
     expect(r.ok).toBe(true);
     expect(r.tokens).toBe(42);
+  });
+});
+
+describe("codex backend", () => {
+  it("is registered with sandbox-first, schema-native capabilities", () => {
+    const b = getBackend("codex");
+    expect(b.id).toBe("codex");
+    expect(b.capabilities.sandbox).toBe(true);
+    expect(b.capabilities.outputSchema).toBe(true);
+    expect(b.capabilities.hooks).toBe(false);
+    expect(b.capabilities.cost).toBe("tokens");
+  });
+
+  it("degrades gracefully when @openai/codex-sdk is not installed", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-"));
+    const r = await getBackend("codex").runTask({
+      role: "generator",
+      prompt: "build it",
+      systemPrompt: "s",
+      model: "gpt-5-codex",
+      cwd: dir,
+      writeScope: [dir],
+      traceDir: dir,
+      traceSeq: 1,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.subtype).toBe("error_backend_unavailable");
+    expect(r.errors.join(" ")).toMatch(/@openai\/codex-sdk/);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
