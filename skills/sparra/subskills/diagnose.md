@@ -40,6 +40,10 @@ From the project root (the dir you ran `sparra` in):
    per-criterion scores, **failed assertions with evidence**, blocking issues, and a
    `<details>` block with the raw evaluator output. This tells you *why* an item failed a round.
 
+   **`.sparra/reviews/<id>.r<n>.review.md`** — if `review.enabled`, the code-review findings
+   (blocking vs advisory, with `blockOn`). An item that passes the exercise but isn't accepted
+   was blocked here.
+
 5. **`.sparra/traces/<run>/NN-<role>.md`** — the full transcript of every role session as
    markdown. The most recent file (by mtime) shows current activity. Read these when the
    verdict/contract summary isn't enough — e.g. to see what the generator actually did, or
@@ -71,6 +75,10 @@ check the latest trace and the contract file for an error (often a session-level
 | **Item keeps failing the same criterion, then restarts from scratch** | GAN pivot: same rubric criterion below `pivot.threshold` for `pivot.N` rounds | Expected behavior. If it pivots forever, the contract or rubric expectations may be miscalibrated for the item. |
 | **Build output / screenshots litter the project root** | Older guidance; the evaluator should use a temp derivedDataPath + scratch dir | Current guidance handles this; if seen, it's a prompt-tuning target. |
 | **"no parseable verdict → FAIL" despite a good build** | The evaluator's JSON verdict wasn't extracted (historic shape bug) | Read the raw output in the verdict `<details>`; if the verdict is actually fine, it's an extraction bug to fix in `src/build/evaluate.ts`. |
+| **Item passes the exercise but isn't accepted; feedback mentions "code review"** | `review.enabled` and the `reviewer` found a `blockOn`-level issue | Read `.sparra/reviews/<id>.r<n>.review.md`. Fix the flagged issue, or lower `review.blockOn` / disable `review` if the finding is noise (it shouldn't be — proportionality applies). |
+| **A previously-green required check now fails / passes only on rerun** | Determinism gate: the evaluator reruns gating checks and an artifact-caused flake is a defect, not "environmental" | Fix the *artifact* (stabilize the race / debounce / isolate state) — rerun-to-green won't pass it. See the verdict's notes for the diagnosed cause. |
+| **`git.autoCommit: true` but no commits appear** | Not on a Sparra branch — `inplace` strategy or a non-git / no-history dir never auto-commits (safety) | Use `git.strategy: worktree` (or `branch`) on a real repo; commits land on `sparra/<runId>`, never main. |
+| **A configured skill has no effect / "skill … not found" warning** | The name didn't resolve, or the role doesn't receive it | Check the name matches a `SKILL.md` dir under repo `skills/`, `~/.claude/skills`, or `~/.agents/skills`; builder roles inherit `build.skills`, others need `roles.<role>.skills`. |
 
 ## Clean re-runs
 
@@ -96,4 +104,4 @@ ls -lt .sparra/traces/*/ | head          # newest trace = current activity
 tail -f .sparra/traces/<run>/NN-<role>.md # follow a role as it works
 ```
 The role filename tells you the phase: `decomposer`, `contract-generator`/`contract-evaluator`,
-`generator-<id>`, `evaluator-<id>-r<n>`, `reconcile-<id>`, `reflector`.
+`generator-<id>`, `evaluator-<id>-r<n>`, `reviewer-<id>-r<n>`, `reconcile-<id>`, `reflector`.

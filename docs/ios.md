@@ -33,7 +33,7 @@ On `mechanism: ios` the generator is given the house Swift conventions automatic
 ## Gotchas
 - **Builds are slow** — the exercise command timeout allows up to 10 minutes; building + booting a sim every round costs time/tokens.
 - **Don't nest a Sparra work dir inside another Sparra project.** Run a standalone iOS project in its own directory; a parent project's stray `PLAN.md`/`.sparra/` can confuse a read-only role. (The evaluator prompts are anchored to ignore unrelated plans on disk, but a clean directory is best.)
-- **`settingSources: []`** means Sparra doesn't inherit your global Claude Code MCP/skill config — the `xcodebuildmcp` workflow is baked into the evaluator's guidance, so nothing to wire beyond the config above.
+- **`settingSources: []`** means Sparra doesn't *ambiently* inherit your global Claude Code MCP/skill config — the `xcodebuildmcp` workflow is baked into the evaluator's guidance, so nothing to wire beyond the config above. To give the evaluator your actual build/run skill on top of that, declare it explicitly: `roles.evaluator.skills: ["xcodebuildmcp-cli"]` (see [backends — skills](backends.md#skills)). Skills are declared, not inherited, so the run stays reproducible.
 
 ## Cross-backend (Codex builds, Claude judges)
 Apple builds pair well with [cross-backend evaluation](backends.md#cross-backend-evaluation) — e.g. Codex writes the Swift, an independent Claude/opus evaluator grades the running app:

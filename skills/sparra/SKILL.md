@@ -73,14 +73,23 @@ an out-of-repo work dir.
 Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/configuration.md`.
 The few that matter most:
 
-- **`roles.<role>: { backend?, model, effort? }`** — `backend` defaults to `claude`; set
-  `codex` to run that role on Codex. Roles: orienter, planner, **decomposer**, prototyper,
-  contractGenerator, contractEvaluator, generator, evaluator, reflector.
+- **`roles.<role>: { backend?, model, effort?, skills? }`** — `backend` defaults to
+  `claude`; set `codex` to run that role on Codex. Roles: orienter, planner, **decomposer**,
+  prototyper, contractGenerator, contractEvaluator, generator, evaluator, **reviewer**, reflector.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem`** — per-item caps; crossing either
   halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold.
+- **`review: { enabled, blockOn }`** — opt-in **code-review gate** (off by default). After
+  an item passes the evaluator, a `reviewer` role reads the diff for what the exerciser
+  can't see (security, dead/vestigial code, conventions). `blockOn`: `high` (security/
+  correctness/dead-code) | `all` | `none`. Best on a backend ≠ the generator's.
+- **`git.autoCommit`** — when true, each accepted item is one **conventional commit** onto
+  the Sparra worktree/branch (never your main branch; never in-place). Default false.
+- **`build.skills` / `roles.<role>.skills`** — **agent skills** (SKILL.md) for roles.
+  Builder roles (generator, prototyper) inherit `build.skills`; others (e.g. evaluator) opt
+  in via their own list. Resolved from repo `skills/`, `~/.claude/skills`, `~/.agents/skills`.
 
 ### Cross-backend (Codex builds, Claude judges)
 A genuine quality lever — independent model families catch each other's blind spots.
@@ -105,6 +114,19 @@ app letterboxes at 320×480 and UI automation misses. Full guide: `docs/ios.md`.
 Author acceptance checks in `HOLDOUT.md`; only the evaluator sees them (enforced in code).
 The builder can't overfit to checks it can't read. Frozen alongside the plan. Strongest
 combined with cross-backend grading. See `docs/build-loop.md`.
+
+### Code review (optional)
+`review.enabled: true` adds a `reviewer` role that reads the diff/source after the evaluator
+passes — a second lens for security, dead code, structure, and convention conformance the
+exerciser can't see. `blockOn` (`high`|`all`|`none`) decides what fails acceptance; findings
+land in `.sparra/reviews/`. Run it on a backend ≠ the generator's for fresh eyes.
+
+### Skills (per role)
+Hand a role agent skills via `build.skills` (builders inherit) or `roles.<role>.skills`
+(others opt in). **Claude** loads them natively as a scoped throwaway local plugin, so
+`settingSources` stays `[]` (no ambient leak); **Codex** has no skill channel, so the
+`SKILL.md` is inlined into the input. Declared in config → reproducible. E.g.
+`roles.evaluator.skills: [xcodebuildmcp-cli]` to give the iOS grader your build/run skill.
 
 ## Diagnosing a run
 
@@ -135,5 +157,10 @@ Then, by symptom: decomposition shape → `workitems/items.json`; contract not c
 - **`BUDGET_EXCEEDED` ≠ crash** — the item halts, the run continues to the next item.
 - **Contracts are proportionate**: a handful of *observable product-behavior* assertions,
   scaled to the item — not build-setting/toolchain trivia. Over-spec is a review failure too.
-- **Never commits to your main branch.** Existing repos build on a worktree/branch.
+- **The evaluator won't pass a flaky artifact.** An intermittently-failing required check is
+  an artifact defect, not "environmental" — rerun-to-green doesn't launder it.
+- **Never commits to your main branch.** Existing repos build on a worktree/branch; opt into
+  per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
+- **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;
+  Claude loads natively (settingSources stays []), Codex inlines the SKILL.md.
 - After a meaningful run, `sparra reflect` turns the traces into proposed prompt edits.

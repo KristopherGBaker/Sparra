@@ -15,7 +15,7 @@ The guiding principle: **the filesystem is the source of truth and the only shar
  freeze                           snapshot the plan as build input (your call)
    ▼
  build (autonomous)               per item: negotiate a "done" contract → generate →
-   │                              adversarial evaluator EXERCISES it → grade → pivot/accept
+   │                              evaluator EXERCISES it → grade → (code review) → pivot/accept → commit
    ▼
  reflect                          read the run's traces → propose prompt edits you approve
 ```
@@ -43,10 +43,10 @@ There are runnable examples to watch: [`examples/cli-greenfield/`](examples/cli-
 ## How it works
 
 - **Plan → freeze → build.** A relentless, human-led planning interview co-edits `PLAN.md`; nothing advances to building until *you* run `freeze`. → [docs/phases.md](docs/phases.md)
-- **Adversarial build loop.** Each work item gets a negotiated, proportionate "done" contract (a handful of checkable assertions, not a wishlist), is implemented by a generator, then **exercised for real** by an adversarial evaluator that grades it with evidence. Stuck items **GAN-pivot**: discard and restart from scratch. → [docs/build-loop.md](docs/build-loop.md)
-- **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** — Claude *or* Codex — and can even have one family **build** while another **judges**. → [docs/backends.md](docs/backends.md)
+- **Adversarial build loop.** Each work item gets a negotiated, proportionate "done" contract (a handful of checkable assertions, not a wishlist), is implemented by a generator, then **exercised for real** by an adversarial evaluator that grades it with evidence (and won't pass a flaky artifact). Stuck items **GAN-pivot**: discard and restart from scratch. An optional **code-review gate** adds a second lens on the diff — security, dead code, conventions — before acceptance. → [docs/build-loop.md](docs/build-loop.md)
+- **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** — Claude *or* Codex — and can even have one family **build** while another **judges**. Roles can be handed **agent skills** (SKILL.md), loaded natively on Claude and inlined on Codex. → [docs/backends.md](docs/backends.md)
 - **Pluggable exerciser.** CLI, web, or **iOS/macOS** — for Apple apps the multimodal evaluator builds, launches the Simulator, drives the UI, and *reads screenshots* to verify UI changes. → [docs/ios.md](docs/ios.md)
-- **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to. → [docs/build-loop.md](docs/build-loop.md)
+- **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to. Accepted items can be **auto-committed** as conventional commits onto the Sparra branch (never your main). → [docs/build-loop.md](docs/build-loop.md)
 - **Self-improving & resumable.** Full transcripts to `traces/`, `sparra reflect` proposes prompt diffs you approve, durable cross-run `memory.md`, and resume-from-disk at any phase. → [docs/configuration.md](docs/configuration.md)
 - **Everything is a knob.** Per-role models/backends/effort, rubric weights, pivot thresholds, budgets, deviation strictness, exerciser. → [docs/configuration.md](docs/configuration.md)
 
