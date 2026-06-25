@@ -48,6 +48,9 @@ export interface SparraState {
     /** Monotonic trace-file sequence within the run. */
     traceSeq?: number;
     items: Record<string, ItemState>;
+    /** Hash of the frozen plan the current items were decomposed from — lets `build`
+     *  warn when the plan changed but the run wasn't re-decomposed (`--fresh` / `new`). */
+    lastBuiltPlanHash?: string;
   };
   /** Last SDK session id per role, for resume/fork. */
   sessions: Record<string, string>;

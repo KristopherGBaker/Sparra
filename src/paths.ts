@@ -88,6 +88,13 @@ export class Paths {
   get runs() {
     return path.join(this.dir, "runs");
   }
+  /** Archived past cycles (one subdir per completed plan→build cycle). */
+  get cycles() {
+    return path.join(this.dir, "cycles");
+  }
+  cycleDir(name: string) {
+    return path.join(this.cycles, name);
+  }
 
   promptFile(role: string) {
     return path.join(this.prompts, `${role}.md`);
@@ -121,6 +128,7 @@ export class Paths {
       ensureDir(this.reflect),
       ensureDir(this.traces),
       ensureDir(this.runs),
+      ensureDir(this.cycles),
     ]);
   }
 }

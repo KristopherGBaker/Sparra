@@ -11,6 +11,7 @@ import { cmdBuild } from "./phases/build.ts";
 import { cmdReflect } from "./phases/reflect.ts";
 import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
+import { cmdNew } from "./phases/new.ts";
 
 interface Args {
   positionals: string[];
@@ -56,6 +57,7 @@ ${color.bold("Commands")}
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
+  new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 
@@ -112,6 +114,9 @@ async function main(): Promise<void> {
       break;
     case "status":
       cmdStatus(ctx);
+      break;
+    case "new":
+      await cmdNew(ctx, positionals.slice(1).join(" "));
       break;
     case "resume":
       await resume(ctx);

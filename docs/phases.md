@@ -38,6 +38,20 @@ There is **no automated "plan is done" check.** When satisfied, run `sparra free
 - `sparra reflect` reviews the last run's traces, finds where the evaluator was too lenient/harsh or drifted from the rubric, and **proposes prompt edits** (a diff per prompt). `sparra reflect --apply` applies them, backing up the originals. It also appends a note to `.sparra/memory.md`.
 - `sparra batch -k N` runs **N independent builds** of the same frozen plan and summarizes which items are flaky across runs.
 
+## Next feature — `sparra new`
+When a cycle is done and you want to build the *next* feature in the same project, run
+**`sparra new ["<title>"]`**. It archives the finished cycle's working set — `PLAN.md`, the
+frozen input, `workitems/`, `contracts/`, `verdicts/`, `reviews/`, and the run's traces —
+into **`.sparra/cycles/<NNNN>-<slug>/`** (with a `cycle.json` manifest), **carries forward**
+the cross-cycle artifacts (`memory.md`, `CHANGELOG.md`, `CODEBASE_MAP.md`, config,
+calibration, prompts), writes a fresh `PLAN.md`, and returns to the **`plan`** phase. Then
+it's the normal `plan → freeze → build` again — no `--fresh` needed (the cycle starts clean).
+
+Each cycle's contracts/verdicts are preserved as a permanent record, and `memory.md` makes
+the harness smarter across features. (Without `new` you'd have to manually clear the working
+set and remember `build --fresh`; `build` now also *warns* if the frozen plan changed but the
+run wasn't re-decomposed.)
+
 ---
 
 ## The interactive TUI

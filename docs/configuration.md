@@ -98,8 +98,12 @@ your-project/
    ├─ calibration/     # good/ vs slop/ reference samples
    ├─ reflect/         # proposed prompt diffs awaiting approval
    ├─ traces/<run>/    # full transcripts per role, as markdown
-   └─ runs/            # batch summaries
+   ├─ runs/            # batch summaries
+   └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, contracts, verdicts, …) — see `sparra new`
 ```
+
+`memory.md`, `CHANGELOG.md`, `CODEBASE_MAP.md`, `config.yaml`, `calibration/`, and `prompts/`
+persist across cycles; the rest of the working set is archived per cycle by `sparra new`.
 
 ## Resuming
 `sparra resume` continues whatever phase you're in, purely from `.sparra/state.json` + the artifacts. Re-run `sparra build` to resume an interrupted build — passed items are skipped; `BUDGET_EXCEEDED`/`abandoned` items are skipped too.

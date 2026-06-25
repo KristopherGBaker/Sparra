@@ -55,11 +55,20 @@ sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOU
 sparra build           # the autonomous generator↔evaluator loop
 sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
 sparra status          # where am I / what's next
+sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan
 sparra resume          # continue whatever phase, from .sparra/state.json
 ```
 
 `--root <dir>` targets a project; otherwise the cwd is used. Re-running `sparra build`
 resumes — passed/abandoned/budget_exceeded items are skipped.
+
+**Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives
+the finished cycle's working set (PLAN, frozen input, workitems, contracts, verdicts, reviews,
+the run's traces) to `.sparra/cycles/<NNNN>-<slug>/`, carries forward `memory.md` /
+`CHANGELOG.md` / `CODEBASE_MAP.md` / config / calibration / prompts, writes a fresh `PLAN.md`,
+and returns to `plan`. Then it's `plan → freeze → build` again (no `--fresh` needed). Without
+it, you'd manually clear the working set and remember `build --fresh` — and `build` now warns
+if the frozen plan changed but the run wasn't re-decomposed.
 
 **Run each project in its OWN directory.** Do not nest a Sparra work dir inside another
 Sparra project (e.g. building inside the Sparra repo, or under a parent that has its own

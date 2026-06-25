@@ -18,6 +18,8 @@ The guiding principle: **the filesystem is the source of truth and the only shar
    │                              evaluator EXERCISES it → grade → (code review) → pivot/accept → commit
    ▼
  reflect                          read the run's traces → propose prompt edits you approve
+   ▼
+ new                              next feature, same project: archive this cycle, fresh plan
 ```
 
 ## Quick start
@@ -34,6 +36,7 @@ sparra freeze        # YOUR call — locks the plan as build input
 sparra build         # the autonomous generator/evaluator loop
 sparra reflect       # propose prompt improvements from the run's traces
 sparra status        # where am I? what's next?
+sparra new "next"    # done? start the next feature — archives this cycle, fresh plan
 ```
 
 No build step — the bins run the TypeScript directly via `tsx`, so edits/`git pull` take effect immediately. (`npm link` symlinks back to this repo; keep it where it is. Undo: `npm rm -g sparra`.)

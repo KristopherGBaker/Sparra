@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import type { ItemState } from "../state.ts";
@@ -110,8 +111,19 @@ export async function cmdBuild(
   detail(`workspace: ${b.build.workspaceNote}`);
   detail(`exercise mechanism: ${ctx.config.exercise.mechanism} · deviation: ${ctx.store.data.mode}/${ctx.config.deviation.strictness}`);
 
+  // Warn on the classic "I re-froze but build did nothing" trap: the frozen plan changed,
+  // but the run isn't being re-decomposed, so the old (already-passed) items are reused.
+  const planText = (await readText(ctx.paths.frozenPlan)) ?? (await readText(ctx.paths.plan)) ?? "";
+  const planHash = createHash("sha1").update(planText).digest("hex").slice(0, 12);
+  if (!opts.fresh && exists(ctx.paths.workitemsFile) && b.build.lastBuiltPlanHash && b.build.lastBuiltPlanHash !== planHash) {
+    warn("The frozen plan changed since these work items were decomposed.");
+    info("Re-run with `sparra build --fresh` to rebuild from the new plan, or `sparra new` to start a fresh cycle. (Continuing with the existing items for now.)");
+  }
+
   // Decompose (idempotent).
   const allItems = await d.decompose(ctx, traceDir, opts.fresh);
+  b.build.lastBuiltPlanHash = planHash;
+  await ctx.store.save();
   if (allItems.length === 0) {
     await ctx.store.transition("done", true);
     return { passed: 0, failed: 0, budgetExceeded: 0, total: 0, runId };
