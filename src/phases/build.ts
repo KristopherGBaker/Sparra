@@ -4,7 +4,8 @@ import { newRunId } from "../context.ts";
 import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
 import { exists, readText } from "../util/io.ts";
-import { prepareWorkspace } from "../util/git.ts";
+import { prepareWorkspace, changedFiles } from "../util/git.ts";
+import { writeScopeViolations } from "../sdk/scoping.ts";
 import { ensureAutoProbed } from "../sdk/guard.ts";
 import { decompose } from "../build/decompose.ts";
 import { negotiateContract } from "../build/contract.ts";
@@ -185,6 +186,24 @@ export async function cmdBuild(
       st.generatorSessionId = gen.sessionId;
       resumeSessionId = gen.sessionId;
       await ctx.store.save();
+
+      // Sandbox-first backstop: whatever scoped the writes (Claude hooks / Codex
+      // sandbox), verify nothing escaped the work scope into the repo. Harness-managed
+      // paths are allowed; anything else is a real escape.
+      const escapes = writeScopeViolations(changedFiles(ctx.root), [
+        workspaceDir,
+        ctx.paths.dir,
+        ctx.paths.plan,
+        ctx.paths.changelog,
+        ctx.paths.proposals,
+        ctx.paths.codebaseMap,
+        ctx.paths.prototypes,
+      ]);
+      if (escapes.length) {
+        warn(
+          `${item.id}: ${escapes.length} write(s) ESCAPED the work scope: ${escapes.slice(0, 5).map((p) => path.relative(ctx.root, p)).join(", ")}${escapes.length > 5 ? ` …(+${escapes.length - 5})` : ""}`
+        );
+      }
 
       if (overBudget(st)) {
         await haltOnBudget("generate");

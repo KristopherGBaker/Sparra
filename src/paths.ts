@@ -45,6 +45,13 @@ export class Paths {
   get frozenMap() {
     return path.join(this.frozen, "CODEBASE_MAP.frozen.md");
   }
+  /** Evaluator-only acceptance checks the generator never sees (isolation wall). */
+  get holdout() {
+    return path.join(this.root, "HOLDOUT.md");
+  }
+  get frozenHoldout() {
+    return path.join(this.frozen, "HOLDOUT.frozen.md");
+  }
   get snapshots() {
     return path.join(this.dir, "snapshots");
   }

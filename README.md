@@ -122,6 +122,8 @@ There is **no automated "plan is done" check.** When you're satisfied, you run `
 2. **Contract negotiation.** For each item, *before any code*, the generator proposes a "done" contract — *"I'll build X, verify by Y"* — with **15–30 concrete, individually checkable assertions**. A separate **adversarial** evaluator (harsh system prompt) critiques scope, verification, and missing edge cases. They iterate until both agree. The whole negotiation is saved to `.sparra/contracts/<id>.contract.md`. For existing projects every contract **must** include *"does not regress existing behavior"* and *"conforms to the conventions in CODEBASE_MAP.md."*
 3. **Generate.** The generator implements the item against the **contract** (not the plan prose), writing only inside the work scope.
 4. **Exercise & grade.** The evaluator is adversarial and **actually runs the artifact** — it does not read diffs. The exerciser is **pluggable** (see below). It grades each contract assertion PASS/FAIL **with evidence**, scores the **rubric**, and emits a structured verdict to `.sparra/verdicts/`. On existing projects it **also runs the repo's existing test suite** and treats new failures as a hard fail. Grading is against the **contract + rubric**, *not* the literal plan text.
+   - **Holdout / isolation wall (optional).** Author acceptance checks in **`HOLDOUT.md`** and *only the evaluator* ever sees them — the generator and the contract negotiation never do (enforced in code; a leak throws). The builder can't overfit to checks it can't read, so holdouts are an independent gate on real behavior; any holdout failure is blocking. Especially strong combined with a **different backend** grading than building.
+   - **Sandbox-first backstop.** Whatever scoped the writes (Claude hooks / Codex's OS sandbox), Sparra verifies post-hoc that nothing escaped the work scope into the repo (`writeScopeViolations`), warning on genuine escapes — backend-independent.
 5. **GAN-style pivot.** If an item stays below threshold on the **same rubric criterion** for `N` consecutive rounds, Sparra **discards and restarts that item from scratch** with a different approach instead of patching forever. `N` and the threshold are configurable.
 6. **Accept → reconcile.** On pass, deviations are reconciled into `PLAN.md` so the plan never goes stale.
 
@@ -270,6 +272,7 @@ Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparr
 your-project/
 ├─ CODEBASE_MAP.md     # Phase 0 (existing only)
 ├─ PLAN.md             # the living plan (Phase A); reconciled during build
+├─ HOLDOUT.md          # optional: evaluator-only acceptance checks (isolation wall)
 ├─ CHANGELOG.md        # every deviation, with rationale
 ├─ prototypes/         # throwaway prototypes (greenfield)
 └─ .sparra/

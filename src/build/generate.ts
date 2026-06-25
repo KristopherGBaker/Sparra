@@ -7,6 +7,7 @@ import { extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
 import { info } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
+import { readHoldout, assertNoHoldoutLeak } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
@@ -68,6 +69,9 @@ AGREED CONTRACT (your spec — satisfy every assertion):
 ${contractText}
 ---
 ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${conventions}${memory}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n` : ""}`;
+
+  // Isolation wall: the builder must never see the evaluator's holdout checks.
+  assertNoHoldoutLeak("generator", task, await readHoldout(ctx));
 
   info(`Generating ${item.id} with ${role.model}${args.fresh ? " (fresh restart)" : args.resumeSessionId ? " (resumed)" : ""}…`);
   const res = await run({

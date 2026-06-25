@@ -12,6 +12,7 @@ dist/
 # (Anchored to the root so the templates under selfhost/ and examples/ are kept.)
 .sparra/
 /PLAN.md
+/HOLDOUT.md
 /CODEBASE_MAP.md
 /CHANGELOG.md
 /prototypes/

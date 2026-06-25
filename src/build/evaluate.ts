@@ -8,6 +8,7 @@ import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
+import { readHoldout, holdoutSection } from "./holdout.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
 
@@ -60,6 +61,7 @@ export async function evaluateItem(args: {
     CALIBRATION: calibrationText(ctx),
   });
   const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
+  const holdout = holdoutSection(await readHoldout(ctx));
 
   const task = `Adversarially evaluate work item ${item.id}: ${item.title} (round ${round}).
 
@@ -69,7 +71,7 @@ AGREED CONTRACT (grade against THIS, not the plan prose):
 ---
 ${contractText}
 ---
-${memory}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
+${holdout}${memory}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
 
   info(`Evaluating ${item.id} (round ${round}) with ${role.model} — exercising via ${ctx.config.exercise.mechanism}…`);
   const res = await run({

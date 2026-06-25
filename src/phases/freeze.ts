@@ -36,6 +36,9 @@ export async function cmdFreeze(ctx: Ctx): Promise<void> {
   await writeText(ctx.paths.frozenPlan, plan ?? "");
   const map = await readText(ctx.paths.codebaseMap);
   if (map != null) await writeText(ctx.paths.frozenMap, map);
+  // Evaluator-only holdout (isolation wall) — frozen alongside the plan if present.
+  const holdout = await readText(ctx.paths.holdout);
+  if (holdout != null) await writeText(ctx.paths.frozenHoldout, holdout);
 
   ctx.store.data.freeze = { frozenAt: new Date().toISOString(), snapshot };
   await ctx.store.transition("frozen", true);
@@ -44,5 +47,6 @@ export async function cmdFreeze(ctx: Ctx): Promise<void> {
   ok(`Plan frozen as build input.`);
   info(`frozen plan: ${path.relative(ctx.root, ctx.paths.frozenPlan)}`);
   if (map != null) info(`frozen map:  ${path.relative(ctx.root, ctx.paths.frozenMap)}`);
+  if (holdout != null) info(`frozen holdout: ${path.relative(ctx.root, ctx.paths.frozenHoldout)} (evaluator-only)`);
   info("Next: `sparra build` to start the autonomous generator/evaluator loop.");
 }
