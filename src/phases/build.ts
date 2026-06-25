@@ -11,6 +11,8 @@ import { decompose } from "../build/decompose.ts";
 import { negotiateContract } from "../build/contract.ts";
 import { generateItem } from "../build/generate.ts";
 import { evaluateItem } from "../build/evaluate.ts";
+import { reviewItem } from "../build/review.ts";
+import type { ReviewOutput } from "../build/review.ts";
 import { updateStreaksAndDecide } from "../build/pivot.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
@@ -25,6 +27,7 @@ export interface BuildDeps {
   negotiateContract: typeof negotiateContract;
   generateItem: typeof generateItem;
   evaluateItem: typeof evaluateItem;
+  reviewItem: typeof reviewItem;
   recordDeviations: typeof recordDeviations;
   reconcilePlan: typeof reconcilePlan;
   appendLearning: typeof appendLearning;
@@ -38,6 +41,7 @@ const defaultDeps: BuildDeps = {
   negotiateContract,
   generateItem,
   evaluateItem,
+  reviewItem,
   recordDeviations,
   reconcilePlan,
   appendLearning,
@@ -229,17 +233,56 @@ export async function cmdBuild(
       st.lastScore = ev.verdict.weightedTotal;
 
       if (ev.verdict.verdict === "pass") {
-        st.status = "passed";
-        await ctx.store.save();
-        await d.reconcilePlan(ctx, item, gen.deviations, traceDir, nextSeq());
+        // Optional independent code-review gate on the (behaviorally passing) change.
+        const review: ReviewOutput | null = ctx.config.review.enabled
+          ? await d.reviewItem({
+              ctx,
+              item,
+              contractText: contract.text,
+              workspaceDir,
+              round: st.round,
+              traceDir,
+              traceSeq: nextSeq(),
+              maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
+            })
+          : null;
+        if (review) {
+          totalCost += review.costUsd;
+          st.costUsd = (st.costUsd ?? 0) + review.costUsd;
+          st.tokensUsed = (st.tokensUsed ?? 0) + review.tokens;
+          await ctx.store.save();
+        }
+
+        if (!review || review.blocking.length === 0) {
+          st.status = "passed";
+          await ctx.store.save();
+          await d.reconcilePlan(ctx, item, gen.deviations, traceDir, nextSeq());
+          await d.appendLearning(ctx.paths, {
+            item: item.id,
+            kind: "passed",
+            detail: `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`,
+            at: stamp(),
+          });
+          ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
+          break;
+        }
+
+        // Behaviorally passing but code review blocked → fail the round with review feedback.
+        warn(`${item.id}: exercise passed but code review found ${review.blocking.length} blocking issue(s) in round ${st.round}.`);
         await d.appendLearning(ctx.paths, {
           item: item.id,
-          kind: "passed",
-          detail: `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`,
+          kind: "failed",
+          detail: `round ${st.round}: code review blocked — ${review.blocking.slice(0, 3).join("; ").slice(0, 200)}`,
           at: stamp(),
         });
-        ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}). cumulative $${totalCost.toFixed(3)}`);
-        break;
+        if (overBudget(st)) {
+          await haltOnBudget("review");
+          break;
+        }
+        if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        feedback = `Your implementation runs and meets the contract, but an independent CODE REVIEW found blocking issues that must be fixed before it's accepted:\n${review.blocking.map((b) => `- ${b}`).join("\n")}`;
+        fresh = false;
+        continue;
       }
 
       const decision = updateStreaksAndDecide(st, ev.verdict, ctx.config);

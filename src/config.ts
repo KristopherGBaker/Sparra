@@ -29,6 +29,8 @@ export interface SparraConfig {
     contractEvaluator: RoleConfig;
     generator: RoleConfig;
     evaluator: RoleConfig;
+    /** Independent code review of the generated diff/source (opt-in via `review`). */
+    reviewer: RoleConfig;
     reflector: RoleConfig;
   };
 
@@ -155,6 +157,19 @@ export interface SparraConfig {
     strictness: DeviationStrictness;
   };
 
+  /**
+   * Optional agent CODE REVIEW gate, run on the diff/source after an item passes the
+   * behavioral evaluator. A second, independent lens (best on a different backend than the
+   * generator) for code quality the exerciser can't see — dead code, security, structure,
+   * convention conformance. Off by default; it costs another role per item.
+   */
+  review: {
+    enabled: boolean;
+    /** Which finding severities block acceptance: "high" (blocking-severity only) |
+     *  "all" (advisory too) | "none" (purely advisory — never blocks). */
+    blockOn: "high" | "all" | "none";
+  };
+
   batch: { K: number };
 }
 
@@ -174,6 +189,7 @@ export function defaultConfig(): SparraConfig {
       contractEvaluator: role("opus", "high"),
       generator: role("sonnet", "high"),
       evaluator: role("opus", "high"),
+      reviewer: role("opus", "high"),
       reflector: role("opus", "high"),
     },
     permission: {
@@ -203,6 +219,7 @@ export function defaultConfig(): SparraConfig {
       ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }, // simulator: "" → auto-discover an available one
     },
     deviation: { strictness: "moderate" },
+    review: { enabled: false, blockOn: "high" },
     batch: { K: 3 },
   };
 }

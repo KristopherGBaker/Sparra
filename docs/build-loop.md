@@ -31,6 +31,22 @@ The evaluator gets an in-process MCP server (`mcp__exercise__run_command`, plus 
 
 ---
 
+## Code review (optional)
+A second, independent lens — turned on with `review.enabled` (off by default). After an
+item **passes the behavioral evaluator**, a `reviewer` role reads the diff/source for what
+the exerciser can't see: security (committed secrets, weakened sandboxing/ATS/entitlements),
+**dead/vestigial code**, structure/duplication, swallowed errors, and conformance to
+`CODEBASE_MAP.md` / the house conventions. It's read-only and best run on a **different
+backend than the generator** (genuine second eyes — set `roles.reviewer.backend`).
+
+It emits structured findings with severity; `review.blockOn` decides what gates acceptance:
+`high` (security/correctness/dead-code), `all` (advisory too), or `none` (advisory-only).
+A blocking finding fails the round with the findings as feedback — the item isn't accepted
+until it both **runs** (evaluator) and **reads clean** (reviewer), like CI + code review on
+a real team. Findings are written to `.sparra/reviews/<id>.r<n>.review.md`; cost counts
+toward the per-item budget. The reviewer is held to the same **proportionality** bar as the
+contract — substantive issues only, never style the formatter/linter already handles.
+
 ## Holdout / isolation wall (optional)
 Author acceptance checks in **`HOLDOUT.md`** and **only the evaluator** ever sees them — the generator and the contract negotiation never do (**enforced in code**: a leak throws). The builder can't overfit to checks it can't read, so holdouts are an independent gate on real behavior; any holdout failure is blocking. Strongest combined with a **different backend grading than building** (see [backends](backends.md)). The file is frozen alongside the plan at `freeze`.
 

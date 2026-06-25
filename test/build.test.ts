@@ -151,3 +151,49 @@ describe("cmdBuild — cross-run memory on pivot (CHANGE 3)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cmdBuild — code review gate (opt-in)", () => {
+  it("blocks a behaviorally-passing item until code review is clean", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3 });
+    ctx.config.review.enabled = true;
+    const reviewRounds: number[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true), // always passes the exercise
+      reviewItem: async (args) => {
+        reviewRounds.push(args.round);
+        const blocking = args.round === 1 ? ["App.swift:5 — committed API key"] : [];
+        return { findings: [], blocking, advisory: [], raw: "", sessionId: "rv", costUsd: 0, tokens: 5 };
+      },
+    };
+
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    // Blocked on round 1, re-reviewed on round 2, then accepted.
+    expect(reviewRounds).toEqual([1, 2]);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not run code review when disabled (default)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    let reviewed = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      reviewItem: async () => {
+        reviewed = true;
+        return { findings: [], blocking: [], advisory: [], raw: "", sessionId: "rv", costUsd: 0, tokens: 0 };
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(reviewed).toBe(false);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -12,6 +12,7 @@ roles:                        # per role: { backend?, model, effort? }  (backend
   contractEvaluator: { model: opus,   effort: high }
   generator:         { model: sonnet, effort: high }
   evaluator:         { model: opus,   effort: high }
+  reviewer:          { model: opus,   effort: high }   # code-review gate (opt-in; see `review`)
   reflector:         { model: opus,   effort: high }
   # Cross-backend example: generator: { backend: codex, model: gpt-5-codex }
 
@@ -54,6 +55,10 @@ exercise:
 
 deviation: { strictness: moderate }        # strict | moderate | free (defaulted by mode)
 
+review:                                    # opt-in agent code-review gate (off by default)
+  enabled: false
+  blockOn: high                            # high (security/correctness/dead-code) | all | none
+
 batch: { K: 3 }
 ```
 
@@ -63,6 +68,7 @@ batch: { K: 3 }
 - **`contract`** — the assertion range is an *upper guide*, scaled down for small items; the evaluator rejects padding and over-specification. See [build loop](build-loop.md).
 - **`build` budgets** — start-closed; crossing the USD **or** token cap halts an item as `BUDGET_EXCEEDED` and the run continues. `total_cost_usd` is notional on a subscription — use `maxTokensPerItem` there.
 - **`exercise.ios`** — full Apple-platform guide in [docs/ios.md](ios.md).
+- **`review`** — an optional agent code-review gate after the behavioral evaluator passes (a second lens for code quality the exerciser can't see). Off by default; see [build loop](build-loop.md#code-review-optional). Best with `roles.reviewer.backend` set to a *different* family than the generator.
 
 ## On-disk artifacts
 The filesystem is the source of truth and the only shared state — inspectable, diffable, resumable.

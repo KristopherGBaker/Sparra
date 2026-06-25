@@ -67,6 +67,9 @@ export class Paths {
   get verdicts() {
     return path.join(this.dir, "verdicts");
   }
+  get reviews() {
+    return path.join(this.dir, "reviews");
+  }
   get proposals() {
     return path.join(this.dir, "proposals");
   }
@@ -95,6 +98,9 @@ export class Paths {
   verdictFile(itemId: string, round: number) {
     return path.join(this.verdicts, `${itemId}.r${round}.verdict.md`);
   }
+  reviewFile(itemId: string, round: number) {
+    return path.join(this.reviews, `${itemId}.r${round}.review.md`);
+  }
   traceDir(runId: string) {
     return path.join(this.traces, runId);
   }
@@ -107,6 +113,7 @@ export class Paths {
       ensureDir(this.workitems),
       ensureDir(this.contracts),
       ensureDir(this.verdicts),
+      ensureDir(this.reviews),
       ensureDir(this.proposals),
       ensureDir(this.prompts),
       ensureDir(path.join(this.calibration, "good")),

@@ -29,6 +29,8 @@ roles:
 ## Cross-backend evaluation
 Because backend is per-role, you can have **one family build and another judge** (Codex builds, Claude grades — or vice-versa). Independent model families catch each other's blind spots far better than one model grading itself — the same reasoning behind the [holdout wall](build-loop.md#holdout--isolation-wall-optional). It's a config change, not code.
 
+The optional [code-review gate](build-loop.md#code-review-optional) is a third independent lens: set `roles.reviewer.backend` to a family *different from the generator* so the reviewer reads the diff with genuinely fresh eyes.
+
 > Heads-up: decomposition is a *planning* act and reads best on a model that follows the decomposer prompt closely. If you put the builder on Codex, keep `decomposer` on Claude (Codex tends to over-split). That's why `decomposer` is its own role.
 
 ## Normalized intent, native enforcement
