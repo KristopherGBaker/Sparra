@@ -19,6 +19,9 @@ export function appleConventions(): string {
 - Structure: organize app code BY FEATURE (e.g. \`Notes/\`, \`Editor/\`, \`Settings/\`), not by layer. Put pure, UI-free logic in a Swift package (\`Sources/<Kit>/\`, \`Tests/<Kit>Tests/\`); dependency direction is app → packages, never the reverse. As a type approaches ~250 lines, split it into \`Type+Area.swift\` extension files.
 - Tests: use Swift Testing (\`import Testing\`, \`@Test\`, \`#expect\`) — NOT XCTest. Cover real edge cases and failure paths, not vanity coverage; keep pure logic testable without mocks.
 - Quality: idiomatic modern SwiftUI (value types, bindings, no view controllers), SwiftLint-clean. The harness formats on write.
+- Do NOT bake build-environment workarounds into \`project.yml\` that you wouldn't ship — especially settings that weaken security/sandboxing (\`-disable-sandbox\`, \`ENABLE_USER_SCRIPT_SANDBOXING: NO\`, relaxed ATS). If YOUR build environment needs such a flag to compile, pass it transiently on the \`xcodebuild\` command line for your own verification — never persist it in the committed project.
+- Don't keep view state on a vestigial \`AppModel\` you never read; only add an \`@Observable\` \`AppModel\` when there's real cross-view state for it to own.
+- Stable, deterministic UI: avoid per-keystroke churn that re-creates the view (e.g. bumping a \`@Query\` sort key on every character); debounce or commit on done. Flaky input handling fails the evaluator.
 - Persistence (if any): behind a store/repository seam (GRDB or SwiftData \`@Model\`), never touched directly from views. Shared visual style lives in a design-system package (tokens + components), not duplicated per view.
 
 When the feature calls an LLM / model:

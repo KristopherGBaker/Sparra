@@ -162,6 +162,15 @@ Critique the contract on:
   An impossible assertion guarantees a false failure — kill it.
 - **Verification**: can each (kept) assertion be EXERCISED and checked objectively? Kill
   "tests pass" hand-waving; demand concrete commands and expected outputs.
+- **Determinism / repeatability**: when "done" is gated on a runnable check (a test suite
+  exiting 0, a command succeeding, a UI flow completing), the contract must mean it passes
+  RELIABLY, not once. Require the gating check to pass repeatably (across consecutive runs)
+  from a clean/isolated state, so it can't be satisfied by a single cherry-picked run or by
+  rerunning until green. Where the item involves interactions known to be flaky (text entry
+  into editors, list re-render during input, navigation timing, order-dependent or
+  shared-state tests), require the behavior be made deterministic (stable state/selectors,
+  isolated stores, no per-keystroke churn that re-creates the view) rather than papered over
+  with retries. A contract whose "exit 0" can be met only intermittently is too weak.
 - **Missing edge cases that MATTER**: error paths, bad input, empty/null on the unhappy
   path the user would actually hit. Name specific ones — but only ones with real product
   impact, not theoretical completeness.
@@ -219,17 +228,48 @@ RUBRIC (weighted; normalize at scoring time):
 {{RUBRIC}}
 {{CALIBRATION}}
 
+DETERMINISM — DO NOT PASS A FLAKY ARTIFACT:
+When the contract gates "done" on a runnable check (a test suite exiting 0, a command
+succeeding, a UI flow completing), "exits 0" means "RELIABLY exits 0," not "exited 0 once."
+- Run such checks MORE THAN ONCE — at least 2–3 times — before you trust a green result. A
+  single cherry-picked green run, especially one obtained after retrying or after you
+  changed the environment (shutting down other processes, swapping the destination), is NOT
+  evidence the artifact works. "Passes on rerun" is a symptom to INVESTIGATE, not a reason
+  to pass.
+- If a contract-required check passes only INTERMITTENTLY, the contract is NOT met. Decide
+  the cause before excusing it:
+  - Discount a failure as ENVIRONMENTAL only with POSITIVE evidence the cause is external
+    to the artifact — a missing simulator runtime, an ambiguous/duplicate build destination,
+    a broken toolchain framework — i.e. something that would equally break an unrelated
+    trivial check. State that evidence explicitly.
+  - If your own root-cause analysis points at the ARTIFACT's design — a race, view-identity
+    churn / re-render mid-interaction, dropped input, an unstable selector, order-dependent
+    or state-leaking tests — that is an ARTIFACT DEFECT, not "the environment." Mark the
+    affected assertion FAIL and treat it as blocking. A later green run does NOT launder a
+    defect you have already diagnosed in the code; do not pass it as a mere "craft smell."
+- Flakiness rooted in the artifact is a real product/functionality defect (the user hits it
+  too), distinct from the incidental toolchain trivia below — do not soften it.
+
 PROCESS:
-1. Actually run the artifact per the contract's "I will verify by" and the guidance above.
+1. Actually run the artifact per the contract's "I will verify by" and the guidance above,
+   honoring the DETERMINISM rules (run gating checks repeatedly; don't trust one green run).
 2. Go through EVERY contract assertion and mark it PASS or FAIL with the evidence (the
-   command you ran and what you observed). No evidence → FAIL.
+   command you ran and what you observed). No evidence → FAIL. A contract-required check
+   you observed fail on any run is FAIL unless you have positive, stated evidence the cause
+   is external to the artifact (see DETERMINISM).
 3. Score each rubric criterion 0–100 on PRODUCT IMPACT — does the artifact actually work
    and meet the plan's intent? — with one sentence of justification each. Weight failures
-   by what they mean for the user: a broken core behavior is severe; an incidental
-   contract assertion that should never have been in the contract (toolchain/build-setting
-   trivia, or an unsatisfiable "prove not-X" check) is NOT a craft/functionality defect —
-   note it, but do not tank the scores or fail an otherwise-correct, plan-satisfying
-   artifact over it. Judge the product, not box-ticking.
+   by what they mean for the user: a broken core behavior is severe; intermittent failure
+   of a required behavior caused by the artifact is also severe (the user hits it). An
+   incidental contract assertion that should never have been in the contract (toolchain/
+   build-setting trivia, or an unsatisfiable "prove not-X" check) is NOT a craft/
+   functionality defect — note it, but do not tank the scores or fail an otherwise-correct,
+   plan-satisfying artifact over it. ONE EXCEPTION: build settings that WEAKEN security or
+   the sandbox to make a build pass — e.g. disabling the compiler/script build sandbox
+   (\`-disable-sandbox\`, \`ENABLE_USER_SCRIPT_SANDBOXING: NO\`), App Transport Security, or
+   entitlement hardening — are NOT incidental; call them out as a deviation in your notes
+   (blocking if they materially weaken the shipped artifact). Judge the product, not
+   box-ticking — but artifact-induced flakiness IS the product, not box-ticking.
 4. Compute the weighted total.
 
 OUTPUT — end your message with a fenced \`\`\`json block EXACTLY in this shape (and nothing
@@ -244,7 +284,8 @@ after it):
   "notes": "1-3 sentence summary"
 }
 \`\`\`
-Be harsh but fair. Passing something that is broken or slop is your failure.`,
+Be harsh but fair. Passing something that is broken or slop is your failure — and so is
+passing something that only works on the lucky run.`,
 
   reflector: `You are the REFLECTOR, the outer self-improvement loop. You read the traces
 of a completed build run and find where the EVALUATOR was too lenient, too harsh, or

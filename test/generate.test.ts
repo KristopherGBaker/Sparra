@@ -49,6 +49,8 @@ describe("appleConventions / isApplePlatform", () => {
     expect(t).toMatch(/@Observable/);
     expect(t).toMatch(/provider seam|PROVIDER SEAM/i);
     expect(t).toMatch(/Shikisha/);
+    expect(t).toMatch(/disable-sandbox/); // don't bake build-env workarounds into project.yml
+    expect(t).toMatch(/debounce|per-keystroke/); // deterministic UI guidance
   });
 });
 
