@@ -31,6 +31,10 @@ Match the XcodeGen conventions used across these projects:
 - A single `application` target (`platform: iOS`) plus its `sources` path(s).
 - `settings.base`: `SWIFT_VERSION: 6.2`, `PRODUCT_BUNDLE_IDENTIFIER: com.krisbaker.tipjar`,
   `GENERATE_INFOPLIST_FILE: YES` (keep it minimal for a demo), `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`.
+- **Provide a launch screen** — `INFOPLIST_KEY_UILaunchScreen_Generation: "YES"` (or a
+  `UILaunchScreen: {}` Info.plist entry). Without it the app runs **letterboxed** at a
+  legacy 320×480 size (black bars), reports the wrong screen metrics, and breaks
+  coordinate-based UI automation. This is mandatory, not cosmetic.
 - **Don't configure code signing or a development team** — simulator builds don't need it.
   (The goal is "signing doesn't block the build", not "prove the bundle is unsigned" — the
   toolchain ad-hoc-signs simulator binaries automatically.)
@@ -45,6 +49,7 @@ Match the XcodeGen conventions used across these projects:
 
 ## Success criteria
 - A `project.yml` exists and **`xcodegen generate` produces a buildable `.xcodeproj`**.
+- The app renders **fullscreen** (no letterbox / black bars) — i.e. a launch screen is configured.
 - The app **builds and launches** in the iOS Simulator.
 - Bill `100`, tip `20%` → Tip reads `$20.00` and Total reads `$120.00`.
 - Bill `0` (or empty) → Tip `$0.00`, Total `$0.00`, no crash.

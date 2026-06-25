@@ -70,7 +70,9 @@ Build & run (scheme: ${schemeHint}, simulator: "${simHint}"):
 - Native builds can exceed 60s — pass a generous timeout_ms to run_command (up to the 600000 max).
 
 For UI changes (the important part — you are MULTIMODAL, use it):
-- Capture a screenshot of the relevant screen/state INTO the artifact directory, then OPEN it with the Read tool and actually LOOK: judge layout, spacing, states, and whether the change matches the contract.
+- SANITY-CHECK THE SCREEN SIZE FIRST. If the app reports a legacy frame (e.g. 320x480 or 375x667) on a modern simulator, or the screenshot shows black bars top/bottom, the app is LETTERBOXED because it has no launch screen — that is an APP DEFECT (it doesn't render fullscreen AND it breaks coordinate-based tap/type, making input land off-target). Flag it as a real craft defect; do NOT write off off-target taps as a tooling problem. The fix is a launch screen (e.g. INFOPLIST_KEY_UILaunchScreen_Generation=YES or a UILaunchScreen Info.plist entry).
+- Write screenshots and any helper scripts to a TEMP scratch dir (e.g. \`$(mktemp -d)\`), not the project directory.
+- Capture a screenshot of the relevant screen/state, then OPEN it with the Read tool and actually LOOK: judge layout, spacing, states, and whether the change matches the contract.
 - Drive real flows with the CLI's UI automation (tap / type / swipe / gesture) to reach the states the contract describes — don't just inspect the launch screen.
 - Use the UI hierarchy / describe-ui output for DETERMINISTIC assertions (e.g. "a control labelled 'Sign In' is visible and enabled") and cite it as evidence. Screenshots justify taste; the hierarchy justifies pass/fail.
 - Capture logs when behavior is dynamic.

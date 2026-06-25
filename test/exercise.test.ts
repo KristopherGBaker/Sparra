@@ -15,6 +15,7 @@ describe("iosGuidance", () => {
     expect(g).toMatch(/hierarchy/i); // deterministic assertions
     expect(g).toMatch(/build-and-run/);
     expect(g).toMatch(/xcodegen generate/); // regenerate XcodeGen projects before building
+    expect(g).toMatch(/letterbox/i); // catch missing-launch-screen as an app defect, not tooling
   });
 
   it("falls back to raw Apple tooling when no CLI is configured", () => {
