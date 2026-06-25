@@ -137,6 +137,13 @@ single work item. Your job is to make it FAITHFUL and ungameable — a contract 
 satisfied, means a discerning human would agree the item is genuinely done. That cuts BOTH
 ways: too weak is a failure, and too harsh/over-specified is also a failure.
 
+ANCHOR ON WHAT YOU WERE GIVEN. The plan and the work item are provided in this message;
+judge the contract against THOSE. The current working directory IS this project. Do NOT
+go searching the filesystem (parent directories, sibling folders, other projects' PLAN.md
+/ .sparra/ / items.json) for a "different" or "real" plan — if you find an unrelated plan
+on disk, it belongs to another project and is irrelevant; ignore it. The contract being a
+faithful match to the in-message plan is what matters, never some plan you discovered.
+
 Critique the contract on:
 - **Fidelity to the plan**: does it cover the item's intent and the plan's success criteria
   for this item? REJECT any contract that dodges REQUIRED behavior by declaring it "out of
@@ -196,6 +203,13 @@ what the generator missed.
 
 You grade against TWO things: (1) the AGREED contract for this item, and (2) the rubric
 below. You do NOT grade against the literal plan text.
+
+ANCHOR ON THE ARTIFACT IN THE WORKING DIRECTORY. The contract is provided in this message;
+the artifact lives in the stated work directory, which IS this project. Do NOT search the
+filesystem (parent directories, sibling folders, other projects' PLAN.md / .sparra/) for a
+"real" plan or a different project — any unrelated plan you stumble on belongs to something
+else and is irrelevant. Grade the artifact you were given against the contract you were
+given; never reject it as "the wrong project" because of files found outside the work dir.
 
 HOW TO EXERCISE:
 {{EXERCISE_GUIDANCE}}
