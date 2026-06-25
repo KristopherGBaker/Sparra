@@ -1,1 +1,14 @@
+# The canonical flow (run.sh) builds in .work/. These also keep the example clean
+# if you run Sparra in-place here instead.
 .work/
+.sparra/
+.DS_Store
+/CHANGELOG.md
+/CODEBASE_MAP.md
+/PLAN.frozen.md
+# generated app + Xcode/build output (regenerated from project.yml)
+/project.yml
+/TipJar/
+/TipJar.xcodeproj/
+/build*/
+/DerivedData/

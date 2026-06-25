@@ -31,7 +31,9 @@ Match the XcodeGen conventions used across these projects:
 - A single `application` target (`platform: iOS`) plus its `sources` path(s).
 - `settings.base`: `SWIFT_VERSION: 6.2`, `PRODUCT_BUNDLE_IDENTIFIER: com.krisbaker.tipjar`,
   `GENERATE_INFOPLIST_FILE: YES` (keep it minimal for a demo), `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`.
-- **No code signing needed** — simulator builds run unsigned, so don't require a `DEVELOPMENT_TEAM`.
+- **Don't configure code signing or a development team** — simulator builds don't need it.
+  (The goal is "signing doesn't block the build", not "prove the bundle is unsigned" — the
+  toolchain ad-hoc-signs simulator binaries automatically.)
 - Idiomatic modern SwiftUI (value types, `@State`/bindings, no view controllers), SwiftFormat/SwiftLint clean (the harness formats on write).
 
 ## Risks & unknowns
