@@ -1,8 +1,20 @@
 # Example config — greenfield iOS app (Jotter, a SwiftData notes app).
 #
-# Minimal: inherits Sparra's built-in defaults (opus-heavy roles, $5/item budget,
-# contract limits, etc.). Only the iOS-specific knobs differ. The Apple/Swift house
-# conventions are injected into the generator automatically for mechanism: ios.
+# CROSS-BACKEND run: Codex (gpt-5.5) BUILDS; Claude (opus) JUDGES. Independent model
+# families on the two sides of the GAN loop catch each other's blind spots. Everything
+# not listed inherits Sparra's defaults; the Apple/Swift house conventions are injected
+# into the generator automatically for mechanism: ios.
+roles:
+  # Builder side → Codex gpt-5.5 (the generator also drives decomposition).
+  generator:         { backend: codex,  model: gpt-5.5 }
+  contractGenerator: { backend: codex,  model: gpt-5.5 }
+  prototyper:        { backend: codex,  model: gpt-5.5 }
+  # Judge / plan side → Claude opus (independent grader + adversarial contract critic).
+  evaluator:         { backend: claude, model: opus, effort: high }
+  contractEvaluator: { backend: claude, model: opus, effort: high }
+  planner:           { backend: claude, model: opus, effort: high }
+  reflector:         { backend: claude, model: opus, effort: high }
+  orienter:          { backend: claude, model: opus }
 
 exercise:
   mechanism: ios
