@@ -10,9 +10,9 @@
 
 exercise:
   mechanism: ios
-  # Defaults already are { cli: xcodebuildmcp, scheme: "", simulator: "iPhone 16" } —
-  # shown here so you can point it at your scheme/simulator.
-  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" }
+  # scheme: "" → the evaluator discovers it; simulator: "" → it picks an available
+  # one (or pin a specific model, e.g. "iPhone 17", if you want a fixed target).
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }
 
 format:
   # SwiftFormat reflows; SwiftLint --fix auto-corrects lint. Run both before the

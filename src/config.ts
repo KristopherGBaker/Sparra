@@ -195,7 +195,7 @@ export function defaultConfig(): SparraConfig {
       existingTestCommand: "",
       customRecipe: "",
       web: { startCommand: "", baseUrl: "http://localhost:3000" },
-      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" },
+      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }, // simulator: "" → auto-discover an available one
     },
     deviation: { strictness: "moderate" },
     batch: { K: 3 },

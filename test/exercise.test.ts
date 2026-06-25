@@ -18,6 +18,14 @@ describe("iosGuidance", () => {
     expect(g).toMatch(/letterbox/i); // catch missing-launch-screen as an app defect, not tooling
   });
 
+  it("tells the evaluator to discover an available simulator when none is pinned", () => {
+    const cfg = defaultConfig();
+    cfg.exercise.ios = { cli: "xcodebuildmcp", scheme: "", simulator: "" };
+    const g = iosGuidance(cfg);
+    expect(g).toMatch(/simctl list devices available/);
+    expect(g).toMatch(/pick an available/i);
+  });
+
   it("falls back to raw Apple tooling when no CLI is configured", () => {
     const cfg = defaultConfig();
     cfg.exercise.ios = { cli: "", scheme: "", simulator: "iPhone 16" };

@@ -175,7 +175,7 @@ exercise:
   ios:
     cli: xcodebuildmcp        # default; set "" to use raw xcrun/xcodebuild instead
     scheme: YourScheme        # the Xcode scheme to build/run (leave blank to let the evaluator discover it)
-    simulator: iPhone 16      # simulator to boot
+    simulator: ""             # blank → auto-discover an available simulator (or pin e.g. "iPhone 17")
   runExistingTests: true      # also run the repo's own test suite; new failures = hard fail
 
 format:
@@ -246,7 +246,7 @@ exercise:
   existingTestCommand: ""    # auto-detected from CODEBASE_MAP.md if empty
   customRecipe: ""
   web: { startCommand: "", baseUrl: "http://localhost:3000" }
-  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "iPhone 16" }   # cli="" → raw xcrun/xcodebuild
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }   # cli="" → raw xcrun/xcodebuild; simulator="" → auto-discover
 
 deviation: { strictness: moderate }       # strict | moderate | free (default by mode)
 

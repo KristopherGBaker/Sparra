@@ -64,6 +64,7 @@ Drive the \`${cli}\` CLI via run_command (preferred over raw xcodebuild/xcrun/si
 First verify it exists (\`${cli} --help\`); if it is missing, fall back to xcodebuild/xcrun/simctl and say so in your notes (do not fail the evaluation over tooling).
 
 Build & run (scheme: ${schemeHint}, simulator: "${simHint}"):
+- RESOLVE THE SIMULATOR FIRST: list what's actually installed (\`xcrun simctl list devices available\`, or the CLI's sim-list). If the configured simulator is blank or not installed on this machine, pick an available iPhone simulator and use it — note which one. Do NOT fail because a specific model name isn't present (device line-ups change yearly).
 - If the project is defined with XcodeGen (a project.yml is present) and the .xcodeproj is missing or stale, run \`xcodegen generate\` first.
 - Prefer the combined build-and-run for simulator run intent; do not chain build then build-and-run. For macOS, build and launch the .app.
 - Build into a TEMPORARY derived-data path (e.g. \`-derivedDataPath "$(mktemp -d)"\`) — do not write build output into the project directory.
