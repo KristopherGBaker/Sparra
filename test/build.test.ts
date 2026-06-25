@@ -197,3 +197,66 @@ describe("cmdBuild — code review gate (opt-in)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cmdBuild — conventional commits (opt-in, branch-only)", () => {
+  it("commits each accepted item onto the Sparra branch when autoCommit is on", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.autoCommit = true;
+    const commits: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "test worktree" }),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitWork: (_cwd, message) => {
+        commits.push(message);
+        return { ok: true, out: "" };
+      },
+    };
+    await cmdBuild(ctx, {}, deps); // no workspaceOverride → prepareWorkspace sets the branch
+    expect(commits).toHaveLength(1);
+    expect(commits[0]).toMatch(/^feat: /);
+    expect(commits[0]).toContain("Sparra-Item: item-001");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not commit when autoCommit is off (default)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    let committed = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitWork: () => {
+        committed = true;
+        return { ok: true, out: "" };
+      },
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(committed).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not commit in-place (no Sparra branch) even when autoCommit is on", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.autoCommit = true;
+    let committed = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: undefined, note: "running in place" }),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitWork: () => {
+        committed = true;
+        return { ok: true, out: "" };
+      },
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(committed).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -23,7 +23,8 @@ permission:
 git:
   strategy: worktree          # worktree | branch | inplace
   branchPrefix: "sparra/"
-  autoCommit: false           # Sparra never commits to your main branch autonomously
+  autoCommit: false           # true → one conventional commit per accepted item, ONLY on
+                              # the Sparra worktree/branch (never your main branch / in-place)
 
 rubric:
   weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 }

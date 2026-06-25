@@ -54,7 +54,11 @@ export interface SparraConfig {
     /** worktree (recommended for existing repos) | branch | inplace. */
     strategy: GitStrategy;
     branchPrefix: string;
-    /** Never true by default: Sparra never commits to your main branch autonomously. */
+    /**
+     * When true, commit each accepted item as one conventional commit — but ONLY onto the
+     * Sparra-created worktree/branch (never your main branch, never an in-place tree).
+     * Default false.
+     */
     autoCommit: boolean;
   };
 

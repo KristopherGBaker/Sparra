@@ -36,6 +36,20 @@ export function changedFiles(root: string): string[] {
 }
 
 /**
+ * Stage everything and create one commit with `message`. No-op (ok:false) if the dir
+ * isn't a git repo or there's nothing to commit. The caller gates this on autoCommit +
+ * being on a Sparra-created branch, so it never lands on the user's main branch.
+ */
+export function commitAll(root: string, message: string): { ok: boolean; out: string } {
+  if (!isGitRepo(root)) return { ok: false, out: "not a git repo" };
+  const add = git(root, ["add", "-A"]);
+  if (!add.ok) return { ok: false, out: `git add failed: ${add.out.trim()}` };
+  if (git(root, ["status", "--porcelain"]).out.trim() === "") return { ok: false, out: "nothing to commit" };
+  const r = spawnSync("git", ["commit", "-F", "-"], { cwd: root, encoding: "utf8", input: message });
+  return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
+}
+
+/**
  * Prepare an isolated working location for the build per gitStrategy.
  * Returns the directory the build should run in.
  *   - worktree: create a sibling git worktree on a new branch

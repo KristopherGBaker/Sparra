@@ -14,7 +14,7 @@
 
 5. **GAN-style pivot** — if an item stays below threshold on the **same rubric criterion** for `N` rounds, Sparra **discards and restarts it from scratch** with a different approach instead of patching forever (`N` and threshold configurable). The pivot is logged to memory.
 
-6. **Accept → reconcile** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory.
+6. **Accept → reconcile → commit** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory. If `git.autoCommit` is on (and the build is on a Sparra-created branch/worktree), the item is committed as **one conventional commit** (`feat: <item> … Sparra-Item: <id>`) — incremental, revertable history, never on your main branch. In-place / non-git builds are never auto-committed.
 
 ---
 
