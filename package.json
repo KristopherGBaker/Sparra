@@ -32,5 +32,8 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^3.0.0"
+  },
+  "optionalDependencies": {
+    "@openai/codex-sdk": "^0.142.1"
   }
 }

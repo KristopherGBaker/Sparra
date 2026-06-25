@@ -1,7 +1,4 @@
 import { describe, it, expect } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend } from "../src/sdk/backend.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
 
@@ -74,21 +71,8 @@ describe("codex backend", () => {
     expect(b.capabilities.cost).toBe("tokens");
   });
 
-  it("degrades gracefully when @openai/codex-sdk is not installed", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-"));
-    const r = await getBackend("codex").runTask({
-      role: "generator",
-      prompt: "build it",
-      systemPrompt: "s",
-      model: "gpt-5-codex",
-      cwd: dir,
-      writeScope: [dir],
-      traceDir: dir,
-      traceSeq: 1,
-    });
-    expect(r.ok).toBe(false);
-    expect(r.subtype).toBe("error_backend_unavailable");
-    expect(r.errors.join(" ")).toMatch(/@openai\/codex-sdk/);
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  // NOTE: the "@openai/codex-sdk not installed → error_backend_unavailable" path is in
+  // the adapter (try/catch around the lazy import) but isn't unit-tested: the package is
+  // an optional dependency, so it's present in dev/CI, and invoking runTask for real would
+  // spawn the codex CLI (network). The live path is validated by a manual smoke test.
 });

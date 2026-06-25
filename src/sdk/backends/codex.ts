@@ -13,20 +13,17 @@ import {
 /**
  * The Codex backend (OpenAI's coding agent) via @openai/codex-sdk.
  *
- * The SDK is an OPTIONAL peer dependency: it's imported lazily so the harness runs
- * without it unless a role actually selects backend "codex". The normalized safety
- * intent maps onto Codex's NATIVE controls — readOnly/writeScope → OS sandbox mode,
- * outputSchema → real schema enforcement, resume → thread resumption.
- *
- * NOTE: the live path requires `npm i @openai/codex-sdk` plus the `codex` CLI on PATH
- * and OpenAI auth; it is exercised by config, not by the test suite.
+ * The SDK is an OPTIONAL peer dependency, imported lazily so the harness runs without
+ * it unless a role selects backend "codex". Normalized intent maps onto Codex's NATIVE
+ * controls: readOnly/writeScope → ThreadOptions.sandboxMode, outputSchema → TurnOptions
+ * .outputSchema, resume → resumeThread. Auth comes from the codex CLI (~/.codex).
  */
 class CodexBackend implements AgentBackend {
   readonly id = "codex";
   readonly capabilities: BackendCapabilities = {
     resume: true,
     streaming: true,
-    outputSchema: true, // native JSON-schema output
+    outputSchema: true,
     mcp: true,
     hooks: false, // no tool-call interception; safety is the sandbox
     sandbox: true,
@@ -34,7 +31,8 @@ class CodexBackend implements AgentBackend {
   };
 
   async runTask(req: AgentRequest): Promise<AgentResult> {
-    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model}\`\n- cwd: \`${req.cwd}\`\n- sandbox: \`${req.readOnly ? "read-only" : "workspace-write"}\`\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Task\n\n${req.prompt}\n\n---\n`;
+    const sandboxMode = req.readOnly ? "read-only" : "workspace-write";
+    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model || "(default)"}\`\n- cwd: \`${req.cwd}\`\n- sandbox: \`${sandboxMode}\`\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Task\n\n${req.prompt}\n\n---\n`;
     const trace = TraceWriter.for(req.traceDir, req.role, req.traceSeq, header);
 
     const result: AgentResult = {
@@ -63,59 +61,75 @@ class CodexBackend implements AgentBackend {
       return result;
     }
 
+    let usage: any;
     try {
       const Codex = mod.Codex;
-      const codex = new Codex({
-        config: {
-          model: req.model,
-          // Normalized intent → Codex's native OS sandbox.
-          sandbox_mode: req.readOnly ? "read-only" : "workspace-write",
-        },
-      });
+      const codex = new Codex(); // auth + defaults from the codex CLI (~/.codex)
 
-      const thread = req.resume
-        ? codex.resumeThread(req.resume)
-        : codex.startThread({ workingDirectory: req.cwd, skipGitRepoCheck: true });
+      const threadOptions: Record<string, unknown> = {
+        sandboxMode,
+        workingDirectory: req.cwd,
+        skipGitRepoCheck: true,
+        approvalPolicy: "never", // autonomous: the sandbox is the boundary, never prompt
+      };
+      if (req.model) threadOptions.model = req.model;
+      const effort = mapEffort(req.effort);
+      if (effort) threadOptions.modelReasoningEffort = effort;
+      if (req.additionalDirectories?.length) threadOptions.additionalDirectories = req.additionalDirectories;
+
+      const thread = req.resume ? codex.resumeThread(req.resume, threadOptions) : codex.startThread(threadOptions);
+
+      const turnOptions: Record<string, unknown> = {};
+      if (req.outputSchema) turnOptions.outputSchema = req.outputSchema;
+      if (req.abortController) turnOptions.signal = req.abortController.signal;
 
       const echo = req.echoActivity ?? !(req.onAssistantText || req.onEvent);
-      let usage: any;
+      const wantStream = !!(req.onEvent || req.onAssistantText || echo);
 
-      if (this.capabilities.streaming && (req.onEvent || req.onAssistantText || echo)) {
-        const stream = thread.runStreamed(req.prompt);
-        for await (const ev of stream as AsyncIterable<any>) {
-          await trace.write("```json\n" + JSON.stringify(ev).slice(0, 2000) + "\n```\n\n");
-          if (ev?.type === "item.completed") {
+      if (wantStream) {
+        const { events } = await thread.runStreamed(req.prompt, turnOptions);
+        for await (const ev of events as AsyncIterable<any>) {
+          await trace.write("```json\n" + JSON.stringify(ev).slice(0, 1500) + "\n```\n\n");
+          if (ev?.type === "thread.started") {
+            result.sessionId = ev.thread_id ?? result.sessionId;
+            emit(req.onEvent, { kind: "init", sessionId: result.sessionId, model: req.model });
+          } else if (ev?.type === "item.completed") {
             const item = ev.item ?? {};
-            if (item.type === "text" && item.text) {
-              if (req.onAssistantText) req.onAssistantText(item.text);
+            if (item.type === "agent_message" && item.text) {
+              result.resultText = item.text; // final assistant message (JSON when outputSchema)
+              req.onAssistantText?.(item.text);
               emit(req.onEvent, { kind: "text", text: item.text });
-            } else if (item.type) {
-              if (echo) detail(`${color.gray("·")} ${color.cyan(String(item.type))}`);
-              emit(req.onEvent, { kind: "tool", name: String(item.type), summary: "" });
+            } else if (["command_execution", "file_change", "mcp_tool_call", "web_search"].includes(item.type)) {
+              const summary = toolSummary(item);
+              if (echo) detail(`${color.gray("·")} ${color.cyan(item.type)} ${color.gray(summary)}`);
+              emit(req.onEvent, { kind: "tool", name: item.type, summary });
             }
           } else if (ev?.type === "turn.completed") {
             usage = ev.usage;
-            result.resultText = ev.finalResponse ? String(ev.finalResponse) : result.resultText;
+          } else if (ev?.type === "turn.failed") {
+            result.errors.push(ev.error?.message ?? "turn failed");
+          } else if (ev?.type === "error") {
+            result.errors.push(ev.message ?? "stream error");
           }
         }
-        result.sessionId = thread.id ?? "";
+        result.sessionId = result.sessionId || (thread.id ?? "");
       } else {
-        const run = await thread.run(req.prompt, req.outputSchema ? { outputSchema: req.outputSchema } : undefined);
-        usage = run?.usage;
+        const turn = await thread.run(req.prompt, turnOptions);
+        usage = turn?.usage;
         result.sessionId = thread.id ?? "";
-        result.resultText = stringifyFinal(run?.finalResponse);
-        if (req.outputSchema && run?.finalResponse != null) result.structured = run.finalResponse;
+        result.resultText = turn?.finalResponse ?? "";
       }
 
       result.tokens = totalTokens(usage);
       result.numTurns = 1;
-      result.ok = true;
-      result.subtype = "success";
-      if (req.outputSchema && result.structured == null) result.structured = extractJson(result.resultText) ?? undefined;
-      emit(req.onEvent, { kind: "result", ok: true, costUsd: 0, subtype: "success" });
+      result.ok = result.errors.length === 0;
+      result.subtype = result.ok ? "success" : "error";
+      if (req.outputSchema && result.resultText) result.structured = extractJson(result.resultText) ?? undefined;
+      emit(req.onEvent, { kind: "result", ok: result.ok, costUsd: 0, subtype: result.subtype });
     } catch (e) {
+      result.ok = false;
       result.subtype = "error";
-      result.errors = [(e as Error).message];
+      result.errors = [...result.errors, (e as Error).message];
       await trace.write(`> Codex run failed: ${(e as Error).message}\n\n`);
     }
 
@@ -127,20 +141,41 @@ function emit(onEvent: ((e: SessionEvent) => void) | undefined, e: SessionEvent)
   onEvent?.(e);
 }
 
-function stringifyFinal(final: unknown): string {
-  if (final == null) return "";
-  return typeof final === "string" ? final : JSON.stringify(final);
+/** Map the harness effort scale onto Codex's modelReasoningEffort. */
+function mapEffort(effort: AgentRequest["effort"]): string | undefined {
+  switch (effort) {
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "xhigh":
+    case "max":
+      return "xhigh";
+    default:
+      return undefined;
+  }
 }
 
-/** Best-effort token total across the various usage shapes the SDK may report. */
+function toolSummary(item: any): string {
+  if (item.type === "command_execution") return String(item.command ?? "").slice(0, 80);
+  if (item.type === "mcp_tool_call") return `${item.server}/${item.tool}`;
+  if (item.type === "web_search") return String(item.query ?? "");
+  if (item.type === "file_change") return (item.changes ?? []).map((c: any) => c.path).join(", ").slice(0, 80);
+  return "";
+}
+
+/** Sum Codex's Usage shape (input + cached + output + reasoning), with fallbacks. */
 function totalTokens(usage: any): number {
   if (!usage || typeof usage !== "object") return 0;
-  if (typeof usage.total === "number") return usage.total;
   if (typeof usage.total_tokens === "number") return usage.total_tokens;
-  const input = Number(usage.input_tokens ?? usage.inputTokens ?? 0);
-  const output = Number(usage.output_tokens ?? usage.outputTokens ?? 0);
-  const cached = Number(usage.cached_input_tokens ?? usage.cacheReadInputTokens ?? 0);
-  return input + output + cached;
+  return (
+    Number(usage.input_tokens ?? 0) +
+    Number(usage.cached_input_tokens ?? 0) +
+    Number(usage.output_tokens ?? 0) +
+    Number(usage.reasoning_output_tokens ?? 0)
+  );
 }
 
 export const codexBackend = new CodexBackend();
