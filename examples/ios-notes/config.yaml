@@ -1,0 +1,15 @@
+# Example config — greenfield iOS app (Jotter, a SwiftData notes app).
+#
+# Minimal: inherits Sparra's built-in defaults (opus-heavy roles, $5/item budget,
+# contract limits, etc.). Only the iOS-specific knobs differ. The Apple/Swift house
+# conventions are injected into the generator automatically for mechanism: ios.
+
+exercise:
+  mechanism: ios
+  # scheme: "" → discovered; simulator: "" → an available one is picked (or pin a model).
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }
+
+format:
+  # SwiftFormat reflows; SwiftLint --fix auto-corrects lint. Run both before the evaluator
+  # builds. Missing tools = no-op + warning, never a build failure.
+  command: "sh -c 'swiftformat {file}; swiftlint --fix --path {file}'"
