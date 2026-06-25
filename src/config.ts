@@ -22,6 +22,8 @@ export interface SparraConfig {
   roles: {
     orienter: RoleConfig;
     planner: RoleConfig;
+    /** Breaks the frozen plan into work items — a planning/judgment act, not a build act. */
+    decomposer: RoleConfig;
     prototyper: RoleConfig;
     contractGenerator: RoleConfig;
     contractEvaluator: RoleConfig;
@@ -166,6 +168,7 @@ export function defaultConfig(): SparraConfig {
     roles: {
       orienter: role("sonnet", "high"),
       planner: role("opus", "high"),
+      decomposer: role("sonnet", "high"),
       prototyper: role("sonnet", "medium"),
       contractGenerator: role("sonnet", "high"),
       contractEvaluator: role("opus", "high"),

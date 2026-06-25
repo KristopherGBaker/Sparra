@@ -32,7 +32,7 @@ export async function decompose(ctx: Ctx, traceDir: string, force = false): Prom
 
   const plan = (await readText(ctx.paths.frozenPlan)) ?? (await readText(ctx.paths.plan)) ?? "";
   const map = await readText(ctx.paths.frozenMap);
-  const role = ctx.config.roles.generator;
+  const role = ctx.config.roles.decomposer;
 
   const task = `Decompose this frozen plan into work items.
 

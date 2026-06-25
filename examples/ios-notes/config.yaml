@@ -10,6 +10,8 @@ roles:
   contractGenerator: { backend: codex,  model: gpt-5.5 }
   prototyper:        { backend: codex,  model: gpt-5.5 }
   # Judge / plan side → Claude opus (independent grader + adversarial contract critic).
+  # Decomposition is a PLANNING act — keep it on Claude (Codex tends to over-split).
+  decomposer:        { backend: claude, model: opus, effort: high }
   evaluator:         { backend: claude, model: opus, effort: high }
   contractEvaluator: { backend: claude, model: opus, effort: high }
   planner:           { backend: claude, model: opus, effort: high }

@@ -85,7 +85,7 @@ export async function negotiateContract(
       cwd: ctx.root,
       tools: ["Read", "Glob", "Grep"],
       ...readOnlyGuard(ctx),
-      maxTurns: 15,
+      maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,
     });
@@ -104,7 +104,7 @@ export async function negotiateContract(
       cwd: ctx.root,
       tools: ["Read", "Glob", "Grep"],
       ...readOnlyGuard(ctx),
-      maxTurns: 15,
+      maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,
     });
