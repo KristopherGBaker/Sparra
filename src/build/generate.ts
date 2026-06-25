@@ -3,6 +3,7 @@ import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
+import { skillsForRole } from "../sdk/skills.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
 import { info } from "../util/log.ts";
@@ -84,6 +85,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     cwd: workspaceDir,
     additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+    skills: skillsForRole(ctx, "generator"),
     ...scopedWriterGuard(ctx, [workspaceDir], { format: true }),
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,

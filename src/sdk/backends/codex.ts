@@ -1,5 +1,6 @@
 import { color, detail } from "../../util/log.ts";
 import { extractJson } from "../../util/extract.ts";
+import { inlineSkillsBlock } from "../skills.ts";
 import { TraceWriter } from "../trace.ts";
 import {
   registerBackend,
@@ -27,12 +28,19 @@ class CodexBackend implements AgentBackend {
     mcp: true,
     hooks: false, // no tool-call interception; safety is the sandbox
     sandbox: true,
+    skills: false, // no native skill loading; SKILL.md is inlined into the input instead
     cost: "tokens", // Codex reports tokens, not USD
   };
 
   async runTask(req: AgentRequest): Promise<AgentResult> {
     const sandboxMode = req.readOnly ? "read-only" : "workspace-write";
-    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model || "(default)"}\`\n- cwd: \`${req.cwd}\`\n- sandbox: \`${sandboxMode}\`\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Task\n\n${req.prompt}\n\n---\n`;
+    // Codex's SDK has no system-prompt channel — the input string is the only one. Fold the
+    // role's system prompt (and any inlined skills) in ahead of the task, or it's lost.
+    const skillsBlock = req.skills?.length ? inlineSkillsBlock(req.skills) : "";
+    const input = req.systemPrompt
+      ? `${req.systemPrompt}${skillsBlock}\n\n---\n\n${req.prompt}`
+      : `${skillsBlock}${req.prompt}`;
+    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model || "(default)"}\`\n- cwd: \`${req.cwd}\`\n- sandbox: \`${sandboxMode}\`${req.skills?.length ? `\n- skills: ${req.skills.map((s) => s.name).join(", ")}` : ""}\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Input\n\n${input}\n\n---\n`;
     const trace = TraceWriter.for(req.traceDir, req.role, req.traceSeq, header);
 
     const result: AgentResult = {
@@ -87,7 +95,7 @@ class CodexBackend implements AgentBackend {
       const wantStream = !!(req.onEvent || req.onAssistantText || echo);
 
       if (wantStream) {
-        const { events } = await thread.runStreamed(req.prompt, turnOptions);
+        const { events } = await thread.runStreamed(input, turnOptions);
         for await (const ev of events as AsyncIterable<any>) {
           await trace.write("```json\n" + JSON.stringify(ev).slice(0, 1500) + "\n```\n\n");
           if (ev?.type === "thread.started") {
@@ -114,7 +122,7 @@ class CodexBackend implements AgentBackend {
         }
         result.sessionId = result.sessionId || (thread.id ?? "");
       } else {
-        const turn = await thread.run(req.prompt, turnOptions);
+        const turn = await thread.run(input, turnOptions);
         usage = turn?.usage;
         result.sessionId = thread.id ?? "";
         result.resultText = turn?.finalResponse ?? "";

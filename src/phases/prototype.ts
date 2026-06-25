@@ -5,6 +5,7 @@ import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import { plannerWriteScope } from "../sdk/permissions.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
+import { skillsForRole } from "../sdk/skills.ts";
 import { banner, info, ok, warn, detail } from "../util/log.ts";
 import { ensureDir, exists, readText } from "../util/io.ts";
 import { isGitRepo, hasCommits, prepareWorkspace } from "../util/git.ts";
@@ -64,6 +65,7 @@ Build the smallest thing that answers the question, then write FINDINGS.md in th
     cwd: protoDir,
     additionalDirectories: isExisting ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+    skills: skillsForRole(ctx, "prototyper"),
     ...scopedWriterGuard(ctx, [protoDir]),
     maxTurns: ctx.config.build.maxTurnsPerSession,
     traceDir,

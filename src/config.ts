@@ -10,6 +10,12 @@ export interface RoleConfig {
   backend?: string;
   model: ModelRef;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /**
+   * Agent skills to make available to this role. Overrides `build.skills`. Builder roles
+   * (generator, prototyper) inherit `build.skills` when this is unset; other roles get
+   * skills only when listed here. Names match a SKILL.md `name`/dir, or an explicit path.
+   */
+  skills?: string[];
 }
 
 export type ExerciseMechanism = "cli" | "web" | "ios" | "computer-use" | "custom";
@@ -107,6 +113,12 @@ export interface SparraConfig {
      * USD cap: crossing it halts the item as BUDGET_EXCEEDED. 0 = no cap.
      */
     maxTokensPerItem: number;
+    /**
+     * Agent skills made available to the builder roles (generator, prototyper) by default.
+     * Claude loads them natively (as a scoped local plugin, settingSources stays []); Codex
+     * gets their SKILL.md inlined into the input. Per-role `roles.<role>.skills` overrides.
+     */
+    skills: string[];
   };
 
   format: {
@@ -212,7 +224,7 @@ export function defaultConfig(): SparraConfig {
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
-    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0 },
+    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, skills: [] },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {
       mechanism: "cli",

@@ -3,6 +3,7 @@ import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
+import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
@@ -84,6 +85,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     cwd: workspaceDir,
     additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Bash"],
+    skills: skillsForRole(ctx, "evaluator"),
     allowedTools: exerciser.allowedTools,
     mcpServers: exerciser.mcpServers,
     ...evaluatorGuard(ctx),

@@ -3,7 +3,7 @@
 Every knob lives in **`.sparra/config.yaml`** (seeded on `init` with mode-aware defaults; edit and re-run any phase — changes are picked up live). Models accept SDK aliases (`opus` · `sonnet` · `haiku` · `fable`) or full model ids. Anything you omit inherits the default.
 
 ```yaml
-roles:                        # per role: { backend?, model, effort? }  (backend defaults to "claude")
+roles:                        # per role: { backend?, model, effort?, skills? }  (backend defaults to "claude")
   orienter:          { model: sonnet, effort: high }
   planner:           { model: opus,   effort: high }
   decomposer:        { model: sonnet, effort: high }   # plan → work items (a planning act)
@@ -40,6 +40,8 @@ build:
   maxTurnsPerSession: 60
   maxBudgetUsdPerItem: 5      # notional USD cap (tokens × list price); 0 = no cap
   maxTokensPerItem: 0         # direct token ceiling — the lever on a subscription/Codex; 0 = no cap
+  skills: []                  # agent skills for the builder roles, e.g. ["xcodebuildmcp-cli", "swiftui-design"]
+                              # (per-role override: roles.<role>.skills)
 
 format:
   enabled: true
@@ -70,6 +72,7 @@ batch: { K: 3 }
 - **`build` budgets** — start-closed; crossing the USD **or** token cap halts an item as `BUDGET_EXCEEDED` and the run continues. `total_cost_usd` is notional on a subscription — use `maxTokensPerItem` there.
 - **`exercise.ios`** — full Apple-platform guide in [docs/ios.md](ios.md).
 - **`review`** — an optional agent code-review gate after the behavioral evaluator passes (a second lens for code quality the exerciser can't see). Off by default; see [build loop](build-loop.md#code-review-optional). Best with `roles.reviewer.backend` set to a *different* family than the generator.
+- **`build.skills` / `roles.*.skills`** — agent skills (SKILL.md) made available to a role. Builder roles (`generator`, `prototyper`) inherit `build.skills`; other roles (e.g. `evaluator`) opt in via their own `roles.<role>.skills`. Resolved from the repo's `skills/`, `~/.claude/skills`, or `~/.agents/skills` (or an explicit path). See [backends — skills](backends.md#skills). Example: `roles.evaluator.skills: ["xcodebuildmcp-cli"]` to give the iOS grader your build/run skill.
 
 ## On-disk artifacts
 The filesystem is the source of truth and the only shared state — inspectable, diffable, resumable.

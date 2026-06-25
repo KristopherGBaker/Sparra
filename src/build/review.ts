@@ -3,6 +3,7 @@ import { loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
+import { skillsForRole } from "../sdk/skills.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { readText, writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
@@ -91,6 +92,7 @@ ${conventions}Review for substance per your instructions and emit the JSON findi
     cwd: workspaceDir,
     additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Bash"],
+    skills: skillsForRole(ctx, "reviewer"),
     ...readOnlyGuard(ctx),
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,

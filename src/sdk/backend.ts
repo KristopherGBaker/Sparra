@@ -36,8 +36,17 @@ export interface BackendCapabilities {
   hooks: boolean;
   /** Native OS-level sandbox for write/exec scoping. */
   sandbox: boolean;
+  /** Loads agent skills natively (vs. inlining their SKILL.md into the prompt). */
+  skills: boolean;
   /** What cost figure the backend reports. */
   cost: "usd" | "tokens" | "none";
+}
+
+/** A resolved agent skill: its name, directory, and SKILL.md contents. */
+export interface ResolvedSkill {
+  name: string;
+  dir: string;
+  skillMd: string;
 }
 
 /**
@@ -59,6 +68,8 @@ export interface AgentRequest {
   cwd: string;
   additionalDirectories?: string[];
   tools?: string[];
+  /** Agent skills to make available to this role (native where supported, else inlined). */
+  skills?: ResolvedSkill[];
 
   // ── Backend-agnostic safety intent ──
   /** Directories the agent may write to (Claude → scoped hooks, Codex → workspace-write). */

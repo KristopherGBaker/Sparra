@@ -24,7 +24,7 @@ describe("agent backend registry (the AgentBackend seam)", () => {
   it("lets a new backend slot in behind the same interface (where Codex will land)", async () => {
     const fake: AgentBackend = {
       id: "fake",
-      capabilities: { resume: false, streaming: false, outputSchema: true, mcp: false, hooks: false, sandbox: true, cost: "tokens" },
+      capabilities: { resume: false, streaming: false, outputSchema: true, mcp: false, hooks: false, sandbox: true, skills: false, cost: "tokens" },
       runTask: async (req) => ({
         ok: true,
         subtype: "success",

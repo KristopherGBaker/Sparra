@@ -4,6 +4,7 @@ import { color, detail } from "../../util/log.ts";
 import { extractJson } from "../../util/extract.ts";
 import { TraceWriter } from "../trace.ts";
 import { readOnlyHooks, scopedWriterHooks } from "../hooks.ts";
+import { buildSkillPlugin } from "../skills.ts";
 import {
   registerBackend,
   type AgentBackend,
@@ -28,6 +29,7 @@ class ClaudeBackend implements AgentBackend {
     mcp: true,
     hooks: true,
     sandbox: false,
+    skills: true, // native: declared skills load via plugins + skills, settingSources stays []
     cost: "usd",
   };
 
@@ -72,6 +74,15 @@ class ClaudeBackend implements AgentBackend {
     if (req.maxBudgetUsd && req.maxBudgetUsd > 0) options.maxBudgetUsd = req.maxBudgetUsd;
     if (req.abortController) options.abortController = req.abortController;
 
+    // Declared skills load as a throwaway local plugin so settingSources can stay [] (no
+    // ambient leak): only these skills become discoverable, then enabled by name.
+    let skillPlugin: ReturnType<typeof buildSkillPlugin> | undefined;
+    if (req.skills?.length) {
+      skillPlugin = buildSkillPlugin(req.skills);
+      options.plugins = [{ type: "local", path: skillPlugin.path }];
+      options.skills = skillPlugin.names;
+    }
+
     const result: AgentResult = {
       ok: false,
       subtype: "unknown",
@@ -89,6 +100,7 @@ class ClaudeBackend implements AgentBackend {
     // Console echo is suppressed when a front-end consumes events/text instead.
     const echo = req.echoActivity ?? !(req.onAssistantText || req.onEvent);
 
+    try {
     for await (const msg of query({ prompt: req.prompt, options })) {
       await trace.record(msg as SDKMessage);
 
@@ -123,6 +135,9 @@ class ClaudeBackend implements AgentBackend {
           result.hitBudget = m.subtype === "error_max_budget_usd";
         }
       }
+    }
+    } finally {
+      skillPlugin?.cleanup();
     }
 
     if (req.outputSchema && result.ok) {
