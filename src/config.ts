@@ -182,7 +182,8 @@ export function defaultConfig(): SparraConfig {
       useCalibration: true,
     },
     pivot: { N: 3, threshold: 50 },
-    contract: { assertionMin: 15, assertionMax: 30, maxNegotiationRounds: 4 },
+    // Range is an upper guide, scaled down per item — small items use far fewer.
+    contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 4 },
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.

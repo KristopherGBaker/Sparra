@@ -66,6 +66,7 @@ First verify it exists (\`${cli} --help\`); if it is missing, fall back to xcode
 Build & run (scheme: ${schemeHint}, simulator: "${simHint}"):
 - If the project is defined with XcodeGen (a project.yml is present) and the .xcodeproj is missing or stale, run \`xcodegen generate\` first.
 - Prefer the combined build-and-run for simulator run intent; do not chain build then build-and-run. For macOS, build and launch the .app.
+- Build into a TEMPORARY derived-data path (e.g. \`-derivedDataPath "$(mktemp -d)"\`) — do not write build output into the project directory.
 - Native builds can exceed 60s — pass a generous timeout_ms to run_command (up to the 600000 max).
 
 For UI changes (the important part — you are MULTIMODAL, use it):

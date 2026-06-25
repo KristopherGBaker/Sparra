@@ -10,11 +10,15 @@ const DECOMPOSE_SYSTEM = `You decompose a frozen build plan into a small, ordere
 work items for an autonomous build loop. Keep items COARSE — each should be a meaningful,
 independently verifiable chunk of product value, not a micro-task.
 
-SCALE THE COUNT TO THE PLAN'S SIZE. A tiny project (e.g. a single-file tool) is ONE item.
-A small project is 1–3 items; a typical project 3–8. Do NOT split a trivial task into
-setup/implement/verify steps — verification is handled separately by the build loop, so
-never make a standalone "test it" item. Order items so dependencies come first. The plan
-is a strong prior, not a contract; do not over-specify implementation.`;
+SCALE THE COUNT TO THE PLAN'S SIZE. A tiny project (e.g. a single-file tool, or a
+one-screen app) is ONE item. A small project is 1–3 items; a typical project 3–8. Do NOT
+split a trivial task into setup/implement/verify steps — verification is handled separately
+by the build loop, so never make a standalone "test it" item. Likewise NEVER make a
+standalone scaffold / project-setup / "create the project" / "generate the Xcode project"
+item — project generation, config files, and boilerplate are SETUP, not independently
+shippable value; fold them into the first feature item that needs them (that item's
+contract can still check the project builds). Order items so dependencies come first. The
+plan is a strong prior, not a contract; do not over-specify implementation.`;
 
 /** Read the frozen plan and produce items.json. Idempotent unless force is set. */
 export async function decompose(ctx: Ctx, traceDir: string, force = false): Promise<WorkItem[]> {
