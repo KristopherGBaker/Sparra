@@ -103,6 +103,9 @@ The few that matter most:
 - **`build.skills` / `roles.<role>.skills`** — **agent skills** (SKILL.md) for roles.
   Builder roles (generator, prototyper) inherit `build.skills`; others (e.g. evaluator) opt
   in via their own list. Resolved from repo `skills/`, `~/.claude/skills`, `~/.agents/skills`.
+- **`build.extraReadDirs`** — extra dirs the build (generator + evaluator) may READ (added to
+  `additionalDirectories`). For big assets you don't want in git (e.g. a model): pre-stage once,
+  list the dir, no commit/network. Absolute, `~`, or repo-relative.
 
 ### Cross-backend (Codex builds, Claude judges)
 A genuine quality lever — independent model families catch each other's blind spots.

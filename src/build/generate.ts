@@ -13,6 +13,7 @@ import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
+import { buildReadDirs } from "./readscope.ts";
 
 export interface Deviation {
   summary: string;
@@ -89,7 +90,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     baseUrl: role.baseUrl,
     apiKey: role.apiKey,
     cwd: workspaceDir,
-    additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
+    additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
     skills: skillsForRole(ctx, "generator"),
     ...scopedWriterGuard(ctx, [workspaceDir], { format: true }),

@@ -101,3 +101,45 @@ describe("generateItem — Apple conventions injection", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("generateItem — build read scope (extraReadDirs)", () => {
+  it("adds absolute, ~, and repo-relative extra dirs to additionalDirectories", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.build.extraReadDirs = ["/opt/models", "~/cache/kion", "models"];
+    let dirs: string[] | undefined;
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (dirs = p.additionalDirectories)),
+    });
+    expect(dirs).toContain("/opt/models");
+    expect(dirs).toContain(path.join(os.homedir(), "cache/kion"));
+    expect(dirs).toContain(path.resolve(dir, "models"));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is undefined with no extra dirs when building in the repo root", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    let dirs: string[] | undefined = ["x"];
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (dirs = p.additionalDirectories)),
+    });
+    expect(dirs).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("includes the repo root plus extras when building on a separate worktree", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.build.extraReadDirs = ["/opt/models"];
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-wt-"));
+    let dirs: string[] | undefined;
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: wt, traceDir: wt, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (dirs = p.additionalDirectories)),
+    });
+    expect(dirs).toContain(dir); // repo root
+    expect(dirs).toContain("/opt/models"); // extra
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+});

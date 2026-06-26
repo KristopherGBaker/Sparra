@@ -45,6 +45,8 @@ build:
   maxTokensPerItem: 0         # direct token ceiling — the lever on a subscription/Codex; 0 = no cap
   skills: []                  # agent skills for the builder roles, e.g. ["xcodebuildmcp-cli", "swiftui-design"]
                               # (per-role override: roles.<role>.skills)
+  extraReadDirs: []           # extra dirs the build may READ (e.g. ["~/.cache/models"]) — for big
+                              # assets you don't want in git; pre-stage once, no commit, no network
 
 format:
   enabled: true
@@ -78,6 +80,7 @@ batch: { K: 3 }
 - **`exercise.ios`** — full Apple-platform guide in [docs/ios.md](ios.md).
 - **`review`** — an optional agent code-review gate after the behavioral evaluator passes (a second lens for code quality the exerciser can't see). Off by default; see [build loop](build-loop.md#code-review-optional). Best with `roles.reviewer.backend` set to a *different* family than the generator.
 - **`build.skills` / `roles.*.skills`** — agent skills (SKILL.md) made available to a role. Builder roles (`generator`, `prototyper`) inherit `build.skills`; other roles (e.g. `evaluator`) opt in via their own `roles.<role>.skills`. Resolved from the repo's `skills/`, `~/.claude/skills`, or `~/.agents/skills` (or an explicit path). See [backends — skills](backends.md#skills). Example: `roles.evaluator.skills: ["xcodebuildmcp-cli"]` to give the iOS grader your build/run skill.
+- **`build.extraReadDirs`** — extra directories the build (generator **and** evaluator) may **read**, beyond the work dir and repo root — added to each backend's `additionalDirectories`. For large assets you don't want in git: pre-stage them once (e.g. a face-recognition model under `~/.cache/…`) and list the dir here, so the sandboxed build reads it **without committing it or opening network**. Paths may be absolute, `~`-prefixed, or relative to the repo root. (Codex grants read+write to these within its sandbox; Claude grants read with writes still gated — treat as read-only intent.)
 
 ## On-disk artifacts
 The filesystem is the source of truth and the only shared state — inspectable, diffable, resumable.

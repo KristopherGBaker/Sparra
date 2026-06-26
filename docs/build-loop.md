@@ -54,6 +54,8 @@ Author acceptance checks in **`HOLDOUT.md`** and **only the evaluator** ever see
 ## Sandbox-first safety
 Whatever scoped the writes — Claude PreToolUse hooks or Codex's OS sandbox — Sparra verifies **post-hoc** that nothing escaped the work scope into the repo (`writeScopeViolations`), warning on genuine escapes. Backend-independent. On existing repos the **git worktree** is the hard outer boundary; the build's cwd is the worktree.
 
+Need the build to read a large asset (e.g. a model) that shouldn't be in git? List its directory in [`build.extraReadDirs`](configuration.md) — it's added to the generator's and evaluator's read scope (`additionalDirectories`), so the asset is readable without committing it or opening network access.
+
 Build agents also can't reach your **personal cloud**: `settingSources: []` doesn't suppress auto-fetched claude.ai connectors (Drive/Gmail/Calendar), so every guard's deny-hook rejects any ambient MCP call (`denyAmbientMcp`) — only Sparra's own `mcp__exercise__*` tools are allowed.
 
 ## Bounded by default (budgets)

@@ -133,6 +133,15 @@ export interface SparraConfig {
      * gets their SKILL.md inlined into the input. Per-role `roles.<role>.skills` overrides.
      */
     skills: string[];
+    /**
+     * Extra directories the build may READ beyond the work dir (+ repo root) — added to the
+     * generator's and evaluator's `additionalDirectories`. For large assets you don't want in
+     * git: pre-stage them once (e.g. a face-recognition model in `~/.cache/…`) and list the dir
+     * here so the sandboxed build can read it without committing it or opening network. Paths may
+     * be absolute, `~`-prefixed, or relative to the repo root. (Codex grants read+write to these
+     * within its sandbox; Claude read with writes still gated — treat as read-only intent.)
+     */
+    extraReadDirs: string[];
   };
 
   format: {
@@ -238,7 +247,7 @@ export function defaultConfig(): SparraConfig {
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
-    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, skills: [] },
+    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, skills: [], extraReadDirs: [] },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {
       mechanism: "cli",

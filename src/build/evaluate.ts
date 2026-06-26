@@ -5,6 +5,7 @@ import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
+import { buildReadDirs } from "./readscope.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
@@ -83,7 +84,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     model: role.model,
     effort: role.effort,
     cwd: workspaceDir,
-    additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
+    additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Bash"],
     skills: skillsForRole(ctx, "evaluator"),
     allowedTools: exerciser.allowedTools,
