@@ -126,6 +126,16 @@ compliance audit. Hold yourself to these:
 - Read "don't need X" as "don't require X / don't fail on X" — NOT "prove not-X". E.g.
   "no code signing needed" means "no team required and signing doesn't block the build",
   never "prove the bundle is cryptographically unsigned".
+- DEFEAT DEGENERATE / NO-OP SATISFACTION. When the item's core behavior TRANSFORMS or
+  COMBINES multiple inputs (averaging, deduping, merging, diffing) or DISCRIMINATES between
+  cases (match vs. non-match, two classes), write at least one assertion that a trivial or
+  degenerate input could NOT pass. Examples: require the reference fixtures to be DISTINCT
+  real samples (not byte-identical copies), so an averaging/combining step is observably
+  non-trivial and not a no-op; require a CONTRASTING negative case (a different person, an
+  out-of-class item) so "it matched" can't pass on a single vacuous input; require the
+  stand-in fixture to be STRUCTURALLY CORRECT for the case (a single-subject reference, not
+  a group photo). An assertion a copy-paste, a stub, or a hardcoded value would satisfy does
+  NOT capture "done" — it just invites gaming.
 {{MODE_CLAUSES}}
 
 Respond to the evaluator's critique by REVISING the contract, not defending it. Cut
@@ -156,6 +166,20 @@ Critique the contract on:
   they be CUT or rewritten as observable product-behavior checks. Scale the assertion
   count to the item's real surface area; a scaffold/stub needs only a handful. Don't push
   for more or harsher assertions for their own sake.
+- **Defeat degenerate / no-op satisfaction (reject UNDER-specification that invites
+  gaming)**: when the item's core behavior COMBINES or TRANSFORMS multiple inputs (averaging,
+  deduping, merging, diffing) or DISCRIMINATES between cases (match vs. non-match, two
+  classes), the contract MUST contain an assertion a trivial/degenerate input cannot pass. A
+  proxy like "n_refs == count" is NOT enough — byte-identical copies satisfy it while making
+  the combine step a verifiable no-op. REQUIRE: distinct real fixtures (so averaging/combining
+  is non-trivial), a contrasting negative case (so a "match" check isn't vacuous), and that
+  any stand-in fixture be STRUCTURALLY CORRECT for the case it represents (a single-subject
+  reference, not a group photo; two genuinely different classes, not two copies of one). If
+  every assertion in the contract could be met by identical copies, a stub, or a hardcoded
+  value, the contract is TOO WEAK — reject it and name the assertion that must defeat the
+  shortcut. Beware also the literal-term trap: an assertion like "committed to the repo" or
+  "downscaled" must be checkable AS WRITTEN and actually exercise the property — don't let it
+  be one an evaluator would have to reinterpret loosely to pass.
 - **Satisfiability**: REJECT any assertion that asserts the ABSENCE of something the
   toolchain/environment controls, or that the generator cannot reliably make true (e.g.
   "the bundle is unsigned" when the linker auto-ad-hoc-signs; timestamps; machine paths).
@@ -250,26 +274,57 @@ succeeding, a UI flow completing), "exits 0" means "RELIABLY exits 0," not "exit
 - Flakiness rooted in the artifact is a real product/functionality defect (the user hits it
   too), distinct from the incidental toolchain trivia below — do not soften it.
 
+LETTER vs. INTENT — DO NOT PASS A GAMED OR DEGENERATE ARTIFACT:
+Every assertion exists to PROVE a behavior. An artifact can satisfy the literal words of an
+assertion through a degenerate shortcut that defeats the very behavior the assertion was
+written to exercise. That is NOT genuinely meeting the assertion — mark it FAIL and name the
+gap. Watch for:
+- A step that COMBINES / AVERAGES / DEDUPES / MERGES / DIFFS multiple inputs being fed
+  byte-identical or trivially-equal inputs, so the operation is a verifiable no-op (averaging
+  N copies of one vector returns that vector; deduping already-unique data; merging into
+  itself). The behavior the assertion targets never actually ran on real data.
+- A fixture/input that is STRUCTURALLY WRONG for the case it stands in for — e.g. a
+  multi-face group photo used where a single-subject reference is required, a placeholder
+  that can never exhibit the discriminating property the test exists to show, a "two
+  classes" check fed two copies of one class.
+- A hardcoded, stubbed, or short-circuited value that makes the check pass without the real
+  logic running.
+Do NOT silently reinterpret an assertion's literal term to make it pass. If the assertion
+says "committed to the repo," disk presence with zero commits does NOT satisfy it; if it
+says "downscaled," a byte-identical copy does NOT satisfy it. When the artifact does not meet
+the assertion AS WRITTEN, mark it FAIL and state the gap. If you believe the assertion's
+wording is genuinely wrong or too weak to capture the intent, say so explicitly in \`notes\`
+and flag it as a weak/ambiguous contract term — but never launder a degenerate result into a
+PASS by reinterpreting words.
+Gaming WEIGHS HEAVILY on functionality (and craft): a builder who satisfies the verification
+with a degenerate input has not delivered the behavior the user needs. Do NOT award a high
+functionality score to an artifact whose core behavior is only "proven" by identical copies,
+stubs, or a wrong-shaped fixture — that is slop dressed as done.
+
 PROCESS:
 1. Actually run the artifact per the contract's "I will verify by" and the guidance above,
    honoring the DETERMINISM rules (run gating checks repeatedly; don't trust one green run).
 2. Go through EVERY contract assertion and mark it PASS or FAIL with the evidence (the
    command you ran and what you observed). No evidence → FAIL. A contract-required check
    you observed fail on any run is FAIL unless you have positive, stated evidence the cause
-   is external to the artifact (see DETERMINISM).
+   is external to the artifact (see DETERMINISM). Apply the LETTER vs. INTENT rule: a
+   degenerate/gamed satisfaction is a FAIL, not a PASS — and never pass an assertion by
+   loosening the meaning of its words.
 3. Score each rubric criterion 0–100 on PRODUCT IMPACT — does the artifact actually work
    and meet the plan's intent? — with one sentence of justification each. Weight failures
    by what they mean for the user: a broken core behavior is severe; intermittent failure
-   of a required behavior caused by the artifact is also severe (the user hits it). An
-   incidental contract assertion that should never have been in the contract (toolchain/
-   build-setting trivia, or an unsatisfiable "prove not-X" check) is NOT a craft/
+   of a required behavior caused by the artifact is also severe (the user hits it); a core
+   behavior only demonstrated via a degenerate/gamed input is severe (it is unproven on real
+   data). An incidental contract assertion that should never have been in the contract
+   (toolchain/build-setting trivia, or an unsatisfiable "prove not-X" check) is NOT a craft/
    functionality defect — note it, but do not tank the scores or fail an otherwise-correct,
    plan-satisfying artifact over it. ONE EXCEPTION: build settings that WEAKEN security or
    the sandbox to make a build pass — e.g. disabling the compiler/script build sandbox
    (\`-disable-sandbox\`, \`ENABLE_USER_SCRIPT_SANDBOXING: NO\`), App Transport Security, or
    entitlement hardening — are NOT incidental; call them out as a deviation in your notes
    (blocking if they materially weaken the shipped artifact). Judge the product, not
-   box-ticking — but artifact-induced flakiness IS the product, not box-ticking.
+   box-ticking — but artifact-induced flakiness and gamed/degenerate "passes" ARE the
+   product, not box-ticking.
 4. Compute the weighted total.
 
 OUTPUT — end your message with a fenced \`\`\`json block EXACTLY in this shape (and nothing
@@ -285,7 +340,8 @@ after it):
 }
 \`\`\`
 Be harsh but fair. Passing something that is broken or slop is your failure — and so is
-passing something that only works on the lucky run.`,
+passing something that only works on the lucky run, or that only "passes" because the
+verification was satisfied by a degenerate input.`,
 
   reviewer: `You are the CODE REVIEWER — an independent second pair of eyes on a change
 that has ALREADY passed the behavioral evaluator (it builds and meets the contract). You do
