@@ -90,6 +90,9 @@ export interface AgentRequest {
   resume?: string;
   /** Which backend to run on (default "claude"). */
   backend?: string;
+  /** Point the backend at an OpenAI-compatible endpoint (e.g. local LM Studio). Codex only. */
+  baseUrl?: string;
+  apiKey?: string;
 
   /** Where to write the transcript markdown, and the seq number within the run. */
   traceDir: string;

@@ -82,9 +82,13 @@ an out-of-repo work dir.
 Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/configuration.md`.
 The few that matter most:
 
-- **`roles.<role>: { backend?, model, effort?, skills? }`** — `backend` defaults to
-  `claude`; set `codex` to run that role on Codex. Roles: orienter, planner, **decomposer**,
+- **`roles.<role>: { backend?, model, effort?, baseUrl?, apiKey?, skills? }`** — `backend`
+  defaults to `claude`; set `codex` to run that role on Codex. `baseUrl` points a codex role at a
+  local OpenAI-compatible endpoint (LM Studio/Ollama). Roles: orienter, planner, **decomposer**,
   prototyper, contractGenerator, contractEvaluator, generator, evaluator, **reviewer**, reflector.
+- **`roles.generatorLocal`** + work-item **`gen: "local"`** — hybrid builds: tagged items build on
+  a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;
+  edit tags in `items.json`. See `docs/backends.md`.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem`** — per-item caps; crossing either
   halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.

@@ -12,6 +12,7 @@ import { readHoldout, assertNoHoldoutLeak } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
+import type { RoleConfig } from "../config.ts";
 
 export interface Deviation {
   summary: string;
@@ -46,11 +47,14 @@ export async function generateItem(args: {
   priorLearnings?: string;
   /** Per-session USD budget (remaining item budget). Defaults to the per-item cap. */
   maxBudgetUsd?: number;
+  /** Generator role to use; defaults to `roles.generator`. The build loop passes
+   * `roles.generatorLocal` for items tagged `gen: "local"` (hybrid builds). */
+  role?: RoleConfig;
   /** Injectable for tests; defaults to the real SDK session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
 }): Promise<GenerateOutput> {
   const { ctx, item, contractText, workspaceDir } = args;
-  const role = ctx.config.roles.generator;
+  const role = args.role ?? ctx.config.roles.generator;
   const run = args.runSessionFn ?? runSession;
   const system = fill(await loadPrompt(ctx.paths, "generator"), {
     MODE: ctx.store.data.mode,
@@ -82,6 +86,8 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     backend: role.backend,
     model: role.model,
     effort: role.effort,
+    baseUrl: role.baseUrl,
+    apiKey: role.apiKey,
     cwd: workspaceDir,
     additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],

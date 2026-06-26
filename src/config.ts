@@ -11,6 +11,14 @@ export interface RoleConfig {
   model: ModelRef;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /**
+   * Point this role at an OpenAI-compatible endpoint instead of the backend's default —
+   * e.g. a LOCAL model served by LM Studio (`http://localhost:1234/v1`) or Ollama. Only the
+   * `codex` backend honors this today (it supplies the agent loop + tools; the model is local).
+   * `model` is then the local model id; `apiKey` is usually a dummy ("lm-studio").
+   */
+  baseUrl?: string;
+  apiKey?: string;
+  /**
    * Agent skills to make available to this role. Overrides `build.skills`. Builder roles
    * (generator, prototyper) inherit `build.skills` when this is unset; other roles get
    * skills only when listed here. Names match a SKILL.md `name`/dir, or an explicit path.
@@ -34,6 +42,12 @@ export interface SparraConfig {
     contractGenerator: RoleConfig;
     contractEvaluator: RoleConfig;
     generator: RoleConfig;
+    /**
+     * Optional second generator for items tagged `gen: "local"` (hybrid builds) — e.g. a local
+     * LM Studio model for trivially-simple or privacy-sensitive items, keeping the main
+     * `generator` (e.g. a cloud model) for the hard ones. Unset → all items use `generator`.
+     */
+    generatorLocal?: RoleConfig;
     evaluator: RoleConfig;
     /** Independent code review of the generated diff/source (opt-in via `review`). */
     reviewer: RoleConfig;

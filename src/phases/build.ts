@@ -159,6 +159,19 @@ export async function cmdBuild(
     // Prior cross-run learnings — read once per item, threaded into every role.
     const priorLearnings = await d.readMemory(ctx.paths);
 
+    // Hybrid generation: items tagged `gen: "local"` route to the optional local generator
+    // (e.g. a local LM Studio model) for trivially-simple/privacy-sensitive work; everything
+    // else uses the main generator. Falls back with a warning if no local generator is set.
+    const genRole =
+      item.gen === "local" && ctx.config.roles.generatorLocal
+        ? ctx.config.roles.generatorLocal
+        : ctx.config.roles.generator;
+    if (item.gen === "local" && !ctx.config.roles.generatorLocal) {
+      warn(`${item.id} tagged gen:local but roles.generatorLocal is unset — using the main generator.`);
+    } else if (genRole !== ctx.config.roles.generator) {
+      detail(`${item.id} → local generator (${genRole.model}${genRole.baseUrl ? ` @ ${genRole.baseUrl}` : ""}).`);
+    }
+
     // Halt this item (not the run) when its accumulated cost OR tokens cross the cap.
     const haltOnBudget = async (phase: string): Promise<void> => {
       st.status = "budget_exceeded";
@@ -205,6 +218,7 @@ export async function cmdBuild(
         resumeSessionId: fresh ? undefined : resumeSessionId,
         fresh,
         priorLearnings,
+        role: genRole,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
       });
       totalCost += gen.costUsd;

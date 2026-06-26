@@ -18,13 +18,29 @@ Two backends ship today:
 The Codex SDK is **optional**: install only if you use it — `npm i @openai/codex-sdk` plus the `codex` CLI on PATH (auth comes from `~/.codex`). Absent, the backend no-ops with a clear message; the rest of the harness runs fine.
 
 ## Per-role backend
-Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, skills? }` (backend defaults to `claude`):
+Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, baseUrl?, apiKey?, skills? }` (backend defaults to `claude`; `baseUrl` targets a local/OpenAI-compatible endpoint — see [local models](#local-models-lm-studio--ollama)):
 
 ```yaml
 roles:
   generator:  { backend: codex,  model: gpt-5-codex }
   evaluator:  { backend: claude, model: opus, effort: high }   # independent grader
   decomposer: { backend: claude, model: opus }                 # planning act — keep on Claude
+```
+
+## Local models (LM Studio / Ollama)
+Point a **`codex`** role at a local OpenAI-compatible server with `baseUrl` (+ optional `apiKey`). Codex still drives the agentic loop and tools; only the model is local — so the work stays on your machine:
+```yaml
+roles:
+  generator: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # LM Studio
+```
+The Codex CLI also has native local support (`--oss --local-provider lmstudio|ollama`); the SDK path above is the harness's equivalent. Caveat: small local models are far weaker than frontier cloud models at agentic tool-calling — expect more rounds/pivots on hard items.
+
+### Hybrid: local for some items, cloud for others
+Set a second generator, `roles.generatorLocal`, and the build routes **per work item**: items the decomposer tags `gen: "local"` (trivially-simple or privacy-sensitive — pure scaffolding, a tiny config/struct) build locally; everything else uses the main `generator`. The decomposer only proposes the tag when `generatorLocal` is set, and you can edit the tag in `.sparra/workitems/items.json` before building. Falls back to `generator` (with a warning) if an item is tagged local but no `generatorLocal` is configured.
+```yaml
+roles:
+  generator:      { backend: codex, model: gpt-5-codex }                                   # the hard items
+  generatorLocal: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 } # the trivial ones
 ```
 
 ## Cross-backend evaluation

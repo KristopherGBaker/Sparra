@@ -40,7 +40,7 @@ class CodexBackend implements AgentBackend {
     const input = req.systemPrompt
       ? `${req.systemPrompt}${skillsBlock}\n\n---\n\n${req.prompt}`
       : `${skillsBlock}${req.prompt}`;
-    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model || "(default)"}\`\n- cwd: \`${req.cwd}\`\n- sandbox: \`${sandboxMode}\`${req.skills?.length ? `\n- skills: ${req.skills.map((s) => s.name).join(", ")}` : ""}\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Input\n\n${input}\n\n---\n`;
+    const header = `# ${req.role}\n\n- backend: \`codex\`\n- model: \`${req.model || "(default)"}\`${req.baseUrl ? `\n- endpoint: \`${req.baseUrl}\` (local)` : ""}\n- cwd: \`${req.cwd}\`\n- sandbox: \`${sandboxMode}\`${req.skills?.length ? `\n- skills: ${req.skills.map((s) => s.name).join(", ")}` : ""}\n${req.resume ? `- resume: \`${req.resume}\`\n` : ""}\n## Input\n\n${input}\n\n---\n`;
     const trace = TraceWriter.for(req.traceDir, req.role, req.traceSeq, header);
 
     const result: AgentResult = {
@@ -72,7 +72,14 @@ class CodexBackend implements AgentBackend {
     let usage: any;
     try {
       const Codex = mod.Codex;
-      const codex = new Codex(); // auth + defaults from the codex CLI (~/.codex)
+      // Default: auth + defaults from the codex CLI (~/.codex). When a baseUrl is set, point
+      // Codex at an OpenAI-compatible endpoint (e.g. local LM Studio) — the model runs locally
+      // while Codex still supplies the agentic loop + tools.
+      const codexOptions: Record<string, unknown> = {};
+      if (req.baseUrl) codexOptions.baseUrl = req.baseUrl;
+      if (req.apiKey) codexOptions.apiKey = req.apiKey;
+      else if (req.baseUrl) codexOptions.apiKey = "lm-studio"; // local servers ignore the key
+      const codex = new Codex(codexOptions);
 
       const threadOptions: Record<string, unknown> = {
         sandboxMode,

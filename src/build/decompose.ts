@@ -34,6 +34,18 @@ export async function decompose(ctx: Ctx, traceDir: string, force = false): Prom
   const map = await readText(ctx.paths.frozenMap);
   const role = ctx.config.roles.decomposer;
 
+  // Hybrid builds: when a local generator is configured, let the decomposer route trivially-simple
+  // items to it. Omit the field entirely otherwise so it never appears spuriously.
+  const hasLocal = !!ctx.config.roles.generatorLocal;
+  const genFieldDoc = hasLocal
+    ? `, gen (OPTIONAL).
+Set "gen": "local" ONLY for a trivially-simple, mechanical, low-risk item that a small local
+model can do reliably — pure scaffolding, a tiny config/manifest file, a boilerplate data
+struct, a one-function utility with no tricky APIs. OMIT it (defaults to the main generator)
+for anything needing real design, cross-file reasoning, unfamiliar/tricky APIs, or care.
+Default to omitting — tag only the genuinely trivial.`
+    : `.`;
+
   const task = `Decompose this frozen plan into work items.
 
 FROZEN PLAN:
@@ -42,7 +54,7 @@ ${plan}
 ---
 ${map ? `CODEBASE_MAP (existing project — conform to this):\n---\n${map.slice(0, 6000)}\n---\n` : ""}
 Output ONLY a fenced \`\`\`json block: an array of objects with fields:
-  id (e.g. "item-001"), title, summary, dependsOn (array of ids), rationale.
+  id (e.g. "item-001"), title, summary, dependsOn (array of ids), rationale${genFieldDoc}
 Order matters: earlier items should not depend on later ones.`;
 
   info("Decomposing frozen plan into work items…");
@@ -73,6 +85,8 @@ Order matters: earlier items should not depend on later ones.`;
     summary: it.summary ?? "",
     dependsOn: Array.isArray(it.dependsOn) ? it.dependsOn : [],
     rationale: it.rationale ?? "",
+    // Only honor the tag when a local generator is configured; never invent it otherwise.
+    ...(hasLocal && it.gen === "local" ? { gen: "local" as const } : {}),
   }));
   await writeJson(ctx.paths.workitemsFile, normalized);
   info(`Decomposed into ${normalized.length} work items.`);

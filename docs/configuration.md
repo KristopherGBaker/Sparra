@@ -3,7 +3,7 @@
 Every knob lives in **`.sparra/config.yaml`** (seeded on `init` with mode-aware defaults; edit and re-run any phase — changes are picked up live). Models accept SDK aliases (`opus` · `sonnet` · `haiku` · `fable`) or full model ids. Anything you omit inherits the default.
 
 ```yaml
-roles:                        # per role: { backend?, model, effort?, skills? }  (backend defaults to "claude")
+roles:                        # per role: { backend?, model, effort?, baseUrl?, apiKey?, skills? }  (backend defaults to "claude")
   orienter:          { model: sonnet, effort: high }
   planner:           { model: opus,   effort: high }
   decomposer:        { model: sonnet, effort: high }   # plan → work items (a planning act)
@@ -15,6 +15,9 @@ roles:                        # per role: { backend?, model, effort?, skills? } 
   reviewer:          { model: opus,   effort: high }   # code-review gate (opt-in; see `review`)
   reflector:         { model: opus,   effort: high }
   # Cross-backend example: generator: { backend: codex, model: gpt-5-codex }
+  # Hybrid (local for trivial/sensitive items, cloud for the hard ones):
+  #   generator:      { backend: codex, model: gpt-5-codex }
+  #   generatorLocal: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # LM Studio
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions
@@ -67,6 +70,8 @@ batch: { K: 3 }
 
 ## Notes on a few knobs
 - **`roles.*.backend`** — `claude` (default) or `codex`. See [backends](backends.md). Decomposition reads best on Claude; keep `decomposer` there if you put the builder on Codex.
+- **`roles.*.baseUrl` / `roles.*.apiKey`** — point a role at an OpenAI-compatible endpoint instead of the backend default — e.g. a **local** model served by LM Studio (`http://localhost:1234/v1`) or Ollama. Only the **`codex`** backend honors it (Codex supplies the agent loop + tools; the model runs locally). `model` is then the local model id; `apiKey` defaults to a dummy. See [backends — local models](backends.md#local-models-lm-studio--ollama).
+- **`roles.generatorLocal`** — an optional **second generator** for **hybrid builds**. Work items the decomposer tags `gen: "local"` (trivially-simple or privacy-sensitive) build on `generatorLocal`; everything else uses `generator`. Unset → all items use `generator`. You can add/remove the `gen` tag per item in `.sparra/workitems/items.json` before building (the decomposer only proposes it, and only when `generatorLocal` is configured).
 - **`permission.mode`** — `auto` uses the SDK's model-classifier approvals when available on your plan, else `acceptEdits`; either way a deny-hook (Claude) / sandbox (Codex) enforces scope. `bypassPermissions` is refused.
 - **`contract`** — the assertion range is an *upper guide*, scaled down for small items; the evaluator rejects padding and over-specification. See [build loop](build-loop.md).
 - **`build` budgets** — start-closed; crossing the USD **or** token cap halts an item as `BUDGET_EXCEEDED` and the run continues. `total_cost_usd` is notional on a subscription — use `maxTokensPerItem` there.

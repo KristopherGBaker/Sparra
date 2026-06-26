@@ -260,3 +260,48 @@ describe("cmdBuild — conventional commits (opt-in, branch-only)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cmdBuild — hybrid generation routing (gen: local)", () => {
+  it("routes items tagged gen:'local' to roles.generatorLocal and others to roles.generator", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.roles.generatorLocal = { backend: "codex", model: "local-qwen", baseUrl: "http://localhost:1234/v1" };
+    const routed: WorkItem[] = [
+      { id: "item-001", title: "trivial", summary: "", dependsOn: [], rationale: "", gen: "local" },
+      { id: "item-002", title: "hard", summary: "", dependsOn: [], rationale: "" },
+    ];
+    const seenModel: Record<string, string | undefined> = {};
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => routed,
+      generateItem: async (args) => {
+        seenModel[args.item.id] = args.role?.model;
+        return genOut();
+      },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(seenModel["item-001"]).toBe("local-qwen"); // tagged → local generator
+    expect(seenModel["item-002"]).toBe(ctx.config.roles.generator.model); // default → main generator
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("falls back to the main generator when gen:'local' but no generatorLocal is configured", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const routed: WorkItem[] = [
+      { id: "item-001", title: "trivial", summary: "", dependsOn: [], rationale: "", gen: "local" },
+    ];
+    let seen: string | undefined;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => routed,
+      generateItem: async (args) => {
+        seen = args.role?.model;
+        return genOut();
+      },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(seen).toBe(ctx.config.roles.generator.model);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
