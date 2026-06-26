@@ -128,7 +128,7 @@ export function buildExerciser(config: SparraConfig, artifactDir: string): Exerc
   const server = createSdkMcpServer({ name: "exercise", version: "0.1.0", tools });
 
   const guidanceByMech: Record<ExerciseMechanism, string> = {
-    cli: `This is a CLI tool. Exercise it with mcp__exercise__run_command: invoke the built binary/entrypoint with real arguments, assert on exit codes and stdout/stderr. Test the happy path AND error paths (bad flags, missing args, edge inputs).`,
+    cli: `This is a CLI tool. Exercise it with mcp__exercise__run_command: invoke the built binary/entrypoint with real arguments, assert on exit codes and stdout/stderr. Test the happy path AND error paths (bad flags, missing args, edge inputs). If it's a SwiftPM package, pipe \`swift build\`/\`swift test\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; swift test … | xcbeautify -qq\` (pipefail so a failure still fails the command); re-run plain/verbose to diagnose, and use the plain command if xcbeautify isn't installed (don't fail over tooling).`,
     web: `This is a web app. If a server must be running, start it (config.exercise.web.startCommand: "${config.exercise.web.startCommand}") with run_command in the background, then probe ${config.exercise.web.baseUrl} via mcp__exercise__http_request. Assert on status codes and response bodies. (For richer UI flows, a Playwright/Chrome MCP can be wired in via config.)`,
     ios: iosGuidance(config),
     "computer-use": `Exercise the artifact end-to-end as a user would, via run_command and any available automation. Assert on observable behavior, not source.`,
