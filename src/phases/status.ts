@@ -33,6 +33,13 @@ export function cmdStatus(ctx: Ctx): void {
     }
     if (s.build.runId) detail(`run: ${s.build.runId}  traces: ${path.relative(ctx.root, ctx.paths.traceDir(s.build.runId))}`);
     if (s.build.branch) detail(`branch: ${s.build.branch}`);
+    // Auto-restart: show a paused build as "waiting", not hung.
+    if (s.build.waitingUntil && s.build.waitingUntil > Date.now()) {
+      detail(color.yellow(`paused on a provider limit — resumes ~${new Date(s.build.waitingUntil).toLocaleTimeString()} (re-run \`sparra build\` to resume now)`));
+    } else {
+      const limited = Object.entries(s.build.limitedRoles ?? {}).filter(([, until]) => until > Date.now());
+      if (limited.length) detail(color.yellow(`backends in a limit window: ${limited.map(([k, until]) => `${k} (until ~${new Date(until).toLocaleTimeString()})`).join(", ")}`));
+    }
   }
 
   process.stdout.write(`\n${color.bold("next:")} ${NEXT[s.phase] ?? "—"}\n`);

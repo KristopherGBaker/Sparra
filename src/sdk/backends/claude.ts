@@ -11,6 +11,7 @@ import {
   type AgentRequest,
   type AgentResult,
   type BackendCapabilities,
+  type LimitHit,
 } from "../backend.ts";
 
 /**
@@ -104,11 +105,21 @@ class ClaudeBackend implements AgentBackend {
     // Console echo is suppressed when a front-end consumes events/text instead.
     const echo = req.echoActivity ?? !(req.onAssistantText || req.onEvent);
 
+    // The SDK emits `rate_limit_event` (plan limits) and retries transient errors itself.
+    // Record the latest REJECTED limit; only promote it to result.limitHit if the run
+    // ultimately fails (so we don't flag a limit the SDK recovered from).
+    let pendingLimit: LimitHit | undefined;
+
     try {
     for await (const msg of query({ prompt: req.prompt, options })) {
       await trace.record(msg as SDKMessage);
 
-      if (msg.type === "system" && (msg as any).subtype === "init") {
+      if (msg.type === "rate_limit_event") {
+        const info = (msg as any).rate_limit_info ?? {};
+        if (info.status === "rejected" || info.overageStatus === "rejected") {
+          pendingLimit = limitFromRateInfo(info);
+        }
+      } else if (msg.type === "system" && (msg as any).subtype === "init") {
         result.sessionId = (msg as any).session_id;
         req.onEvent?.({ kind: "init", sessionId: result.sessionId, model: (msg as any).model });
       } else if (msg.type === "assistant") {
@@ -137,6 +148,11 @@ class ClaudeBackend implements AgentBackend {
           result.errors = m.errors ?? [m.subtype];
           result.hitMaxTurns = m.subtype === "error_max_turns";
           result.hitBudget = m.subtype === "error_max_budget_usd";
+          // A real provider limit (vs. our own maxTurns/maxBudget caps): prefer the
+          // structured rate_limit_event, else sniff the error strings.
+          if (!result.hitMaxTurns && !result.hitBudget) {
+            result.limitHit = pendingLimit ?? limitFromErrors(result.errors, m.api_error_status);
+          }
         }
       }
     }
@@ -150,6 +166,36 @@ class ClaudeBackend implements AgentBackend {
 
     return result;
   }
+}
+
+/** Normalize the SDK's epoch (seconds or ms) to ms. */
+function toEpochMs(n: unknown): number | undefined {
+  const v = Number(n);
+  if (!isFinite(v) || v <= 0) return undefined;
+  return v < 1e12 ? v * 1000 : v; // values below ~2001 in ms must be seconds
+}
+
+/** Build a LimitHit from a Claude SDKRateLimitInfo. */
+function limitFromRateInfo(info: any): LimitHit {
+  const type: string | undefined = info.rateLimitType;
+  const kind: LimitHit["kind"] = type && /hour|day|overage/.test(type) ? "usage" : "rate";
+  return {
+    kind,
+    resetAt: toEpochMs(info.overageResetsAt ?? info.resetsAt),
+    rateLimitType: type,
+    raw: JSON.stringify(info).slice(0, 300),
+  };
+}
+
+/** Fallback: classify a provider limit from error strings / HTTP status when no
+ *  structured rate_limit_event arrived (the SDK exhausted its own retries). */
+function limitFromErrors(errors: string[], apiStatus?: number | null): LimitHit | undefined {
+  if (apiStatus === 429) return { kind: "rate", raw: `http 429` };
+  const blob = errors.join(" ").toLowerCase();
+  if (/rate.?limit|too many requests|429|overloaded|usage limit/.test(blob)) {
+    return { kind: /usage limit/.test(blob) ? "usage" : "rate", raw: errors.join("; ").slice(0, 300) };
+  }
+  return undefined;
 }
 
 /** Sum input+output+cache tokens across all models in a result's modelUsage map. */

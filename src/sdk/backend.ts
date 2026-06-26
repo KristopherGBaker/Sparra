@@ -42,6 +42,23 @@ export interface BackendCapabilities {
   cost: "usd" | "tokens" | "none";
 }
 
+/**
+ * A provider rate/usage/session limit the backend hit. Surfaced so the build loop can
+ * WAIT for the window to reopen and resume, rather than burning a round on a dead session.
+ *   rate    → short backoff (HTTP 429 / overloaded), reopens in seconds–minutes
+ *   usage   → a subscription window (Claude's 5-hour / 7-day plan limit), reopens in hours
+ *   session → the session itself was limited/closed by the provider
+ * `resetAt` is epoch-ms when the window reopens, when the backend tells us (Claude does for
+ * plan limits); absent → the loop falls back to fixed-interval polling.
+ */
+export interface LimitHit {
+  kind: "rate" | "usage" | "session";
+  resetAt?: number;
+  /** Provider's own label for the window, when known (e.g. "five_hour", "seven_day"). */
+  rateLimitType?: string;
+  raw: string;
+}
+
 /** A resolved agent skill: its name, directory, and SKILL.md contents. */
 export interface ResolvedSkill {
   name: string;
@@ -127,6 +144,8 @@ export interface AgentResult {
   numTurns: number;
   hitMaxTurns: boolean;
   hitBudget: boolean;
+  /** Set when the run failed on a provider rate/usage/session limit (vs. our own caps). */
+  limitHit?: LimitHit;
   errors: string[];
   tracePath: string;
 }

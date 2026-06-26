@@ -2,6 +2,7 @@ import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
+import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
@@ -13,11 +14,14 @@ import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, holdoutSection } from "./holdout.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
+import type { RoleConfig } from "../config.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
   raw: string;
   sessionId: string;
+  /** Set when the session failed on a provider rate/usage limit — the build loop waits + retries. */
+  limitHit?: LimitHit;
   costUsd: number;
   tokens: number;
 }
@@ -48,11 +52,14 @@ export async function evaluateItem(args: {
   priorLearnings?: string;
   /** Per-session USD budget (remaining item budget). Defaults to the per-item cap. */
   maxBudgetUsd?: number;
+  /** Evaluator role to use; defaults to `roles.evaluator`. The build loop passes a fallback
+   *  model here when the primary evaluator's backend is in a limit window. */
+  role?: RoleConfig;
   /** Injectable for tests; defaults to the real SDK session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
-  const role = ctx.config.roles.evaluator;
+  const role = args.role ?? ctx.config.roles.evaluator;
   const run = args.runSessionFn ?? runSession;
   const exerciser = buildExerciser(ctx.config, workspaceDir);
 
@@ -141,5 +148,5 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);
   else warn(`${item.id} FAILED round ${round} (${verdict.weightedTotal}); ${verdict.blocking.length} blocking issue(s).`);
 
-  return { verdict, raw: res.resultText, sessionId: res.sessionId, costUsd: res.costUsd, tokens: res.tokens };
+  return { verdict, raw: res.resultText, sessionId: res.sessionId, limitHit: res.limitHit, costUsd: res.costUsd, tokens: res.tokens };
 }

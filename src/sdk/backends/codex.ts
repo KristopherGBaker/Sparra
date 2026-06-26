@@ -8,6 +8,7 @@ import {
   type AgentRequest,
   type AgentResult,
   type BackendCapabilities,
+  type LimitHit,
   type SessionEvent,
 } from "../backend.ts";
 
@@ -139,17 +140,30 @@ class CodexBackend implements AgentBackend {
       result.numTurns = 1;
       result.ok = result.errors.length === 0;
       result.subtype = result.ok ? "success" : "error";
+      // Codex gives no structured reset time — sniff the error strings; the build loop
+      // then falls back to fixed-interval polling (no resetAt).
+      if (!result.ok) result.limitHit = limitFromErrors(result.errors);
       if (req.outputSchema && result.resultText) result.structured = extractJson(result.resultText) ?? undefined;
       emit(req.onEvent, { kind: "result", ok: result.ok, costUsd: 0, subtype: result.subtype });
     } catch (e) {
       result.ok = false;
       result.subtype = "error";
       result.errors = [...result.errors, (e as Error).message];
+      result.limitHit = limitFromErrors(result.errors);
       await trace.write(`> Codex run failed: ${(e as Error).message}\n\n`);
     }
 
     return result;
   }
+}
+
+/** Classify a provider rate/usage limit from Codex error strings (no reset time available). */
+function limitFromErrors(errors: string[]): LimitHit | undefined {
+  const blob = errors.join(" ").toLowerCase();
+  if (/rate.?limit|too many requests|\b429\b|quota|usage limit|overloaded/.test(blob)) {
+    return { kind: /usage limit|quota/.test(blob) ? "usage" : "rate", raw: errors.join("; ").slice(0, 300) };
+  }
+  return undefined;
 }
 
 function emit(onEvent: ((e: SessionEvent) => void) | undefined, e: SessionEvent): void {

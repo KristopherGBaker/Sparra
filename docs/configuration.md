@@ -18,6 +18,8 @@ roles:                        # per role: { backend?, model, effort?, baseUrl?, 
   # Hybrid (local for trivial/sensitive items, cloud for the hard ones):
   #   generator:      { backend: codex, model: gpt-5-codex }
   #   generatorLocal: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # LM Studio
+  # Fallback model when the primary's backend is rate/usage-limited (needs build.autoRestart):
+  #   generator: { backend: codex, model: gpt-5-codex, fallback: { backend: claude, model: opus } }
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions
@@ -43,6 +45,11 @@ build:
   maxTurnsPerSession: 60
   maxBudgetUsdPerItem: 5      # notional USD cap (tokens × list price); 0 = no cap
   maxTokensPerItem: 0         # direct token ceiling — the lever on a subscription/Codex; 0 = no cap
+  autoRestart:                # wait out (or fall back from) a provider rate/usage limit
+    enabled: false            # off by default; on → an unattended build can sleep for hours
+    maxWaitSec: 21600         # cap on ONE wait (6h — long enough for a Claude 5-hour window)
+    pollSec: 300              # recheck cadence when the backend gives no reset time (e.g. Codex)
+    maxRestarts: 20           # total wait cycles before stopping (resumable via `sparra build`)
   skills: []                  # agent skills for the builder roles, e.g. ["xcodebuildmcp-cli", "swiftui-design"]
                               # (per-role override: roles.<role>.skills)
   extraReadDirs: []           # extra dirs the build may READ (e.g. ["~/.cache/models"]) — for big
@@ -77,6 +84,8 @@ batch: { K: 3 }
 - **`permission.mode`** — `auto` uses the SDK's model-classifier approvals when available on your plan, else `acceptEdits`; either way a deny-hook (Claude) / sandbox (Codex) enforces scope. `bypassPermissions` is refused.
 - **`contract`** — the assertion range is an *upper guide*, scaled down for small items; the evaluator rejects padding and over-specification. See [build loop](build-loop.md).
 - **`build` budgets** — start-closed; crossing the USD **or** token cap halts an item as `BUDGET_EXCEEDED` and the run continues. `total_cost_usd` is notional on a subscription — use `maxTokensPerItem` there.
+- **`build.autoRestart`** — the "heartbeat" for **unattended** builds: when the generator or evaluator hits a real **provider** rate/usage/session limit (vs. your own budget caps), the loop either switches to a configured **`fallback`** model or **waits** for the window to reopen, then retries the **same** round — instead of burning it. Off by default (opting in lets a build sleep for hours). State is checkpointed before each wait, so a kill mid-wait still resumes from disk; `sparra status` shows a paused build as *waiting until …*. After `maxRestarts` wait cycles it stops cleanly — re-run `sparra build` to resume. See [build loop](build-loop.md#auto-restart--model-fallback-on-provider-limits).
+- **`roles.*.fallback`** — a backup `RoleConfig` (model/backend/effort/…) used when the primary role's **backend** is in a limit window (requires `build.autoRestart.enabled`). Best pointed at a **different provider** (e.g. primary `gpt-5-codex` on Codex → fallback `opus` on Claude): on a limit the loop switches models and keeps going with **no wait**, switching back once the primary's window reopens. Chainable (a fallback may have its own `fallback`); a fallback on the same, also-limited backend is skipped. Limits are keyed by backend because a plan window (e.g. Claude's 5-hour) is account-wide across that provider's models.
 - **`exercise.ios`** — full Apple-platform guide in [docs/ios.md](ios.md).
 - **`review`** — an optional agent code-review gate after the behavioral evaluator passes (a second lens for code quality the exerciser can't see). Off by default; see [build loop](build-loop.md#code-review-optional). Best with `roles.reviewer.backend` set to a *different* family than the generator.
 - **`build.skills` / `roles.*.skills`** — agent skills (SKILL.md) made available to a role. Builder roles (`generator`, `prototyper`) inherit `build.skills`; other roles (e.g. `evaluator`) opt in via their own `roles.<role>.skills`. Resolved from the repo's `skills/`, `~/.claude/skills`, or `~/.agents/skills` (or an explicit path). See [backends — skills](backends.md#skills). Example: `roles.evaluator.skills: ["xcodebuildmcp-cli"]` to give the iOS grader your build/run skill.

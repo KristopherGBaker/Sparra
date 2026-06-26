@@ -67,6 +67,19 @@ The loop "starts closed". Each item is capped by **cost and/or tokens**; crossin
 
 Set a cap to `0` to opt out of that dimension.
 
+## Auto-restart / model fallback on provider limits
+The budgets above are *your* caps. A different thing can stop a long unattended build: the **provider's** own rate / usage / session limit (e.g. Claude's 5-hour or 7-day plan window, an HTTP 429, a Codex quota). Without handling, a limit produces a dead session that the loop would misread as a failed round.
+
+With **`build.autoRestart.enabled`** (off by default), when the generator or evaluator hits a real provider limit the loop:
+
+1. **falls back** — if that role has a **`fallback`** model on a backend that *isn't* limited, it switches to it and continues immediately (no wait), switching back once the primary's window reopens; else
+2. **waits** — it sleeps until the window reopens (the backend's reset time when known — Claude provides one via a structured `rate_limit_event`; otherwise it rechecks every `pollSec`), capped per wait by `maxWaitSec`; then
+3. **retries the same round** — a limit isn't a failed attempt, so the round is *not* charged against `maxRoundsPerItem`.
+
+Limits are tracked per **backend** (a plan window is account-wide across that provider's models), so a fallback only helps when it's on a *different* provider — e.g. primary `gpt-5-codex` on Codex with `fallback: { backend: claude, model: opus }`. The generator session is **not** resumed across a backend switch (a session id isn't portable); the fallback starts fresh.
+
+Two stop conditions keep it sane (the loop must never run forever): each wait is bounded by `maxWaitSec`, and the whole run gives up after `maxRestarts` wait cycles — stopping **cleanly** (phase stays `build`, the item is left mid-flight, nothing marked failed). State is checkpointed to disk *before* each sleep, so a process kill mid-wait loses nothing: re-run `sparra build` to resume. `sparra status` shows a paused build as *paused on a provider limit — resumes ~HH:MM* rather than looking hung.
+
 ## Format on write
 A `PostToolUse` hook formats/lints each file the generator writes **before** the evaluator exercises it, so trivial formatting never costs an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint`). Missing formatter → no-op + warning, never a failure. Configure via `format` (see [configuration](configuration.md)).
 

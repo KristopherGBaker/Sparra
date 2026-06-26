@@ -24,6 +24,15 @@ export interface RoleConfig {
    * skills only when listed here. Names match a SKILL.md `name`/dir, or an explicit path.
    */
   skills?: string[];
+  /**
+   * Fallback model for this role, used when the primary's BACKEND is in a provider limit
+   * window (requires `build.autoRestart.enabled`). On a limit the loop switches to this
+   * model — ideally on a DIFFERENT backend (e.g. primary gpt-5.5 on codex → fallback opus
+   * on claude) — and continues immediately instead of sleeping, switching back once the
+   * primary's window reopens. Chainable (a fallback may have its own `fallback`); a fallback
+   * on the same, also-limited backend is skipped. Unset → the loop waits out the window.
+   */
+  fallback?: RoleConfig;
 }
 
 export type ExerciseMechanism = "cli" | "web" | "ios" | "computer-use" | "custom";
@@ -133,6 +142,25 @@ export interface SparraConfig {
      * gets their SKILL.md inlined into the input. Per-role `roles.<role>.skills` overrides.
      */
     skills: string[];
+    /**
+     * Auto-restart on a provider rate/usage/session limit. When the generator or evaluator
+     * hits a real provider limit (vs. our own per-item caps), the loop WAITS for the window
+     * to reopen and retries the same round instead of burning it. The "heartbeat" that lets
+     * an unattended build survive a subscription window closing.
+     *   enabled     off by default (opt-in; an unattended build can then sleep for hours).
+     *   maxWaitSec  cap on a SINGLE wait. Default 21600 (6h) — long enough to wait out a
+     *               Claude 5-hour plan window in one sleep. A longer window → wait the cap,
+     *               retry, and (if still limited) wait again, counting against maxRestarts.
+     *   pollSec     when the backend gives no reset time (e.g. Codex), recheck cadence.
+     *   maxRestarts total wait cycles per run before giving up and stopping (resumable: just
+     *               re-run `sparra build`). The hard stop so a stuck limit can't loop forever.
+     */
+    autoRestart: {
+      enabled: boolean;
+      maxWaitSec: number;
+      pollSec: number;
+      maxRestarts: number;
+    };
     /**
      * Extra directories the build may READ beyond the work dir (+ repo root) — added to the
      * generator's and evaluator's `additionalDirectories`. For large assets you don't want in
@@ -250,7 +278,16 @@ export function defaultConfig(): SparraConfig {
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
-    build: { maxRoundsPerItem: 6, maxTurnsPerSession: 60, maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, skills: [], extraReadDirs: [] },
+    build: {
+      maxRoundsPerItem: 6,
+      maxTurnsPerSession: 60,
+      maxBudgetUsdPerItem: 5,
+      maxTokensPerItem: 0,
+      // Off by default: opting in lets an unattended build sleep for hours waiting out a limit.
+      autoRestart: { enabled: false, maxWaitSec: 21600, pollSec: 300, maxRestarts: 20 },
+      skills: [],
+      extraReadDirs: [],
+    },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {
       mechanism: "cli",

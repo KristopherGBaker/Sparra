@@ -93,6 +93,11 @@ The few that matter most:
   edit tags in `items.json`. See `docs/backends.md`.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem`** — per-item caps; crossing either
   halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
+- **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
+  rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
+  the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by
+  default. Bounded by `maxWaitSec`/`maxRestarts`; checkpoints before sleeping (resume via
+  `sparra build`); `sparra status` shows it *paused … resumes ~HH:MM*. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold.

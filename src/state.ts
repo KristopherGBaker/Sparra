@@ -26,6 +26,9 @@ export interface ItemState {
   /** Cumulative tokens spent on this item across all rounds (feeds the token budget guard). */
   tokensUsed?: number;
   generatorSessionId?: string;
+  /** Backend the stored generatorSessionId belongs to — a session id isn't portable across
+   *  providers, so on a fallback to another backend we must start fresh, not resume. */
+  generatorBackend?: string;
 }
 
 export interface SparraState {
@@ -47,6 +50,14 @@ export interface SparraState {
     workspaceNote?: string;
     /** Monotonic trace-file sequence within the run. */
     traceSeq?: number;
+    /** Total auto-restart wait cycles spent this run (bounded by build.autoRestart.maxRestarts). */
+    restarts?: number;
+    /** Epoch-ms the current limit window reopens, while the loop is sleeping on it (else unset).
+     *  Surfaced by `status` so a paused build reads as "waiting until …", not hung. */
+    waitingUntil?: number;
+    /** Backends currently in a limit window → epoch-ms they reopen. Drives fallback-model
+     *  selection (skip a limited backend) and resumes correctly across a process restart. */
+    limitedRoles?: Record<string, number>;
     items: Record<string, ItemState>;
     /** Hash of the frozen plan the current items were decomposed from — lets `build`
      *  warn when the plan changed but the run wasn't re-decomposed (`--fresh` / `new`). */

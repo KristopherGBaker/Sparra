@@ -17,10 +17,13 @@ import type { ReviewOutput } from "../build/review.ts";
 import type { Deviation } from "../build/generate.ts";
 import { updateStreaksAndDecide } from "../build/pivot.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
+import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
+import type { LimitHit } from "../sdk/backend.ts";
 import { appendLearning, readMemory } from "../memory.ts";
 import { promptDrift } from "../prompts.ts";
 import type { WorkItem } from "../build/types.ts";
+import type { RoleConfig } from "../config.ts";
 
 /** Injectable seams so the build orchestration is testable without the SDK/git. */
 export interface BuildDeps {
@@ -36,6 +39,7 @@ export interface BuildDeps {
   appendLearning: typeof appendLearning;
   readMemory: typeof readMemory;
   commitWork: typeof commitAll;
+  waitForLimit: typeof waitForLimit;
 }
 
 const defaultDeps: BuildDeps = {
@@ -51,7 +55,41 @@ const defaultDeps: BuildDeps = {
   appendLearning,
   readMemory,
   commitWork: commitAll,
+  waitForLimit,
 };
+
+/** Provider account a role runs against — the granularity a rate/usage limit applies to.
+ *  (Claude's plan window is account-wide across models, so we key by backend, not model.) */
+const backendKey = (r: RoleConfig): string => r.backend ?? "claude";
+
+/** Walk a role's fallback chain and return the first whose backend is NOT in a limit window.
+ *  Falls back to the primary (which will then trigger a wait) when all are limited. */
+function pickRole(
+  primary: RoleConfig,
+  limited: Map<string, number>,
+  now: number
+): { role: RoleConfig; usedFallback: boolean } {
+  let r: RoleConfig | undefined = primary;
+  let usedFallback = false;
+  for (let guard = 0; r && guard < 10; guard++) {
+    const until = limited.get(backendKey(r));
+    if (!until || until <= now) return { role: r, usedFallback };
+    r = r.fallback;
+    usedFallback = true;
+  }
+  return { role: primary, usedFallback: false }; // every model in the chain is limited → wait
+}
+
+/** True when `role` has any fallback in its chain on a backend that isn't currently limited. */
+function hasAvailableFallback(role: RoleConfig, limited: Map<string, number>, now: number): boolean {
+  let r = role.fallback;
+  for (let guard = 0; r && guard < 10; guard++) {
+    const until = limited.get(backendKey(r));
+    if (!until || until <= now) return true;
+    r = r.fallback;
+  }
+  return false;
+}
 
 /** Build a conventional commit message for an accepted item (deterministic, no LLM call). */
 function commitMessage(item: WorkItem, deviations: Deviation[], runId: string): string {
@@ -156,6 +194,56 @@ export async function cmdBuild(
   const overBudget = (s: ItemState) => budgetExceeded(cap, s.costUsd ?? 0) || tokensExceeded(tokenCap, s.tokensUsed ?? 0);
   const stamp = () => new Date().toISOString();
 
+  // Auto-restart / fallback state (the "heartbeat"). limitedUntil tracks which backends are in
+  // a limit window; it survives a process restart via b.build.limitedRoles.
+  const ar = ctx.config.build.autoRestart;
+  let restarts = b.build.restarts ?? 0;
+  let stopRun = false;
+  const limitedUntil = new Map<string, number>(Object.entries(b.build.limitedRoles ?? {}));
+  const persistLimits = () => {
+    b.build.limitedRoles = Object.fromEntries(limitedUntil);
+  };
+
+  // Called after every generator/evaluator session. On a provider rate/usage limit it either
+  // switches to a fallback model or waits the window out, then asks the caller to redo the round.
+  //   "none"  → no limit (or auto-restart off): proceed normally
+  //   "retry" → handled (fell back, or waited): redo this round (role is re-picked at the top)
+  //   "halt"  → out of restarts: stop the run cleanly (resume later with `sparra build`)
+  const onLimit = async (
+    st: ItemState,
+    roleUsed: RoleConfig,
+    hit: LimitHit | undefined,
+    label: string
+  ): Promise<"none" | "retry" | "halt"> => {
+    if (!hit || !ar.enabled) return "none";
+    const key = backendKey(roleUsed);
+    const until = hit.resetAt ?? Date.now() + ar.pollSec * 1000;
+    limitedUntil.set(key, until);
+    persistLimits();
+    st.round = Math.max(0, st.round - 1); // a limit isn't a failed attempt — give the round back
+
+    // Prefer an immediate switch to an available fallback model over sleeping.
+    if (hasAvailableFallback(roleUsed, limitedUntil, Date.now())) {
+      warn(`${label}: ${key} hit a ${hit.kind} limit — switching to a fallback model.`);
+      await ctx.store.save();
+      return "retry";
+    }
+    // No fallback available → wait for the window to reopen (bounded by maxRestarts).
+    if (restarts >= ar.maxRestarts) {
+      warn(`${label}: ${key} ${hit.kind} limit and maxRestarts (${ar.maxRestarts}) reached — stopping. Re-run \`sparra build\` to resume.`);
+      return "halt";
+    }
+    b.build.restarts = ++restarts;
+    b.build.waitingUntil = until;
+    await ctx.store.save(); // checkpoint BEFORE sleeping: a kill mid-wait still resumes from disk
+    await d.waitForLimit(hit, ar, (m) => detail(m));
+    limitedUntil.delete(key); // window assumed reopened after the wait
+    b.build.waitingUntil = undefined;
+    persistLimits();
+    await ctx.store.save();
+    return "retry";
+  };
+
   for (const item of items) {
     const st = (b.build.items[item.id] ??= freshItemState());
     if (st.costUsd == null) st.costUsd = 0;
@@ -214,7 +302,10 @@ export async function cmdBuild(
     st.status = "building";
     let feedback: string | undefined;
     let fresh = false;
-    let resumeSessionId = st.generatorSessionId;
+    // Resume only a generator session from the SAME backend as the role we're about to run —
+    // a session id isn't portable, so a fallback to another provider must start fresh.
+    const resumeFor = (key: string): string | undefined =>
+      !fresh && st.generatorBackend === key ? st.generatorSessionId : undefined;
 
     while (st.round < ctx.config.build.maxRoundsPerItem) {
       if (overBudget(st)) {
@@ -222,6 +313,11 @@ export async function cmdBuild(
         break;
       }
       st.round += 1;
+      // Pick the generator role, swapping to a fallback model when the primary's backend is in
+      // a limit window. genRole is the (possibly local) primary; pickRole applies the fallback chain.
+      const genPick = pickRole(genRole, limitedUntil, Date.now());
+      const genKey = backendKey(genPick.role);
+      if (genPick.usedFallback) info(`${item.id}: ${backendKey(genRole)} limited — generating with fallback ${genPick.role.model}.`);
       const gen = await d.generateItem({
         ctx,
         item,
@@ -230,18 +326,22 @@ export async function cmdBuild(
         traceDir,
         traceSeq: nextSeq(),
         feedback,
-        resumeSessionId: fresh ? undefined : resumeSessionId,
+        resumeSessionId: resumeFor(genKey),
         fresh,
         priorLearnings,
-        role: genRole,
+        role: genPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
       });
       totalCost += gen.costUsd;
       st.costUsd = (st.costUsd ?? 0) + gen.costUsd;
       st.tokensUsed = (st.tokensUsed ?? 0) + gen.tokens;
       st.generatorSessionId = gen.sessionId;
-      resumeSessionId = gen.sessionId;
+      st.generatorBackend = genKey;
       await ctx.store.save();
+
+      const gl = await onLimit(st, genPick.role, gen.limitHit, `${item.id} generate`);
+      if (gl === "halt") { stopRun = true; break; }
+      if (gl === "retry") continue;
 
       // Sandbox-first backstop: whatever scoped the writes (Claude hooks / Codex
       // sandbox), verify nothing escaped the work scope into the repo. Harness-managed
@@ -268,6 +368,8 @@ export async function cmdBuild(
 
       const dev = await d.recordDeviations(ctx, item, gen.deviations);
 
+      const evalPick = pickRole(ctx.config.roles.evaluator, limitedUntil, Date.now());
+      if (evalPick.usedFallback) info(`${item.id}: ${backendKey(ctx.config.roles.evaluator)} limited — evaluating with fallback ${evalPick.role.model}.`);
       const ev = await d.evaluateItem({
         ctx,
         item,
@@ -277,11 +379,17 @@ export async function cmdBuild(
         traceDir,
         traceSeq: nextSeq(),
         priorLearnings,
+        role: evalPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
       });
       totalCost += ev.costUsd;
       st.costUsd = (st.costUsd ?? 0) + ev.costUsd;
       st.tokensUsed = (st.tokensUsed ?? 0) + ev.tokens;
+
+      const el = await onLimit(st, evalPick.role, ev.limitHit, `${item.id} evaluate`);
+      if (el === "halt") { stopRun = true; break; }
+      if (el === "retry") continue;
+
       st.lastScore = ev.verdict.weightedTotal;
 
       if (ev.verdict.verdict === "pass") {
@@ -357,7 +465,6 @@ export async function cmdBuild(
         st.pivots += 1;
         st.criterionFailStreak = {};
         fresh = true;
-        resumeSessionId = undefined;
         feedback = `GAN PIVOT: this item stayed below ${ctx.config.pivot.threshold} on "${decision.criterion}" for ${ctx.config.pivot.N} rounds. Discard the previous approach entirely and rebuild from scratch with a fundamentally different design. Latest blocking issues: ${ev.verdict.blocking.join("; ") || ev.verdict.notes}`;
         warn(`${item.id}: GAN pivot on "${decision.criterion}" → restarting from scratch (pivot #${st.pivots}).`);
         await d.appendLearning(ctx.paths, {
@@ -373,6 +480,7 @@ export async function cmdBuild(
       }
       void dev;
     }
+    if (stopRun) break; // halted on a provider limit — leave this item mid-flight (resumable)
 
     // `haltOnBudget`/pass mutate st.status through a closure, which defeats TS's
     // flow narrowing here — read it back through the declared union.
@@ -395,6 +503,16 @@ export async function cmdBuild(
   const passed = states.filter((s) => s.status === "passed").length;
   const failed = states.filter((s) => s.status === "failed").length;
   const budgetHalted = states.filter((s) => s.status === "budget_exceeded").length;
+
+  // Paused on a provider limit (auto-restart exhausted): stay in phase "build" — NOT done — so
+  // the work is resumable. State (including the mid-flight item and limit windows) is on disk.
+  if (stopRun) {
+    await ctx.store.save();
+    banner("BUILD PAUSED — provider limit");
+    warn(`Paused after ${restarts} auto-restart wait(s) (maxRestarts ${ar.maxRestarts}). State is saved; re-run \`sparra build\` to resume from where it stopped.`);
+    return { passed, failed, budgetExceeded: budgetHalted, total: items.length, runId };
+  }
+
   b.build.currentItem = undefined;
   await ctx.store.transition("done", true);
 

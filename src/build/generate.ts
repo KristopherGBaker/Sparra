@@ -2,6 +2,7 @@ import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
+import type { LimitHit } from "../sdk/backend.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { extractJsonWhere } from "../util/extract.ts";
@@ -25,6 +26,8 @@ export interface GenerateOutput {
   deviations: Deviation[];
   sessionId: string;
   hitMaxTurns: boolean;
+  /** Set when the session failed on a provider rate/usage limit — the build loop waits + retries. */
+  limitHit?: LimitHit;
   costUsd: number;
   tokens: number;
 }
@@ -112,6 +115,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     deviations,
     sessionId: res.sessionId,
     hitMaxTurns: res.hitMaxTurns,
+    limitHit: res.limitHit,
     costUsd: res.costUsd,
     tokens: res.tokens,
   };
