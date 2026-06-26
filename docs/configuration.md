@@ -36,7 +36,7 @@ rubric:
 
 pivot: { N: 3, threshold: 50 }             # GAN restart after N rounds below threshold on one criterion
 
-contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 4 }   # upper guide, scaled per item
+contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 6 }   # upper guide, scaled per item
 
 build:
   maxRoundsPerItem: 6

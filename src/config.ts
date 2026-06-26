@@ -243,7 +243,10 @@ export function defaultConfig(): SparraConfig {
     },
     pivot: { N: 3, threshold: 50 },
     // Range is an upper guide, scaled down per item — small items use far fewer.
-    contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 4 },
+    // maxNegotiationRounds 6: meaty items (foundational data models, etc.) often still have
+    // genuine evaluator objections open at 4 → force-agree with real gaps. Contract rounds are
+    // cheap text (no build); 6 lets the negotiation actually converge before the expensive build.
+    contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 6 },
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
