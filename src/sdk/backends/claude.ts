@@ -59,6 +59,10 @@ class ClaudeBackend implements AgentBackend {
       cwd: req.cwd,
       permissionMode,
       settingSources: [], // isolate from ambient user/project settings; FS state is explicit
+      strictMcpConfig: true, // only Sparra's own MCP (the exerciser); ignore ambient/config MCP.
+      // NB: settingSources:[]+strictMcpConfig still don't suppress auto-fetched claude.ai cloud
+      // connectors (Drive/Gmail/Calendar), so the PreToolUse deny-hook (denyAmbientMcp) is the
+      // authoritative block — it rejects any mcp__* call that isn't mcp__exercise__*.
     };
     if (req.effort) options.effort = req.effort;
     if (req.additionalDirectories) options.additionalDirectories = req.additionalDirectories;

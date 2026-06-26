@@ -29,7 +29,7 @@ No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.
 
 - **Verify SDK signatures against the installed `.d.ts`** (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`, `@openai/codex-sdk/dist/index.d.ts`), never from memory.
 - **Safety:** autonomous roles never use `bypassPermissions`; permission default is `auto` (SDK classifier if available, else `acceptEdits`) with a deny-hook (Claude) / OS sandbox (Codex). Sparra **never commits to the user's main branch** — existing repos build on a git worktree/branch, which is the hard outer boundary.
-- **Isolation:** the Claude backend runs with `settingSources: []` (no ambient/parent-project leak); declared skills load via a scoped throwaway local plugin. State is explicit on disk.
+- **Isolation:** the Claude backend runs with `settingSources: []` + `strictMcpConfig: true` (no ambient/parent-project leak); declared skills load via a scoped throwaway local plugin. State is explicit on disk. Note `settingSources: []` does **not** suppress auto-fetched claude.ai cloud connectors (Drive/Gmail/Calendar) — the PreToolUse deny-hook (`denyAmbientMcp`) is the authoritative block: every guard rejects any `mcp__*` call that isn't `mcp__exercise__*`. Keep that deny in place.
 - **Holdout wall is enforced in code** — a leak of `HOLDOUT.md` into generator/contract prompts throws; keep it that way.
 - **Backends are per-role and capability-driven** — read `capabilities`, use the richest path, degrade. New backend = implement `AgentBackend`, `registerBackend`, import for side effect in `session.ts`.
 

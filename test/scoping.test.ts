@@ -7,6 +7,7 @@ import {
   denyAnyWrite,
   denyBash,
   denyBashMutation,
+  denyAmbientMcp,
   writeScopeViolations,
 } from "../src/sdk/scoping.ts";
 
@@ -164,5 +165,22 @@ describe("firstDeny", () => {
   it("skips null deciders and returns the first matching one", () => {
     const deciders = [() => null, (t: string) => (t === "Edit" ? "No edits" : null)];
     expect(firstDeny("Edit", {}, deciders)).toBe("No edits");
+  });
+});
+
+describe("denyAmbientMcp (block leaked claude.ai connectors)", () => {
+  it("denies claude.ai cloud connector tools", () => {
+    expect(denyAmbientMcp("mcp__claude_ai_Google_Drive__search_files")).toMatch(/not available/);
+    expect(denyAmbientMcp("mcp__claude_ai_Gmail__authenticate")).toMatch(/not available/);
+    expect(denyAmbientMcp("mcp__pencil__batch_design")).toMatch(/not available/);
+  });
+  it("allows Sparra's own exercise MCP", () => {
+    expect(denyAmbientMcp("mcp__exercise__run_command")).toBeNull();
+    expect(denyAmbientMcp("mcp__exercise__http_request")).toBeNull();
+  });
+  it("ignores non-MCP built-in tools", () => {
+    expect(denyAmbientMcp("Read")).toBeNull();
+    expect(denyAmbientMcp("Bash")).toBeNull();
+    expect(denyAmbientMcp("Write")).toBeNull();
   });
 });

@@ -40,6 +40,19 @@ export function denyAnyWrite(toolName: string): string | null {
   return WRITE_TOOLS.has(toolName) ? `Read-only phase: ${toolName} is not permitted.` : null;
 }
 
+/**
+ * Deny ambient MCP tools that leak into a session despite `settingSources: []` — most
+ * notably claude.ai cloud connectors (Google Drive, Gmail, Calendar), which are auto-fetched
+ * from the logged-in account rather than from a settings file. Sparra's own in-process
+ * server (`mcp__exercise__*`) is the only MCP an autonomous build agent should ever call.
+ */
+export function denyAmbientMcp(toolName: string): string | null {
+  if (toolName.startsWith("mcp__") && !toolName.startsWith("mcp__exercise__")) {
+    return `MCP tool "${toolName}" is not available to Sparra build agents (ambient connectors are blocked; only the exercise tools are allowed).`;
+  }
+  return null;
+}
+
 /** Deny dangerous Bash by substring match. */
 export function denyBash(toolName: string, input: any, denyContains: string[]): string | null {
   if (toolName !== "Bash") return null;

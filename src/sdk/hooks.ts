@@ -1,5 +1,6 @@
 import type { HookCallbackMatcher, HookEvent, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import {
+  denyAmbientMcp,
   denyAnyWrite,
   denyBash,
   denyBashMutation,
@@ -59,6 +60,7 @@ export function mergeHooks(...configs: HookConfig[]): HookConfig {
 /** Writer scoped to writeRoots; blocks out-of-scope writes and dangerous Bash. */
 export function scopedWriterHooks(writeRoots: string[], denyBashContains: string[]): HookConfig {
   return makeDenyHook([
+    (t) => denyAmbientMcp(t),
     (t, i) => denyWriteOutsideRoots(t, i, writeRoots),
     (t, i) => denyBash(t, i, denyBashContains),
   ]);
@@ -67,6 +69,7 @@ export function scopedWriterHooks(writeRoots: string[], denyBashContains: string
 /** Writer permitted to touch only one file (e.g. PLAN.md); blocks Bash mutation. */
 export function singleFileHooks(allowedFile: string, denyBashContains: string[]): HookConfig {
   return makeDenyHook([
+    (t) => denyAmbientMcp(t),
     (t, i) => denyWriteNotFile(t, i, allowedFile),
     (t, i) => denyBashMutation(t, i, denyBashContains),
   ]);
@@ -74,12 +77,13 @@ export function singleFileHooks(allowedFile: string, denyBashContains: string[])
 
 /** Read-only: blocks every write and any Bash mutation. */
 export function readOnlyHooks(denyBashContains: string[]): HookConfig {
-  return makeDenyHook([(t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains)]);
+  return makeDenyHook([(t) => denyAmbientMcp(t), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains)]);
 }
 
 /** Evaluator: blocks source writes, but allows Bash to exercise the artifact (minus dangerous patterns). */
 export function evaluatorHooks(denyBashContains: string[]): HookConfig {
   return makeDenyHook([
+    (t) => denyAmbientMcp(t),
     (t) => (denyAnyWrite(t) ? `Evaluator does not edit source (${t} blocked). Exercise via Bash / the exercise tools.` : null),
     (t, i) => denyBash(t, i, denyBashContains),
   ]);
