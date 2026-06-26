@@ -7,6 +7,7 @@ Sparra builds and **exercises a real running Apple-platform app** (not just a di
 - **`xcodebuildmcp`** CLI: `brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp` (or `npm i -g xcodebuildmcp@latest`).
 - **XcodeGen**: `brew install xcodegen` (projects are defined by `project.yml`, not a hand-authored `.pbxproj`).
 - *(optional)* **SwiftFormat** + **SwiftLint** for format-on-write: `brew install swiftformat swiftlint`.
+- *(optional)* **xcbeautify**: `brew install xcbeautify`. When present, the guidance has the agent pipe raw `xcodebuild` through `xcbeautify -qq` (with `set -o pipefail`) for concise build logs — fewer tokens, easier to read; it re-runs verbose to diagnose a failure. Absent → plain `xcodebuild`.
 
 ## Config
 ```yaml

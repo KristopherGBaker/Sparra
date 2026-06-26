@@ -53,7 +53,7 @@ export function iosGuidance(config: SparraConfig): string {
   const schemeHint = scheme ? `"${scheme}"` : "(discover it with the CLI)";
   const simHint = simulator || "(pick an available simulator)";
   if (!cli.trim()) {
-    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL. Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
+    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL. Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
   }
   return `This is an Apple-platform app (iOS/macOS/etc.). EXERCISE the real running app — never grade the diff.
 
@@ -68,6 +68,7 @@ Build & run (scheme: ${schemeHint}, simulator: "${simHint}"):
 - If the project is defined with XcodeGen (a project.yml is present) and the .xcodeproj is missing or stale, run \`xcodegen generate\` first.
 - Prefer the combined build-and-run for simulator run intent; do not chain build then build-and-run. For macOS, build and launch the .app.
 - Build into a TEMPORARY derived-data path (e.g. \`-derivedDataPath "$(mktemp -d)"\`) — do not write build output into the project directory.
+- If you fall back to raw \`xcodebuild\`, pipe it through \`xcbeautify -qq\` for concise logs: \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still fails the command). Re-run without \`-qq\`/xcbeautify for full output when a build error needs diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it. (\`xcbeautify\` also tidies \`swift build\`/\`swift test\` output.)
 - Native builds can exceed 60s — pass a generous timeout_ms to run_command (up to the 600000 max).
 
 For UI changes (the important part — you are MULTIMODAL, use it):
