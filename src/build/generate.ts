@@ -67,7 +67,7 @@ export async function generateItem(args: {
   });
   const map = await readText(ctx.paths.frozenMap);
   const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
-  const conventions = isApplePlatform(ctx) ? `\n${appleConventions()}\n` : "";
+  const conventions = isApplePlatform(ctx) ? `\n${appleConventions(ctx.config.exercise.ios.platform)}\n` : "";
 
   const task = `Implement work item ${item.id}: ${item.title}
 

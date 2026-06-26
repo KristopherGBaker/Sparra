@@ -49,9 +49,12 @@ function block(text: string) {
  * (Sparra runs with settingSources:[], so the user's own CLI skill is not loaded).
  */
 export function iosGuidance(config: SparraConfig): string {
-  const { cli, scheme, simulator } = config.exercise.ios;
+  const { cli, scheme, simulator, platform } = config.exercise.ios;
   const schemeHint = scheme ? `"${scheme}"` : "(discover it with the CLI)";
   const simHint = simulator || "(pick an available simulator)";
+  // macOS apps have NO simulator: build & run the .app on the host, and observe/drive the UI
+  // via an XCUITest target (the simulator screenshot/ui-automation tooling does not apply).
+  if (platform === "macos") return macosGuidance(cli, schemeHint);
   if (!cli.trim()) {
     return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL. Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
   }
@@ -80,6 +83,34 @@ For UI changes (the important part — you are MULTIMODAL, use it):
 - Capture logs when behavior is dynamic.
 
 Every UI assertion in the contract must be backed by a screenshot you viewed or a hierarchy entry you found. No evidence → FAIL.`;
+}
+
+/**
+ * Guidance for a macOS app (no simulator). xcodebuildmcp's screenshot / ui-automation suite is
+ * SIMULATOR-ONLY, and its `macos` workflow has no UI tools — so a Mac app's UI is observed and
+ * driven through an XCUITest target (run via `macos test`), whose XCUIScreenshots we extract from
+ * the .xcresult and READ, plus a live `screencapture`. XCUITest is the deterministic spine;
+ * AX/osascript synthetic events are avoided (they need interactive Accessibility permission).
+ */
+function macosGuidance(cli: string, schemeHint: string): string {
+  const drive = cli.trim() ? `the \`${cli}\` macos workflow via run_command` : "xcodebuild + the macOS tools";
+  return `This is a macOS app (no iOS Simulator — you build and run the real \`.app\` on THIS Mac). EXERCISE the running app — never grade the diff.
+
+Drive ${drive}. xcodebuildmcp's \`screenshot\`/\`ui-automation\` tools are SIMULATOR-ONLY and DO NOT work here; its \`macos\` workflow (build / build-and-run / launch / stop / test / get-app-path) does. It is HELP-FIRST — discover commands/args from the CLI (\`${cli || "xcodebuild"} --help\`, \`${cli} macos --help\`) rather than guessing; if \`${cli}\` is missing, fall back to raw \`xcodebuild\` and say so in notes (don't fail over tooling).
+
+Build & run (scheme: ${schemeHint}):
+- If a project.yml is present (XcodeGen) and the .xcodeproj is missing/stale, run \`xcodegen generate\` first.
+- Build into a TEMPORARY derived-data path (\`-derivedDataPath "$(mktemp -d)"\`); don't write build output into the project dir. Pipe raw \`xcodebuild\` through \`xcbeautify -qq\` — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a failure still fails; re-run verbose to diagnose; plain xcodebuild if xcbeautify is absent).
+- Native builds are slow — pass a generous timeout_ms (up to the 600000 max).
+- Launch with any required env/launch-args (e.g. a sample-data flag the contract names) by running the binary directly: \`ENV=1 "<app>/Contents/MacOS/<exe>" &\` (get <app> via \`${cli} macos get-app-path\` or the build settings), or via the CLI's macos launch.
+
+Observe & DRIVE the UI — the macOS way (you are MULTIMODAL; use it):
+- DETERMINISTIC SPINE = XCUITest. Run the app's UI-test target (\`${cli} macos test\`, or \`set -o pipefail; xcodebuild test -scheme ${schemeHint} -only-testing:<UITestTarget> -resultBundlePath "$(mktemp -d)/r.xcresult" -destination 'platform=macOS' | xcbeautify -qq\`). XCUITest drives the real app — \`XCUIApplication\`, element queries, and \`.typeKey\`/\`.typeText\` for keyboard flows (Space/Delete/arrows) — and asserts. Pass/fail rides on these results. A committed UI test that crashes or doesn't run AS SHIPPED is a real defect (BROKEN HARNESS), not a pass.
+- READ the visual evidence: XCUITest attaches \`XCUIScreenshot\`s — extract them from the .xcresult (\`xcrun xcresulttool export attachments --path <r>.xcresult --output-path <dir>\`, or \`xcrun xcresulttool get --path <r>.xcresult --format json\` to find attachment ids) and OPEN the PNGs with the Read tool. Actually LOOK: layout, spacing, states, and whether it matches the contract.
+- LIVE visual sanity: with the app launched, \`screencapture -x -o <file>\` (whole screen) or window-targeted (\`-l<windowID>\` from \`CGWindowListCopyWindowInfo\`/\`osascript\`) into a TEMP dir, then Read it. Screenshots justify taste; XCUITest assertions justify pass/fail.
+- Capture logs when behavior is dynamic. Don't rely on AX/osascript synthetic events as the drive mechanism (they need interactive Accessibility permission and are unreliable headless) — use XCUITest.
+
+Every UI assertion in the contract must be backed by an XCUITest assertion you ran or a screenshot you viewed. No evidence → FAIL.`;
 }
 
 /**

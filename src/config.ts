@@ -209,9 +209,13 @@ export interface SparraConfig {
      *   cli       the executable to drive (default "xcodebuildmcp"; preferred over
      *             raw xcodebuild/xcrun/simctl). Empty → use raw Apple tooling.
      *   scheme    the Xcode scheme to build/run.
-     *   simulator the simulator name (e.g. "iPhone 16").
+     *   simulator the simulator name (e.g. "iPhone 16"). (iOS only.)
+     *   platform  "ios" (Simulator: simctl/ui-automation screenshots) or "macos" (no
+     *             simulator — build & run the .app on the host; UI is observed/driven via an
+     *             XCUITest target run with `macos test` + xcresult screenshots, plus
+     *             screencapture). Default "ios".
      */
-    ios: { cli: string; scheme: string; simulator: string };
+    ios: { cli: string; scheme: string; simulator: string; platform: "ios" | "macos" };
   };
 
   deviation: {
@@ -295,7 +299,7 @@ export function defaultConfig(): SparraConfig {
       existingTestCommand: "",
       customRecipe: "",
       web: { startCommand: "", baseUrl: "http://localhost:3000" },
-      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }, // simulator: "" → auto-discover an available one
+      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "", platform: "ios" }, // simulator: "" → auto-discover; platform: "macos" for a Mac app
     },
     deviation: { strictness: "moderate" },
     review: { enabled: false, blockOn: "high" },

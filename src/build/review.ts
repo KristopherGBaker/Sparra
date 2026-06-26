@@ -68,7 +68,7 @@ export async function reviewItem(args: {
 
   const conventions =
     (map ? `CONVENTIONS (CODEBASE_MAP — the change must conform to these):\n---\n${map.slice(0, 5000)}\n---\n` : "") +
-    (isApplePlatform(ctx) ? `APPLE/SWIFT HOUSE CONVENTIONS the code should follow:\n---\n${appleConventions()}\n---\n` : "");
+    (isApplePlatform(ctx) ? `APPLE/SWIFT HOUSE CONVENTIONS the code should follow:\n---\n${appleConventions(ctx.config.exercise.ios.platform)}\n---\n` : "");
 
   const task = `Code-review work item ${item.id}: ${item.title} (round ${round}).
 

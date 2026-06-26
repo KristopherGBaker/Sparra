@@ -129,9 +129,15 @@ Needs `npm i @openai/codex-sdk` + the `codex` CLI (auth from `~/.codex`).
 
 ### iOS / macOS
 `mechanism: ios` drives `xcodebuildmcp`; the multimodal evaluator screenshots the running
-app and reads it. Needs Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`. The generated
-project MUST set a launch screen (`INFOPLIST_KEY_UILaunchScreen_Generation: YES`) or the
-app letterboxes at 320×480 and UI automation misses. Full guide: `docs/ios.md`.
+app and reads it. Needs Xcode + `xcodebuildmcp` + `xcodegen`. Set **`exercise.ios.platform`**:
+- **`ios`** (default) — iOS Simulator; UI via simctl/ui-automation. The project MUST set a launch
+  screen (`INFOPLIST_KEY_UILaunchScreen_Generation: YES`) or the app letterboxes at 320×480 and
+  UI automation misses.
+- **`macos`** — no simulator: the `.app` runs on the host and the UI is verified via an **XCUITest**
+  target (`macos test`) + `xcresulttool` screenshots + `screencapture` (xcodebuildmcp's screenshot/
+  ui-automation is simulator-only). The generator includes a UI-test target.
+
+Full guide: `docs/ios.md`.
 
 ### Holdout / isolation wall
 Author acceptance checks in `HOLDOUT.md`; only the evaluator sees them (enforced in code).

@@ -12,9 +12,13 @@ export function isApplePlatform(ctx: Ctx): boolean {
  * into contract assertions: "done" is still graded on observable behavior + the
  * build/lint/test gates, never on internal style (that's the over-spec trap).
  */
-export function appleConventions(): string {
+export function appleConventions(platform: "ios" | "macos" = "ios"): string {
+  const macVerify =
+    platform === "macos"
+      ? `\n- macOS verification: a Mac app has NO simulator, so Sparra observes/drives its UI through an XCUITest UI-test target — INCLUDE ONE. It must launch the app via \`XCUIApplication\` (honoring any sample-data launch flag the plan names), drive the key flows (including keyboard: \`.typeKey\`/\`.typeText\` for Space/Delete/arrows), assert on \`XCUIElement\` queries, and attach \`XCUIScreenshot\`s. A UI with no automatable test target cannot be verified — treat the UI-test target as part of "done", run via \`xcodebuild test\`/\`<cli> macos test\`.`
+      : "";
   return `APPLE/SWIFT HOUSE CONVENTIONS — this is an Apple-platform project; build it the way the surrounding apps are built:
-- Project: XcodeGen is authoritative — edit project.yml and run \`xcodegen generate\`; never hand-edit the .pbxproj. An iOS app target MUST configure a launch screen (\`INFOPLIST_KEY_UILaunchScreen_Generation: "YES"\` or a \`UILaunchScreen: {}\` Info.plist entry) or the app letterboxes. Swift 6.2.
+- Project: XcodeGen is authoritative — edit project.yml and run \`xcodegen generate\`; never hand-edit the .pbxproj. An iOS app target MUST configure a launch screen (\`INFOPLIST_KEY_UILaunchScreen_Generation: "YES"\` or a \`UILaunchScreen: {}\` Info.plist entry) or the app letterboxes. Swift 6.2.${macVerify}
 - Concurrency: keep strict-concurrency CLEAN (zero warnings). Use \`@Observable\` + \`@MainActor\` for view/coordinator state — typically a single \`AppModel\` injected via \`@Environment\`; use \`actor\`s for long-lived services; never pass \`inout\` across an actor boundary (return new values).
 - Structure: organize app code BY FEATURE (e.g. \`Notes/\`, \`Editor/\`, \`Settings/\`), not by layer. Put pure, UI-free logic in a Swift package (\`Sources/<Kit>/\`, \`Tests/<Kit>Tests/\`); dependency direction is app → packages, never the reverse. As a type approaches ~250 lines, split it into \`Type+Area.swift\` extension files.
 - Tests: use Swift Testing (\`import Testing\`, \`@Test\`, \`#expect\`) — NOT XCTest. Cover real edge cases and failure paths, not vanity coverage; keep pure logic testable without mocks.

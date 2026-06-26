@@ -1,6 +1,10 @@
 # iOS / macOS projects
 
-Sparra builds and **exercises a real running Apple-platform app** (not just a diff): it builds, launches in the Simulator, drives the UI, screenshots it, and — because the evaluator is **multimodal** — *reads the screenshot* to judge it, plus the `describe-ui` accessibility hierarchy for deterministic assertions. So it can verify UI changes, not just that the app compiles.
+Sparra builds and **exercises a real running Apple-platform app** (not just a diff): it builds, launches the app, drives the UI, screenshots it, and — because the evaluator is **multimodal** — *reads the screenshot* to judge it, plus a UI hierarchy for deterministic assertions. So it can verify UI changes, not just that the app compiles.
+
+Two platforms, set by **`exercise.ios.platform`**:
+- **`ios`** (default) — runs in the **iOS Simulator**; UI is screenshotted/driven via `xcodebuildmcp`'s simulator tooling (`simctl`, `snapshot-ui`/`describe-ui`, tap/type).
+- **`macos`** — a Mac app has **no simulator**: the `.app` is built and run **on the host**. xcodebuildmcp's screenshot/ui-automation suite is simulator-only, so the UI is observed/driven through an **XCUITest** target (run via `macos test`), with `XCUIScreenshot`s extracted from the `.xcresult` and a live `screencapture`. See [macOS apps](#macos-apps-no-simulator).
 
 ## Prerequisites (macOS)
 - **Xcode** + an **iOS Simulator** (the evaluator's shell runs locally; in a container/CI without Xcode the mechanism degrades to a warning).
@@ -16,7 +20,8 @@ exercise:
   ios:
     cli: xcodebuildmcp     # default; "" → raw xcrun/xcodebuild
     scheme: ""             # "" → the evaluator discovers it
-    simulator: ""          # "" → auto-discover an available one (or pin e.g. "iPhone 17")
+    simulator: ""          # "" → auto-discover an available one (or pin e.g. "iPhone 17"); iOS only
+    platform: ios          # "ios" (Simulator) or "macos" (run the .app on the host; verify via XCUITest)
   runExistingTests: true   # existing projects: new failures = hard fail
 
 format:
@@ -30,6 +35,14 @@ On `mechanism: ios` the generator is given the house Swift conventions automatic
 - **XcodeGen is authoritative** — edit `project.yml`, run `xcodegen generate`; never hand-edit the `.pbxproj`. The exerciser regenerates from `project.yml` if the `.xcodeproj` is missing/stale.
 - **A launch screen is mandatory** — `INFOPLIST_KEY_UILaunchScreen_Generation: "YES"` (or a `UILaunchScreen: {}` Info.plist entry). Without it the app runs **letterboxed at 320×480 with black bars**, reports wrong screen metrics, and **breaks coordinate-based UI automation** (taps land off-target). The evaluator treats a legacy/letterboxed frame as an app defect, not a tooling glitch.
 - Idiomatic modern SwiftUI (`@Observable`/`@MainActor`, value types), **Swift Testing** (not XCTest), persistence behind a store/repository seam, no code signing for simulator builds.
+
+## macOS apps (no simulator)
+Set `exercise.ios.platform: macos`. A Mac app runs on the host, and xcodebuildmcp's `screenshot`/`ui-automation` tools are **simulator-only** (its `macos` workflow has build/launch/`stop`/`test` but no UI tools). So Sparra verifies a Mac UI through **XCUITest**, not simulator screenshots:
+
+- **The generator must include an XCUITest UI-test target** (the house conventions tell it to on `platform: macos`). It launches the app via `XCUIApplication` (honoring any sample-data launch flag the plan names), drives flows including the keyboard (`.typeKey`/`.typeText`), asserts on `XCUIElement` queries, and attaches `XCUIScreenshot`s. A Mac UI with no automatable test target can't be verified.
+- **The evaluator** runs that target (`<cli> macos test` / `xcodebuild test -destination 'platform=macOS'`), grades on its pass/fail, **extracts the screenshots** from the `.xcresult` (`xcrun xcresulttool export attachments …`) and *reads* them, and takes a live `screencapture` for a visual sanity check. XCUITest assertions justify pass/fail; screenshots justify taste.
+- AX/`osascript` synthetic events are deliberately **not** the drive mechanism — they need interactive Accessibility (TCC) permission and are unreliable headless.
+- No launch-screen/letterbox concern (that's iOS-only); the standard build-flag/sandbox conventions still apply.
 
 ## Gotchas
 - **Builds are slow** — the exercise command timeout allows up to 10 minutes; building + booting a sim every round costs time/tokens.

@@ -66,7 +66,7 @@ exercise:
   existingTestCommand: ""      # auto-detected from CODEBASE_MAP.md if empty
   customRecipe: ""
   web: { startCommand: "", baseUrl: "http://localhost:3000" }
-  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "" }   # see docs/ios.md
+  ios: { cli: "xcodebuildmcp", scheme: "", simulator: "", platform: "ios" }   # platform: "macos" runs the .app on the host + verifies via XCUITest; see docs/ios.md
 
 deviation: { strictness: moderate }        # strict | moderate | free (defaulted by mode)
 
