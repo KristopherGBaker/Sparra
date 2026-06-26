@@ -408,6 +408,40 @@ export async function seedPrompts(paths: Paths): Promise<void> {
   }
 }
 
+export type PromptState = "same" | "drifted" | "missing";
+
+/**
+ * Compare each on-disk role prompt to the built-in default. Drift is expected and often
+ * intentional (your edits, or `reflect`'s) — but it also happens when Sparra's defaults improve
+ * after a project was `init`ed, leaving the local copy stale. Callers surface it, never auto-fix.
+ */
+export async function promptDrift(paths: Paths): Promise<Array<{ role: string; state: PromptState }>> {
+  const out: Array<{ role: string; state: PromptState }> = [];
+  for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
+    const fromDisk = await readText(paths.promptFile(role));
+    const state: PromptState = !fromDisk ? "missing" : fromDisk.trim() === body.trim() ? "same" : "drifted";
+    out.push({ role, state });
+  }
+  return out;
+}
+
+/**
+ * Overwrite on-disk role prompts with the current built-in defaults. With no `roles`, syncs every
+ * drifted/missing role; pass `roles` to target specific ones. Returns the roles written. This
+ * DISCARDS local edits (including reflect's) — the caller must make that explicit to the user.
+ */
+export async function syncPrompts(paths: Paths, opts: { roles?: string[] } = {}): Promise<string[]> {
+  const drift = await promptDrift(paths);
+  const target = new Set(opts.roles ?? drift.filter((d) => d.state !== "same").map((d) => d.role));
+  const written: string[] = [];
+  for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
+    if (!target.has(role)) continue;
+    await writeText(paths.promptFile(role), body + "\n");
+    written.push(role);
+  }
+  return written;
+}
+
 /** Load a role prompt from disk (falls back to the built-in default). */
 export async function loadPrompt(paths: Paths, role: string): Promise<string> {
   const file = paths.promptFile(role);

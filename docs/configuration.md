@@ -102,7 +102,9 @@ your-project/
    ├─ contracts/       # negotiated "done" contracts
    ├─ verdicts/        # evaluator scores + assertion pass/fail with evidence
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)
-   ├─ prompts/         # editable role system prompts (reflect diffs these)
+   ├─ prompts/         # editable role system prompts (reflect diffs these); seeded from the
+   │                   #   built-in defaults at init — can go stale as Sparra improves. Compare/
+   │                   #   adopt with `sparra prompts status` / `sparra prompts sync`.
    ├─ calibration/     # good/ vs slop/ reference samples
    ├─ reflect/         # proposed prompt diffs awaiting approval
    ├─ traces/<run>/    # full transcripts per role, as markdown

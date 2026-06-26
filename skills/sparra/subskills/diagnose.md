@@ -83,6 +83,7 @@ check the latest trace and the contract file for an error (often a session-level
 | **A previously-green required check now fails / passes only on rerun** | Determinism gate: the evaluator reruns gating checks and an artifact-caused flake is a defect, not "environmental" | Fix the *artifact* (stabilize the race / debounce / isolate state) — rerun-to-green won't pass it. See the verdict's notes for the diagnosed cause. |
 | **`git.autoCommit: true` but no commits appear** | Not on a Sparra branch — `inplace` strategy or a non-git / no-history dir never auto-commits (safety) | Use `git.strategy: worktree` (or `branch`) on a real repo; commits land on `sparra/<runId>`, never main. |
 | **A configured skill has no effect / "skill … not found" warning** | The name didn't resolve, or the role doesn't receive it | Check the name matches a `SKILL.md` dir under repo `skills/`, `~/.claude/skills`, or `~/.agents/skills`; builder roles inherit `build.skills`, others need `roles.<role>.skills`. |
+| **A Sparra prompt fix you expected isn't taking effect** (build still does the old behavior); or build logs "N role prompt(s) differ from the built-in defaults" | `.sparra/prompts/` was seeded at `init` and is now **stale** vs the improved defaults (the build reads the local copies). Or the drift is your/`reflect`'s intentional edits | `sparra prompts status` to see which drifted; `sparra prompts sync` (or `--role <r>`) to adopt the current defaults. Skip if the drift is intentional. Mid-run is fine — prompts are read per role invocation. |
 
 ## Clean re-runs
 

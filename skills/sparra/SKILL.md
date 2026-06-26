@@ -54,6 +54,8 @@ sparra prototype "…"   # optional throwaway spike → FINDINGS.md
 sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOUT) as build input
 sparra build           # the autonomous generator↔evaluator loop
 sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
+sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
+sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
 sparra status          # where am I / what's next
 sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan
 sparra resume          # continue whatever phase, from .sparra/state.json

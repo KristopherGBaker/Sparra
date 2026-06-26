@@ -19,6 +19,7 @@ import { updateStreaksAndDecide } from "../build/pivot.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
 import { appendLearning, readMemory } from "../memory.ts";
+import { promptDrift } from "../prompts.ts";
 import type { WorkItem } from "../build/types.ts";
 
 /** Injectable seams so the build orchestration is testable without the SDK/git. */
@@ -80,6 +81,20 @@ export async function cmdBuild(
   if (!exists(ctx.paths.frozenPlan) && !exists(ctx.paths.plan)) {
     warn("No plan found to build from.");
     return { passed: 0, failed: 0, budgetExceeded: 0, total: 0, runId: "" };
+  }
+
+  // Surface prompt drift once at build start. Often intentional (your edits / reflect), so this is
+  // an informational note, not a warning — but it also catches local prompts left stale after a
+  // Sparra prompt improvement (the role prompts the build is about to run come from .sparra/prompts/).
+  if (!opts.quiet) {
+    const drifted = (await promptDrift(ctx.paths)).filter((p) => p.state !== "same");
+    if (drifted.length) {
+      info(
+        `Note: ${drifted.length} role prompt(s) differ from the built-in defaults ` +
+          `(${drifted.map((p) => p.role).join(", ")}) — fine if intentional (your edits / reflect); ` +
+          `if stale after a Sparra update, run \`sparra prompts sync\`.`
+      );
+    }
   }
 
   // Run id + workspace (resumable).

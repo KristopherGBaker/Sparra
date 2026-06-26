@@ -12,6 +12,7 @@ import { cmdReflect } from "./phases/reflect.ts";
 import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
 import { cmdNew } from "./phases/new.ts";
+import { cmdPrompts } from "./phases/prompts.ts";
 
 interface Args {
   positionals: string[];
@@ -55,6 +56,7 @@ ${color.bold("Commands")}
   freeze                                        FREEZE GATE: lock the plan as build input (your decision)
   build [--fresh] [--only <item-id>]            Phase C: autonomous generator/evaluator loop (resumable)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
+  prompts [status|sync] [--role <r>] [--dry-run] compare/sync .sparra/prompts with the built-in defaults
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
@@ -114,6 +116,9 @@ async function main(): Promise<void> {
       break;
     case "status":
       cmdStatus(ctx);
+      break;
+    case "prompts":
+      await cmdPrompts(ctx, positionals.slice(1), flags);
       break;
     case "new":
       await cmdNew(ctx, positionals.slice(1).join(" "));
