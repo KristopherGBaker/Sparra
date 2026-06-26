@@ -109,6 +109,9 @@ the artifact. Use the FEWEST that fully capture "done" for THIS item (roughly
 {{ASSERTION_MIN}}–{{ASSERTION_MAX}} as an upper guide; a scaffold or stub needs only a
 handful — do NOT pad to hit a number). Avoid vague assertions ("works well"); prefer
 "running \`tool add 2 3\` prints \`5\` and exits 0".
+Write the whole contract TERSELY — a checkable checklist, not prose. Prefer conciseness over
+complete sentences or proper grammar (telegraphic is good); every word costs evaluator reading
+time. Keep meaning unambiguous, drop everything else.
 
 PROPORTIONALITY & RELEVANCE — assertions are a definition of DONE for a human, not a
 compliance audit. Hold yourself to these:
@@ -213,6 +216,8 @@ Critique the contract on:
 {{MODE_CLAUSES}}
 
 List your required changes as a numbered list (including assertions to CUT). Be specific.
+Also push for CONCISENESS: a contract is a terse checklist, not prose — flag wordy/padded
+assertions and prefer telegraphic phrasing (even ungrammatical) as long as it stays checkable.
 If — and only if — the contract is faithful, proportionate, and satisfiable, end your
 message with the exact line: CONTRACT: AGREED. Do not agree prematurely — but a bloated
 contract that gates on trivia is just as much your failure as a weak one. If you are forced
