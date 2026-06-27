@@ -47,7 +47,8 @@ const HELP = `${color.bold("sparra")} — autonomous build harness on the Claude
 ${color.bold("Flow:")}  0 ORIENT → A PLAN ⇄ B PROTOTYPE → freeze → C BUILD → reflect
 
 ${color.bold("Commands")}
-  init [--mode greenfield|existing] [--force]   detect project type, scaffold .sparra/
+  init [--mode greenfield|existing] [--force] [--docs <dir>]
+                                                detect project type, scaffold .sparra/ (--docs: subfolder for PLAN.md etc.)
   orient [--light]                              Phase 0: map an existing codebase → CODEBASE_MAP.md
   plan                                          Phase A: collaborative planning interview (co-edit PLAN.md)
   prototype "<idea>"                            Phase B: throwaway prototype in isolation
@@ -79,7 +80,11 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "init") {
-    await cmdInit(root, { mode: flags.mode as Mode | undefined, force: !!flags.force });
+    await cmdInit(root, {
+      mode: flags.mode as Mode | undefined,
+      force: !!flags.force,
+      docs: typeof flags.docs === "string" ? flags.docs : undefined,
+    });
     return;
   }
 

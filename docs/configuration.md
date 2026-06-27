@@ -89,17 +89,22 @@ batch: { K: 3 }
 - **`exercise.ios`** — full Apple-platform guide in [docs/ios.md](ios.md).
 - **`review`** — an optional agent code-review gate after the behavioral evaluator passes (a second lens for code quality the exerciser can't see). Off by default; see [build loop](build-loop.md#code-review-optional). Best with `roles.reviewer.backend` set to a *different* family than the generator.
 - **`build.skills` / `roles.*.skills`** — agent skills (SKILL.md) made available to a role. Builder roles (`generator`, `prototyper`) inherit `build.skills`; other roles (e.g. `evaluator`) opt in via their own `roles.<role>.skills`. Resolved from the repo's `skills/`, `~/.claude/skills`, or `~/.agents/skills` (or an explicit path). See [backends — skills](backends.md#skills). Example: `roles.evaluator.skills: ["xcodebuildmcp-cli"]` to give the iOS grader your build/run skill.
+- **`docsDir`** — subfolder (relative to the repo root) for the human-facing docs Sparra manages — `PLAN.md`, `CODEBASE_MAP.md`, `CHANGELOG.md`, `HOLDOUT.md`. `""` (default) keeps them at the root; e.g. `docs` puts them under `docs/` to keep the root uncluttered. Set it at `sparra init --docs <dir>` (it's baked into `config.yaml`); `.sparra/` machinery stays put regardless.
 - **`build.extraReadDirs`** — extra directories the build (generator **and** evaluator) may **read**, beyond the work dir and repo root — added to each backend's `additionalDirectories`. For large assets you don't want in git: pre-stage them once (e.g. a face-recognition model under `~/.cache/…`) and list the dir here, so the sandboxed build reads it **without committing it or opening network**. Paths may be absolute, `~`-prefixed, or relative to the repo root. (Codex grants read+write to these within its sandbox; Claude grants read with writes still gated — treat as read-only intent.)
 
 ## On-disk artifacts
 The filesystem is the source of truth and the only shared state — inspectable, diffable, resumable.
 
+The human-facing docs sit at the project root by default; set **`docsDir`** (or
+`sparra init --docs <dir>`) to tuck them into a subfolder like `docs/` and keep the
+root clean. `.sparra/` machinery is unaffected.
+
 ```
 your-project/
-├─ CODEBASE_MAP.md     # Phase 0 (existing only)
-├─ PLAN.md             # the living plan (Phase A); reconciled during build
-├─ HOLDOUT.md          # optional: evaluator-only acceptance checks (isolation wall)
-├─ CHANGELOG.md        # every deviation, with rationale
+├─ CODEBASE_MAP.md     # Phase 0 (existing only)   ┐
+├─ PLAN.md             # the living plan (Phase A)  │ at the root, or under
+├─ HOLDOUT.md          # evaluator-only (isolation) │ docsDir/ when set
+├─ CHANGELOG.md        # every deviation            ┘
 ├─ prototypes/         # throwaway prototypes (greenfield)
 └─ .sparra/
    ├─ config.yaml      # every knob

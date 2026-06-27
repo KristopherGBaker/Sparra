@@ -12,12 +12,14 @@ export interface Ctx {
 
 /** Load full context; throws if the project hasn't been `sparra init`-ed. */
 export async function loadCtx(root: string): Promise<Ctx> {
-  const paths = new Paths(root);
+  // config.yaml lives at root/.sparra (independent of docsDir), so load it first
+  // to learn the docs subfolder, then build Paths with it.
+  const config = await loadConfig(new Paths(root));
+  const paths = new Paths(root, config.docsDir);
   const store = await StateStore.load(paths);
   if (!store) {
     throw new Error(`Not a Sparra project (no .sparra/state.json). Run \`sparra init\` first.`);
   }
-  const config = await loadConfig(paths);
   return { root, paths, config, store };
 }
 

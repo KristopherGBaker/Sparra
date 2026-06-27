@@ -1,4 +1,4 @@
-import { writeDefaultConfig } from "../config.ts";
+import { loadConfig, writeDefaultConfig } from "../config.ts";
 import { detect } from "../detect.ts";
 import { Paths } from "../paths.ts";
 import { seedPrompts } from "../prompts.ts";
@@ -7,9 +7,12 @@ import { exists, writeText } from "../util/io.ts";
 import { banner, detail, info, ok, warn } from "../util/log.ts";
 import { isGitRepo } from "../util/git.ts";
 
-export async function cmdInit(root: string, opts: { mode?: Mode; force?: boolean }): Promise<void> {
+export async function cmdInit(root: string, opts: { mode?: Mode; force?: boolean; docs?: string }): Promise<void> {
   banner("sparra init");
-  const paths = new Paths(root);
+  // `--docs <dir>` sets the human-facing docs subfolder (PLAN.md, CODEBASE_MAP.md,
+  // CHANGELOG.md, HOLDOUT.md); on re-init, keep the already-configured one.
+  const docsDir = opts.docs ?? (await loadConfig(new Paths(root))).docsDir;
+  const paths = new Paths(root, docsDir);
 
   const existingStore = await StateStore.load(paths);
   if (existingStore && !opts.force) {
@@ -24,7 +27,7 @@ export async function cmdInit(root: string, opts: { mode?: Mode; force?: boolean
   if (d.signals.length === 0) detail("empty directory — clean greenfield");
 
   await paths.ensureScaffold();
-  await writeDefaultConfig(paths, d.mode);
+  await writeDefaultConfig(paths, d.mode, docsDir);
   await seedPrompts(paths);
 
   if (!exists(paths.plan)) {
@@ -47,6 +50,7 @@ export async function cmdInit(root: string, opts: { mode?: Mode; force?: boolean
 
   ok(`Scaffolded .sparra/ and seeded config + prompts.`);
   detail(`config: .sparra/config.yaml   prompts: .sparra/prompts/`);
+  if (docsDir) detail(`docs: ${docsDir}/ (PLAN.md, CODEBASE_MAP.md, CHANGELOG.md, HOLDOUT.md)`);
   if (d.mode === "existing") {
     if (!isGitRepo(root)) warn("Existing repo but no git detected — worktree/branch safety will fall back to in-place.");
     info("Next: `sparra orient` to map the codebase → CODEBASE_MAP.md");

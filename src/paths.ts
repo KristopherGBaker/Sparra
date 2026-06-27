@@ -3,21 +3,33 @@ import { ensureDir } from "./util/io.ts";
 
 /**
  * Canonical on-disk layout. The filesystem is Sparra's source of truth and the
- * only state shared between sessions. Key human-facing files live at the project
- * root; machinery lives under .sparra/.
+ * only state shared between sessions. Human-facing docs live in `docsDir`
+ * (the project root by default, or a subfolder like `docs/` set at `sparra init`);
+ * machinery lives under .sparra/.
  */
 export class Paths {
-  constructor(public readonly root: string) {}
+  /**
+   * @param root     project root
+   * @param docsDir  subfolder (relative to root) for human-facing docs, or "" for the root
+   */
+  constructor(
+    public readonly root: string,
+    public readonly docsDir: string = ""
+  ) {}
 
-  // --- root-level, human-facing ---
+  // --- human-facing docs (root by default, or `docsDir`) ---
+  /** Directory the human-facing docs live in (root when `docsDir` is empty). */
+  get docsBase() {
+    return this.docsDir ? path.join(this.root, this.docsDir) : this.root;
+  }
   get codebaseMap() {
-    return path.join(this.root, "CODEBASE_MAP.md");
+    return path.join(this.docsBase, "CODEBASE_MAP.md");
   }
   get plan() {
-    return path.join(this.root, "PLAN.md");
+    return path.join(this.docsBase, "PLAN.md");
   }
   get changelog() {
-    return path.join(this.root, "CHANGELOG.md");
+    return path.join(this.docsBase, "CHANGELOG.md");
   }
   get prototypes() {
     return path.join(this.root, "prototypes");
@@ -47,7 +59,7 @@ export class Paths {
   }
   /** Evaluator-only acceptance checks the generator never sees (isolation wall). */
   get holdout() {
-    return path.join(this.root, "HOLDOUT.md");
+    return path.join(this.docsBase, "HOLDOUT.md");
   }
   get frozenHoldout() {
     return path.join(this.frozen, "HOLDOUT.frozen.md");
@@ -114,6 +126,7 @@ export class Paths {
 
   async ensureScaffold(): Promise<void> {
     await Promise.all([
+      ensureDir(this.docsBase),
       ensureDir(this.dir),
       ensureDir(this.frozen),
       ensureDir(this.snapshots),

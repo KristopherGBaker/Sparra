@@ -242,6 +242,13 @@ export interface SparraConfig {
   };
 
   batch: { K: number };
+  /**
+   * Subfolder (relative to the project root) for the human-facing docs Sparra
+   * manages — PLAN.md, CODEBASE_MAP.md, CHANGELOG.md, HOLDOUT.md. "" keeps them
+   * at the root (default); e.g. "docs" puts them under docs/. Set at
+   * `sparra init --docs <dir>`. (.sparra/ machinery is unaffected.)
+   */
+  docsDir: string;
 }
 
 function role(model: ModelRef, effort?: RoleConfig["effort"]): RoleConfig {
@@ -304,6 +311,7 @@ export function defaultConfig(): SparraConfig {
     deviation: { strictness: "moderate" },
     review: { enabled: false, blockOn: "high" },
     batch: { K: 3 },
+    docsDir: "",
   };
 }
 
@@ -336,11 +344,16 @@ export async function loadConfig(paths: Paths): Promise<SparraConfig> {
   return deepMerge(def, parsed);
 }
 
-export async function writeDefaultConfig(paths: Paths, mode: "greenfield" | "existing"): Promise<void> {
+export async function writeDefaultConfig(
+  paths: Paths,
+  mode: "greenfield" | "existing",
+  docsDir = ""
+): Promise<void> {
   if (exists(paths.config)) return;
   const cfg = defaultConfig();
   // Deviation default depends on mode.
   cfg.deviation.strictness = mode === "greenfield" ? "free" : "moderate";
+  cfg.docsDir = docsDir;
   const header = `# Sparra configuration — every knob lives here.
 # Models accept SDK aliases: opus | sonnet | haiku | fable (or a full model id).
 # Detected mode: ${mode}.  Edit and re-run any phase; changes are picked up live.
