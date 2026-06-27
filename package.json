@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "sparra": "./bin/sparra.mjs",
-    "sparra-tui": "./bin/sparra-tui.mjs"
+    "sparra-tui": "./bin/sparra-tui.mjs",
+    "sparra-run-mcp": "./bin/sparra-run-mcp.mjs"
   },
   "scripts": {
     "sparra": "tsx src/cli.ts",

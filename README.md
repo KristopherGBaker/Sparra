@@ -61,6 +61,7 @@ There are runnable examples to watch: [`examples/cli-greenfield/`](examples/cli-
 | [Phases](docs/phases.md) | orient → plan ⇄ prototype → freeze → build → reflect; the TUI; greenfield vs brownfield |
 | [The build loop](docs/build-loop.md) | contract negotiation, exercising, GAN pivots, holdout wall, sandbox-first safety, budgets, memory |
 | [Agent backends](docs/backends.md) | the `AgentBackend` seam, Claude + Codex, per-role + cross-backend evaluation |
+| [Role-runner](docs/role-runner.md) | run Sparra's roles (cross-model adversarial eval, holdout wall) from an interactive Claude Code session — `sparra role run` + the MCP `run_role` tool |
 | [iOS / macOS](docs/ios.md) | `xcodebuildmcp`, XcodeGen, the launch-screen requirement, multimodal UI grading |
 | [Configuration](docs/configuration.md) | every knob, on-disk layout, resuming |
 

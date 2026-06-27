@@ -13,6 +13,7 @@ import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
 import { cmdNew } from "./phases/new.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
+import { cmdRoleRun } from "./phases/role.ts";
 
 interface Args {
   positionals: string[];
@@ -61,6 +62,8 @@ ${color.bold("Commands")}
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
+  role run --kind <r> [--backend b] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
+                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 
@@ -127,6 +130,13 @@ async function main(): Promise<void> {
       break;
     case "new":
       await cmdNew(ctx, positionals.slice(1).join(" "));
+      break;
+    case "role":
+      if (positionals[1] === "run") await cmdRoleRun(ctx, flags);
+      else {
+        err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run)`);
+        process.exitCode = 1;
+      }
       break;
     case "resume":
       await resume(ctx);

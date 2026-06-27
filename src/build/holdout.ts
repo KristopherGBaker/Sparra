@@ -20,7 +20,7 @@ export function holdoutSection(text: string): string {
 }
 
 /** Substantive holdout lines (strip markdown markers; ignore short/structural lines). */
-function holdoutLines(text: string): string[] {
+export function holdoutLines(text: string): string[] {
   return text
     .split("\n")
     .map((l) => l.replace(/^[\s#>*\-\d.]+/, "").trim())
