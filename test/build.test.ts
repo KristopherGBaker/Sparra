@@ -259,6 +259,49 @@ describe("cmdBuild — commit gating (opt-in, branch-only)", () => {
   });
 });
 
+describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
+  it("calls provisionWorkspaceDeps once with (root, workspaceDir, cfg) when workspaceDir !== root", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const wt = dir + "-wt"; // a worktree path distinct from the repo root
+    const calls: Array<{ root: string; ws: string; cfg: unknown }> = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir: wt, branch: "sparra/test", note: "t" }),
+      provisionWorkspaceDeps: (root, ws, cfg) => {
+        calls.push({ root, ws, cfg });
+        return { copied: [], skipped: [], failed: [] };
+      },
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps); // no override → prepareWorkspace yields the (distinct) worktree
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.root).toBe(ctx.root);
+    expect(calls[0]!.ws).toBe(wt);
+    expect(calls[0]!.cfg).toEqual(ctx.config.git.provisionDeps); // exact config threaded through
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT provision when workspaceDir === root (in-place / override === root)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    let called = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      provisionWorkspaceDeps: () => {
+        called = true;
+        return { copied: [], skipped: [], failed: [] };
+      },
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // override === ctx.root
+    expect(called).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("cmdBuild — hybrid generation routing (gen: local)", () => {
   it("routes items tagged gen:'local' to roles.generatorLocal and others to roles.generator", async () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });

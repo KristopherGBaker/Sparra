@@ -40,6 +40,15 @@ export function exists(p: string): boolean {
   return fs.existsSync(p);
 }
 
+/** True iff `p` is itself a symlink (does NOT follow the link). False if absent or on stat error. */
+export function isSymlink(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 export async function readJson<T>(file: string): Promise<T | null> {
   const t = await readText(file);
   if (t == null) return null;

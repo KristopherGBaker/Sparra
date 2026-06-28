@@ -6,6 +6,7 @@ import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
 import { exists, readText } from "../util/io.ts";
 import { prepareWorkspace, changedFiles } from "../util/git.ts";
+import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { commitItem } from "../build/commit.ts";
 import { writeScopeViolations } from "../sdk/scoping.ts";
 import { ensureAutoProbed } from "../sdk/guard.ts";
@@ -54,6 +55,7 @@ export interface BuildDeps {
   readMemory: typeof readMemory;
   commitItem: typeof commitItem;
   waitForLimit: typeof waitForLimit;
+  provisionWorkspaceDeps: typeof provisionWorkspaceDeps;
 }
 
 const defaultDeps: BuildDeps = {
@@ -70,6 +72,7 @@ const defaultDeps: BuildDeps = {
   readMemory,
   commitItem,
   waitForLimit,
+  provisionWorkspaceDeps,
 };
 
 /** Provider account a role runs against — the granularity a rate/usage limit applies to.
@@ -165,6 +168,12 @@ export async function cmdBuild(
       b.build.workspaceDir = ws.dir;
       b.build.branch = ws.branch;
       b.build.workspaceNote = ws.note;
+    }
+    // Provision the repo's deps into the isolated worktree so the generator's verify commands and
+    // the evaluator's `npm test` can run there. Gated to the worktree boundary (NOT `b.build.branch`,
+    // which a workspace override never sets) — an in-place run already has the deps. Non-fatal.
+    if (b.build.workspaceDir !== ctx.root) {
+      d.provisionWorkspaceDeps(ctx.root, b.build.workspaceDir!, ctx.config.git.provisionDeps);
     }
     await ctx.store.save();
   }

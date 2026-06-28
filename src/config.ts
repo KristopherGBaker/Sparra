@@ -111,6 +111,16 @@ export interface SparraConfig {
      *   template → one deterministic commit per item from the item's title/summary (no model).
      */
     agentCommits: "agent" | "template";
+    /**
+     * Auto-provision the repo's dependency dirs into the build/eval worktree so the generator's
+     * verify commands and the evaluator's `npm test` can run there (a bare `git worktree` has no
+     * `node_modules`). Gated to the worktree boundary (no-op in place), skippable, and a no-op when
+     * the dir already exists in the worktree. Dirs are COPIED (copy-on-write where supported), never
+     * symlinked — an outside-pointing link would break the workspace-write scratch sandbox.
+     *   enabled → default true; set false to skip provisioning (e.g. you provision deps yourself).
+     *   dirs    → which top-level dirs to copy; default ["node_modules"].
+     */
+    provisionDeps: { enabled: boolean; dirs: string[] };
   };
 
   rubric: {
@@ -319,7 +329,13 @@ export function defaultConfig(): SparraConfig {
       mode: "auto",
       denyBashContains: ["rm -rf /", "git push", "shutdown", "mkfs", ":(){", "curl | sh", "sudo "],
     },
-    git: { strategy: "worktree", branchPrefix: "sparra/", autoCommit: false, agentCommits: "agent" },
+    git: {
+      strategy: "worktree",
+      branchPrefix: "sparra/",
+      autoCommit: false,
+      agentCommits: "agent",
+      provisionDeps: { enabled: true, dirs: ["node_modules"] },
+    },
     rubric: {
       weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 },
       passThreshold: 75,

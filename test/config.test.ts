@@ -44,6 +44,19 @@ describe("exercise.sandbox knob", () => {
   });
 });
 
+describe("git.provisionDeps knob", () => {
+  it("defaults to { enabled: true, dirs: ['node_modules'] }", () => {
+    expect(defaultConfig().git.provisionDeps).toEqual({ enabled: true, dirs: ["node_modules"] });
+  });
+
+  it("a partial YAML override of enabled keeps dirs AND sibling git knobs", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { git: { provisionDeps: { enabled: false } } });
+    expect(merged.git.provisionDeps.enabled).toBe(false);
+    expect(merged.git.provisionDeps.dirs).toEqual(["node_modules"]); // sibling key survives the partial merge
+    expect(merged.git.strategy).toBe("worktree"); // sibling git.* knob survives
+  });
+});
+
 describe("build.verifyCommands knob", () => {
   it("defaults to a non-empty list including npm test + tsc", () => {
     const v = defaultConfig().build.verifyCommands;

@@ -64,6 +64,8 @@ Whatever scoped the writes — Claude PreToolUse hooks or Codex's OS sandbox —
 
 Need the build to read a large asset (e.g. a model) that shouldn't be in git? List its directory in [`build.extraReadDirs`](configuration.md) — it's added to the generator's and evaluator's read scope (`additionalDirectories`), so the asset is readable without committing it or opening network access.
 
+A fresh worktree is a bare checkout with no `node_modules`, so the generator's verify commands and the evaluator's `npm test` would otherwise have nothing to run against. Sparra **provisions the repo's deps into the worktree** once it's created — see [`git.provisionDeps`](configuration.md). The dirs are **copied** (copy-on-write where the filesystem supports it), never symlinked, so nothing points outside the worktree to break the workspace-write scratch sandbox; it's a no-op in place and skippable.
+
 Build agents also can't reach your **personal cloud**: `settingSources: []` doesn't suppress auto-fetched claude.ai connectors (Drive/Gmail/Calendar), so every guard's deny-hook rejects any ambient MCP call (`denyAmbientMcp`) — only Sparra's own `mcp__exercise__*` tools are allowed.
 
 ## Bounded by default (budgets)
