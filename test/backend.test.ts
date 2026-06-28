@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend, type AgentRequest, type AgentResult } from "../src/sdk/backend.ts";
-import { codexSandboxMode } from "../src/sdk/backends/codex.ts";
+import { codexSandboxMode, isEmptyCompletion } from "../src/sdk/backends/codex.ts";
 import { consumeQuery } from "../src/sdk/backends/claude.ts";
 import { TraceWriter } from "../src/sdk/trace.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
@@ -108,6 +108,21 @@ describe("codex backend", () => {
       // The carve-out only applies to read-only roles (write roles are unaffected).
       expect(codexSandboxMode({ exerciseScratch: true })).toBe("workspace-write");
       expect(codexSandboxMode({ sandbox: "danger-full-access", exerciseScratch: true })).toBe("danger-full-access");
+    });
+  });
+
+  // Item I: a silent empty completion (ok, 0 tokens, no text) is classified as a limit so runRole
+  // falls back over roles.<role>.fallback (the codex→claude path proven by the auto-fallback tests
+  // in roleRun.test.ts) instead of churning on a bogus empty verdict.
+  describe("isEmptyCompletion (silent empty result → treated as a limit)", () => {
+    it("is true ONLY for ok + zero tokens + no text", () => {
+      expect(isEmptyCompletion({ ok: true, tokens: 0, resultText: "" })).toBe(true);
+      expect(isEmptyCompletion({ ok: true, tokens: 0, resultText: "   \n " })).toBe(true); // whitespace-only counts as empty
+    });
+    it("is false when there is real output, tokens, or an error", () => {
+      expect(isEmptyCompletion({ ok: true, tokens: 0, resultText: "hi" })).toBe(false); // has text
+      expect(isEmptyCompletion({ ok: true, tokens: 5, resultText: "" })).toBe(false); // spent tokens
+      expect(isEmptyCompletion({ ok: false, tokens: 0, resultText: "" })).toBe(false); // already an error
     });
   });
 });

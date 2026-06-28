@@ -145,7 +145,7 @@ class CodexBackend implements AgentBackend {
       // answer; it's almost always provider unavailability or a usage/session window. Classify it
       // as a limit so the caller falls back / retries instead of mistaking it for a genuine empty
       // result (which would, e.g., parse as a bogus failing verdict and churn the loop).
-      if (result.ok && result.tokens === 0 && !result.resultText.trim()) {
+      if (isEmptyCompletion(result)) {
         result.ok = false;
         result.errors.push("Codex returned an empty completion (0 tokens, no output) — likely provider unavailability or a usage/session limit.");
         result.limitHit = { kind: "session", raw: result.errors[result.errors.length - 1]! };
@@ -170,6 +170,17 @@ class CodexBackend implements AgentBackend {
 }
 
 /** Codex's native sandbox scopes (matches @openai/codex-sdk `SandboxMode`). */
+/**
+ * A SILENT empty completion — the backend reported success but produced zero tokens and no
+ * text. This is almost always provider unavailability or a usage/session window, NOT a genuine
+ * empty answer. Pure + exported so the classification is unit-testable without spawning the
+ * codex CLI. The caller (runTask) promotes a true here to `limitHit` so `runRole` falls back /
+ * retries instead of churning the loop on a bogus failing verdict.
+ */
+export function isEmptyCompletion(r: { ok: boolean; tokens: number; resultText: string }): boolean {
+  return r.ok && r.tokens === 0 && !r.resultText.trim();
+}
+
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 /**
