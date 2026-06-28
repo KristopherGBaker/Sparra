@@ -105,13 +105,59 @@ class ClaudeBackend implements AgentBackend {
     // Console echo is suppressed when a front-end consumes events/text instead.
     const echo = req.echoActivity ?? !(req.onAssistantText || req.onEvent);
 
-    // The SDK emits `rate_limit_event` (plan limits) and retries transient errors itself.
-    // Record the latest REJECTED limit; only promote it to result.limitHit if the run
-    // ultimately fails (so we don't flag a limit the SDK recovered from).
-    let pendingLimit: LimitHit | undefined;
-
     try {
-    for await (const msg of query({ prompt: req.prompt, options })) {
+      // Delegate the per-message consumption to the testable seam below; it tolerates the
+      // SDK's trailing exit-throw once a terminal `result` has been observed (see consumeQuery).
+      await consumeQuery(query({ prompt: req.prompt, options }), { result, trace, req, echo });
+    } finally {
+      skillPlugin?.cleanup();
+    }
+
+    if (req.outputSchema && result.ok) {
+      result.structured = extractJson(result.resultText) ?? undefined;
+    }
+
+    return result;
+  }
+}
+
+/** Inputs the message-consumption loop needs that aren't on the stream itself. */
+interface ConsumeCtx {
+  /** Pre-built result object; mutated in place as messages arrive and returned. */
+  result: AgentResult;
+  trace: TraceWriter;
+  req: AgentRequest;
+  /** Whether to echo tool activity to the console. */
+  echo: boolean;
+}
+
+/**
+ * Consume the Agent SDK's `query()` async iterator into an `AgentResult`. Extracted from
+ * `runTask` as the testable seam (fed a hand-rolled `AsyncIterable<SDKMessage>` in tests).
+ *
+ * Observed SDK ordering — the fix rests on this, re-validate if `@anthropic-ai/claude-agent-sdk`
+ * changes: on an error result `query()` yields the terminal `result` message FIRST (subtype
+ * `error_max_turns` / `error_max_budget_usd`, `is_error:true`), THEN — because the CLI process
+ * exits non-zero — the iterator THROWS a trailing `Error("Claude Code returned an error result:
+ * <text>")` on the next pull. So once we've consumed a terminal `result` we RETURN the populated,
+ * resumable result and swallow that trailing throw rather than rejecting (which would lose the
+ * `sessionId`/`hitMaxTurns` the interactive resume path needs). The swallow is gated on an EXPLICIT
+ * `gotResult` flag — NOT on `sessionId`/init (which is set before any result), so a genuine
+ * pre-result failure (spawn/abort) still propagates.
+ */
+export async function consumeQuery(
+  stream: AsyncIterable<SDKMessage>,
+  { result, trace, req, echo }: ConsumeCtx,
+): Promise<AgentResult> {
+  // The SDK emits `rate_limit_event` (plan limits) and retries transient errors itself.
+  // Record the latest REJECTED limit; only promote it to result.limitHit if the run
+  // ultimately fails (so we don't flag a limit the SDK recovered from).
+  let pendingLimit: LimitHit | undefined;
+  // Set true ONLY when a terminal `result` message is processed — gates the trailing-throw swallow.
+  let gotResult = false;
+
+  try {
+    for await (const msg of stream) {
       await trace.record(msg as SDKMessage);
 
       if (msg.type === "rate_limit_event") {
@@ -134,6 +180,7 @@ class ClaudeBackend implements AgentBackend {
           }
         }
       } else if (msg.type === "result") {
+        gotResult = true;
         const m = msg as any;
         result.subtype = m.subtype;
         result.sessionId = m.session_id ?? result.sessionId;
@@ -156,16 +203,14 @@ class ClaudeBackend implements AgentBackend {
         }
       }
     }
-    } finally {
-      skillPlugin?.cleanup();
-    }
-
-    if (req.outputSchema && result.ok) {
-      result.structured = extractJson(result.resultText) ?? undefined;
-    }
-
-    return result;
+  } catch (err) {
+    // Trailing exit-throw after a terminal result (see the ordering note above): the populated
+    // result is the real, resumable outcome — return it rather than reject. If NO terminal result
+    // was consumed (genuine pre-result failure: spawn error, abort, etc.) the error propagates.
+    if (!gotResult) throw err;
   }
+
+  return result;
 }
 
 /** Normalize the SDK's epoch (seconds or ms) to ms. */
