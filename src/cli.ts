@@ -62,7 +62,8 @@ ${color.bold("Commands")}
   build [--fresh] [--only <item-id>] [--step contract,round,commit,item]
                                                 Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
-  prompts [status|sync] [--role <r>] [--dry-run] compare/sync .sparra/prompts with the built-in defaults
+  prompts [status|sync|audit [--apply]] [--role <r>] [--dry-run]
+                                                compare/sync .sparra/prompts with the built-in defaults; audit = concision review (--apply is coverage-gated)
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)

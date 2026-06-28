@@ -1,6 +1,15 @@
+import path from "node:path";
 import type { Ctx } from "../context.ts";
+import type { RoleConfig } from "../config.ts";
 import { DEFAULT_PROMPTS, promptDrift, syncPrompts, promptRolePath } from "../prompts.ts";
+import { auditPrompts } from "../build/promptAudit.ts";
 import { banner, ok, info, warn, detail, color } from "../util/log.ts";
+
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** Parse a `--effort` flag into a valid RoleConfig effort, or undefined (use the role's config). */
+function parseEffort(flag: unknown): RoleConfig["effort"] {
+  return typeof flag === "string" && (EFFORTS as readonly string[]).includes(flag) ? (flag as RoleConfig["effort"]) : undefined;
+}
 
 /**
  * `sparra prompts [status|sync] [--role <role>] [--dry-run]`
@@ -67,5 +76,31 @@ export async function cmdPrompts(
     return;
   }
 
-  warn(`Unknown subcommand "${sub}". Use: sparra prompts [status|sync] [--role <role>] [--dry-run]`);
+  if (sub === "audit") {
+    banner("prompt audit (conciseness)");
+    const rows = await auditPrompts(ctx, {
+      roles: role ? [role] : undefined,
+      apply: !!flags.apply,
+      backend: typeof flags.backend === "string" ? flags.backend : undefined,
+      model: typeof flags.model === "string" ? flags.model : undefined,
+      effort: parseEffort(flags.effort),
+    });
+    for (const r of rows) {
+      const sign = r.pctDelta <= 0 ? "" : "+";
+      const status = r.applied
+        ? color.green("applied")
+        : r.skipped
+          ? color.yellow(`skipped (${r.skipReason})`)
+          : color.gray("report-only");
+      detail(
+        `${r.role}  ${r.sizeBefore.chars}→${r.sizeAfter.chars} chars (${sign}${r.pctDelta}%)  ` +
+          `droppedNothing=${r.droppedNothing}  ${status}`
+      );
+    }
+    info(`Reviews written to ${path.relative(ctx.root, path.join(ctx.paths.prompts, "audit"))}/<role>.md` +
+      (flags.apply ? "" : "   ·   apply tightened (coverage-gated): sparra prompts audit --apply [--role <role>]"));
+    return;
+  }
+
+  warn(`Unknown subcommand "${sub}". Use: sparra prompts [status|sync|audit] [--role <role>] [--dry-run] [audit: --apply --backend b --model m --effort e]`);
 }

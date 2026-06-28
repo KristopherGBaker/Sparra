@@ -135,7 +135,8 @@ your-project/
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)
    ├─ prompts/         # editable role system prompts (reflect diffs these); seeded from the
    │                   #   built-in defaults at init — can go stale as Sparra improves. Compare/
-   │                   #   adopt with `sparra prompts status` / `sparra prompts sync`.
+   │                   #   adopt with `sparra prompts status` / `sparra prompts sync`. Tighten with
+   │                   #   `sparra prompts audit` (review files land in prompts/audit/<role>.md).
    ├─ calibration/     # good/ vs slop/ reference samples
    ├─ reflect/         # proposed prompt diffs awaiting approval
    ├─ traces/<run>/    # full transcripts per role, as markdown
@@ -147,6 +148,26 @@ your-project/
 persist across cycles; the rest of the working set is archived per cycle by `sparra new` (or
 `sparra finish`). Each `cycles/<n-slug>/` now also includes the cycle's archived **`HOLDOUT.md`**
 (moved out of the live tree so a stale per-cycle holdout never bleeds into the next cycle).
+
+## Auditing prompt conciseness (`sparra prompts audit`)
+`reflect` APPENDS to role prompts, so the built-in defaults ratchet up over cycles. `sparra prompts
+audit [--role <r>] [--apply] [--backend b] [--model m] [--effort e]` checks whether each prompt's
+wording can be **tighter without losing any rule**.
+
+- Per role it resolves the EFFECTIVE prompt (on-disk `.sparra/prompts/<role>.md` if present, else
+  the built-in default), runs the read-only `prompt-auditor` on that text, and writes a review to
+  `.sparra/prompts/audit/<role>.md` with size before→after (chars + approx tokens), a per-rule
+  coverage report (where each rule is `preservedIn` the tightened text, or `dropped`),
+  `droppedNothing`, and the tightened proposal. With no `--role` it audits every role.
+- The auditor run defaults to the `reflector` role's backend/model/effort (no new config key);
+  `--backend`/`--model`/`--effort` override it.
+- **`--apply` is FAIL-CLOSED behind a coverage cross-check** (the harness verifies coverage; it does
+  not trust the model's flag): a prompt is overwritten ONLY when `droppedNothing === true` AND the
+  tightened text is non-empty AND `coverage` is a non-empty array with NO `dropped` entry. Any other
+  shape (false/missing `droppedNothing`, unparseable JSON, empty tightened, empty coverage, or a
+  dropped rule) is SKIPPED, leaving the prompt byte-identical. Without `--apply` it is report-only.
+- Safety: the audit operates ONLY on role-prompt text — it injects no holdout/memory/plan and the
+  auditor is read-only (the prompt is passed inline; it has no Write/Edit/Bash tools).
 
 ## Resuming
 `sparra resume` continues whatever phase you're in, purely from `.sparra/state.json` + the artifacts. Re-run `sparra build` to resume an interrupted build — passed items are skipped; `BUDGET_EXCEEDED`/`abandoned` items are skipped too.

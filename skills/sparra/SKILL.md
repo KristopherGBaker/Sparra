@@ -56,6 +56,7 @@ sparra build           # the autonomous generator↔evaluator loop
 sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
 sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
 sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
+sparra prompts audit   # concision review of role prompts → prompts/audit/<role>.md; --apply (coverage-gated) tightens in place
 sparra status          # where am I / what's next
 sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan
 sparra clean           # prune stale sparra worktrees/branches (dry-run; --yes acts, --force unmerged)
