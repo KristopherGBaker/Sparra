@@ -52,6 +52,43 @@ the harness smarter across features. (Without `new` you'd have to manually clear
 set and remember `build --fresh`; `build` now also *warns* if the frozen plan changed but the
 run wasn't re-decomposed.)
 
+## Close-out — `sparra finish`
+When a build cycle is **terminal** (every item `passed`/`failed`/`abandoned`/`budget_exceeded`)
+and the tree is clean, **`sparra finish`** lands the Sparra branch, tears down its isolation,
+and archives the cycle — **without ever silently touching your main branch.** It refuses (no
+side effects) if the build is mid-flight or the working tree is dirty.
+
+```
+sparra finish [--pr | --merge --yes] [--teardown] [--force] [--new "<title>"]
+```
+
+- **Land (opt-in; the default touches nothing).**
+  - `--pr` — open a PR from the `sparra/<topic>` branch into your integration branch via
+    `gh pr create` (the recommended safe default). If `gh` isn't installed, finish prints the
+    exact manual `git push … && gh pr create …` command and continues.
+  - `--merge` — explicitly checks out the configured **default branch** and `git merge --ff-only`
+    the Sparra branch into it (never the current HEAD), **only** with `--merge` **plus** a
+    confirmation (`--yes`). It tests fast-forwardability **before** touching the checkout, so it
+    **aborts with the checkout left exactly as it found it** if the default branch has diverged
+    (no clean fast-forward); it never uses `--no-ff`, never force-pushes, never hard-resets.
+  - no land flag — finish reports that the branch is ready and how to land it.
+- **Teardown** (after a successful `--merge`, or with `--teardown`) — `git worktree remove`
+  the build worktree, then `git branch -d` the branch (**merged-only**). Deleting an **unmerged**
+  branch needs an explicit `--force` (`-D`); otherwise finish refuses. The worktree is removed
+  before the branch. Teardown is **all-or-nothing**: only when both the worktree removal and the
+  branch delete succeed does finish clear `build.branch`/`workspaceDir`; if either is refused or
+  fails it leaves that state intact so you can safely retry (e.g. with `--force`).
+- **Archive** — calls the same `archiveCycle()` as `new`, moving the working set **including the
+  live `HOLDOUT.md`** into `.sparra/cycles/<NNNN>-<slug>/`. With `--new "<title>"` it chains
+  straight into a fresh cycle (`cmdNew`) instead of just closing.
+
+**Holdout safety:** `HOLDOUT.md` is archived privately into the cycle dir and **never** rides
+into a PR or a merge. `.sparra/` is gitignored, so the normal case is already safe; if a
+`HOLDOUT.md` is a *tracked* file a `--pr`/`--merge` would carry, finish **hard-stops the land
+before any PR/merge** (it refuses loudly and tells you to `git rm --cached` it and add it to
+`.gitignore`) — the cycle is still archived privately, but no land proceeds while the holdout is
+tracked. No code in the land/teardown/archive path reads holdout contents.
+
 ---
 
 ## The interactive TUI

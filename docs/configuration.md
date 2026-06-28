@@ -135,11 +135,13 @@ your-project/
    ├─ reflect/         # proposed prompt diffs awaiting approval
    ├─ traces/<run>/    # full transcripts per role, as markdown
    ├─ runs/            # batch summaries
-   └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, contracts, verdicts, …) — see `sparra new`
+   └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, HOLDOUT, contracts, verdicts, …) — see `sparra new` / `sparra finish`
 ```
 
 `memory.md`, `CHANGELOG.md`, `CODEBASE_MAP.md`, `config.yaml`, `calibration/`, and `prompts/`
-persist across cycles; the rest of the working set is archived per cycle by `sparra new`.
+persist across cycles; the rest of the working set is archived per cycle by `sparra new` (or
+`sparra finish`). Each `cycles/<n-slug>/` now also includes the cycle's archived **`HOLDOUT.md`**
+(moved out of the live tree so a stale per-cycle holdout never bleeds into the next cycle).
 
 ## Resuming
 `sparra resume` continues whatever phase you're in, purely from `.sparra/state.json` + the artifacts. Re-run `sparra build` to resume an interrupted build — passed items are skipped; `BUDGET_EXCEEDED`/`abandoned` items are skipped too.

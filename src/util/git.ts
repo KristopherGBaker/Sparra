@@ -106,3 +106,107 @@ export function prepareWorkspace(
   }
   return { dir: wtDir, branch, note: `created worktree ${wtDir} on branch ${branch}` };
 }
+
+// ── Cycle-finish seam (land + teardown). Real implementations behind `FinishDeps`. ──
+
+/** True if the working tree at `dir` has uncommitted changes (tracked or untracked). */
+export function isDirty(dir: string): boolean {
+  if (!isGitRepo(dir)) return false;
+  return git(dir, ["status", "--porcelain", "--untracked-files=all"]).out.trim() !== "";
+}
+
+/** Absolute path of the worktree that has `branch` checked out, or null if none/in-place. */
+export function worktreeForBranch(root: string, branch: string): string | null {
+  if (!isGitRepo(root)) return null;
+  const r = git(root, ["worktree", "list", "--porcelain"]);
+  if (!r.ok) return null;
+  let curPath: string | null = null;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("worktree ")) curPath = line.slice("worktree ".length).trim();
+    else if (line.startsWith("branch ") && line.slice("branch ".length).trim() === `refs/heads/${branch}`) return curPath;
+  }
+  return null;
+}
+
+/**
+ * The repo's integration/default branch, resolved INDEPENDENTLY of the current branch (under
+ * branch-in-place the current branch IS the Sparra branch, so falling back to it would let a
+ * `--merge` merge the branch into itself — a silent no-op). Resolution order:
+ *   1. `origin/HEAD`            (e.g. `origin/main` → `main`)
+ *   2. a local `main`          (`refs/heads/main`)
+ *   3. a local `master`        (`refs/heads/master`)
+ * Returns "" when none resolves — callers must REFUSE rather than guess. NEVER `currentBranch()`.
+ *
+ * `run` is an injectable git runner (default = real `git`) so the resolution is unit-testable.
+ */
+export function defaultBranch(
+  root: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): string {
+  const head = run(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  if (head.ok && head.out.trim()) return head.out.trim().replace(/^origin\//, "");
+  if (run(root, ["show-ref", "--verify", "--quiet", "refs/heads/main"]).ok) return "main";
+  if (run(root, ["show-ref", "--verify", "--quiet", "refs/heads/master"]).ok) return "master";
+  return "";
+}
+
+/** Check out an existing branch (used by teardown to vacate a branch checked out in place). */
+export function checkout(root: string, branch: string): { ok: boolean; out: string } {
+  return git(root, ["checkout", branch]);
+}
+
+/**
+ * Fast-forward-only merge of `source` into the explicit `target` (default) branch.
+ *
+ * Fast-forwardability is determined BEFORE any checkout state changes: if `target` is not an
+ * ancestor of `source` (i.e. `target` has diverged), we abort WITHOUT having touched the
+ * working checkout — leaving it exactly as we found it. Only when it will fast-forward do we
+ * `git checkout <target>` and `git merge --ff-only <source>`. Never `--no-ff`, never force.
+ *
+ * `run` is an injectable git runner (default = real `git`) so the seam is unit-testable.
+ */
+export function mergeFfOnly(
+  root: string,
+  target: string,
+  source: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  // Cheap, read-only check first — does NOT mutate checkout state. Exit code 0 ⇒ ancestor.
+  const ancestor = run(root, ["merge-base", "--is-ancestor", target, source]);
+  if (!ancestor.ok) {
+    return { ok: false, out: `${target} has diverged from ${source}; not a fast-forward (checkout left unchanged)` };
+  }
+  const co = run(root, ["checkout", target]);
+  if (!co.ok) return co;
+  return run(root, ["merge", "--ff-only", source]);
+}
+
+/** Remove a git worktree (the build's isolated checkout). */
+export function removeWorktree(root: string, dir: string): { ok: boolean; out: string } {
+  return git(root, ["worktree", "remove", dir]);
+}
+
+/** Delete a branch. `force` uses `-D` (allows unmerged); otherwise `-d` (merged-only, refuses unmerged). */
+export function deleteBranch(root: string, branch: string, force: boolean): { ok: boolean; out: string } {
+  return git(root, ["branch", force ? "-D" : "-d", branch]);
+}
+
+/** True if `file` (absolute or repo-relative path) is tracked by git. */
+export function isTracked(root: string, file: string): boolean {
+  if (!isGitRepo(root)) return false;
+  return git(root, ["ls-files", "--error-unmatch", "--", file]).ok;
+}
+
+/** Whether the `gh` CLI is installed and runnable. */
+export function ghAvailable(): boolean {
+  return spawnSync("gh", ["--version"], { encoding: "utf8" }).status === 0;
+}
+
+/** Open a PR from `branch` into `base` via `gh pr create` (no holdout content involved). */
+export function ghPrCreate(root: string, branch: string, base: string, title: string): { ok: boolean; out: string } {
+  const r = spawnSync("gh", ["pr", "create", "--head", branch, "--base", base, "--title", title, "--fill"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
+}

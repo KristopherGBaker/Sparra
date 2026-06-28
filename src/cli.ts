@@ -13,6 +13,7 @@ import { cmdReflect } from "./phases/reflect.ts";
 import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
 import { cmdNew } from "./phases/new.ts";
+import { cmdFinish } from "./phases/finish.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
 import { cmdRoleRun } from "./phases/role.ts";
 
@@ -64,6 +65,8 @@ ${color.bold("Commands")}
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
+  finish [--pr|--merge --yes] [--teardown] [--force] [--new "<title>"]
+                                                close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   role run --kind <r> [--backend b] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
                                                 run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
   eval [dir] [--contract f] [--backend b] [--holdout f] [--out f]
@@ -154,6 +157,16 @@ async function main(): Promise<void> {
       break;
     case "new":
       await cmdNew(ctx, positionals.slice(1).join(" "));
+      break;
+    case "finish":
+      await cmdFinish(ctx, {
+        pr: !!flags.pr,
+        merge: !!flags.merge,
+        yes: !!flags.yes,
+        teardown: !!flags.teardown,
+        force: !!flags.force,
+        new: flags.new === undefined ? undefined : typeof flags.new === "string" ? flags.new : "",
+      });
       break;
     case "resume":
       await resume(ctx);
