@@ -54,6 +54,14 @@ export async function startRunRoleServer(root: string): Promise<void> {
       backend: z.string().optional().describe("Backend override: claude | codex | … (default: the role's config)."),
       model: z.string().optional().describe("Model override."),
       out: z.string().optional().describe("Where to write the verdict/result on disk."),
+      resumeSessionId: z
+        .string()
+        .optional()
+        .describe("Resume a prior run's session (e.g. iterating the generator) — pass the `sessionId` from a previous run_role result so it doesn't re-read the workspace from scratch."),
+      resumeBackend: z
+        .string()
+        .optional()
+        .describe("The `backend` of that prior session. Resume is ignored (fresh session) if it differs from this call's backend — session ids aren't portable across backends."),
     },
     async (args) => {
       try {
@@ -69,6 +77,8 @@ export async function startRunRoleServer(root: string): Promise<void> {
           backend: args.backend,
           model: args.model,
           out: args.out,
+          resumeSessionId: args.resumeSessionId,
+          resumeBackend: args.resumeBackend,
         });
         // Never return holdout: evaluator → verdict summary only; others → result text.
         const payload = r.verdict
@@ -76,6 +86,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               roleKind: r.roleKind,
               backend: r.backend,
               model: r.model,
+              sessionId: r.sessionId,
               ok: r.ok,
               verdict: r.verdict.verdict,
               weightedTotal: r.verdict.weightedTotal,
@@ -90,6 +101,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               roleKind: r.roleKind,
               backend: r.backend,
               model: r.model,
+              sessionId: r.sessionId,
               ok: r.ok,
               result: r.resultText,
               outPath: r.outPath,

@@ -366,3 +366,37 @@ describe("runRole — verdict", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("runRole — session resume (run_role iterate)", () => {
+  it("passes resumeSessionId to the session when no resumeBackend is given", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: rec.fn, resumeSessionId: "sess-1" });
+    expect(rec.calls[0]!.resume).toBe("sess-1");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("resumes when resumeBackend matches the effective backend (claude default)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: rec.fn, resumeSessionId: "sess-1", resumeBackend: "claude" });
+    expect(rec.calls[0]!.resume).toBe("sess-1");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("IGNORES the resume (fresh) when resumeBackend differs — session ids aren't portable", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: rec.fn, resumeSessionId: "sess-1", resumeBackend: "codex" });
+    expect(rec.calls[0]!.resume).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no resumeSessionId → no resume", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: rec.fn });
+    expect(rec.calls[0]!.resume).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

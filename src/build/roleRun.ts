@@ -83,6 +83,13 @@ export interface RoleRunRequest {
   backend?: string;
   model?: string;
   effort?: RoleConfig["effort"];
+  /** Resume a prior role-run's backend session — so an iterate round (e.g. re-running the
+   *  generator with feedback) doesn't re-read the whole worktree from scratch. Pass the
+   *  `sessionId` AND `backend` returned by the previous RoleRunResult. A session id isn't
+   *  portable across backends, so on a backend switch the resume is IGNORED (fresh session +
+   *  a warning). Mirrors the build loop's generatorSessionId/generatorBackend. */
+  resumeSessionId?: string;
+  resumeBackend?: string;
   /** Injectable for tests; defaults to the real backend session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
@@ -274,6 +281,20 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const workspace = req.workspace ?? ctx.root;
   const run = req.runSessionFn ?? runSession;
 
+  // Optional session resume (e.g. iterating the generator) — only honored when the prior
+  // session belongs to the SAME backend we're about to run; a session id isn't portable.
+  const effectiveBackend = role.backend ?? "claude";
+  let resume: string | undefined;
+  if (req.resumeSessionId) {
+    if (req.resumeBackend && req.resumeBackend !== effectiveBackend) {
+      warn(
+        `role-run-${roleKind}: ignoring resumeSessionId (belongs to backend "${req.resumeBackend}", not "${effectiveBackend}"; session ids aren't portable) — starting fresh.`
+      );
+    } else {
+      resume = req.resumeSessionId;
+    }
+  }
+
   let brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
   if (!brief.trim()) {
     // The standalone WIP-eval case: grading an existing tree needs no bespoke brief.
@@ -389,6 +410,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
       : { readOnly: true, ...(exerciseScratch ? { exerciseScratch: true } : {}) }),
     ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     ...guard,
+    resume,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: ctx.config.build.maxBudgetUsdPerItem,
     traceDir,

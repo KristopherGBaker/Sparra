@@ -59,6 +59,13 @@ output). Wire it into Claude Code pointed at your project:
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
 holdoutPath, backend, model, out })`. The **`sparra-loop` skill** is the driving playbook.
 
+To **iterate a role without re-reading the workspace from scratch** (e.g. feeding the
+generator the evaluator's blocking points for another round), pass
+`resumeSessionId` + `resumeBackend` from the previous call's returned `sessionId`/`backend`
+— the runner resumes that backend session, or starts fresh (with a warning) if the backend
+differs, since session ids aren't portable across backends. Every result returns `sessionId`
++ `backend` for exactly this.
+
 #### Subagent delegation (the conductor's pattern)
 The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
 plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead
