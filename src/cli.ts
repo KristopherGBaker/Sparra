@@ -1,5 +1,5 @@
 import process from "node:process";
-import { loadCtx } from "./context.ts";
+import { loadCtx, loadCtxForRole } from "./context.ts";
 import type { Mode } from "./state.ts";
 import { banner, color, err, info } from "./util/log.ts";
 import { cmdInit } from "./phases/init.ts";
@@ -95,6 +95,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Standalone role-runner surfaces work WITHOUT `sparra init`: they resolve a
+  // config-less, default-backed context (existing `.sparra/` is still honored).
+  if (cmd === "role" || cmd === "eval") {
+    const roleCtx = await loadCtxForRole(root);
+    if (cmd === "role") {
+      if (positionals[1] === "run") await cmdRoleRun(roleCtx, flags);
+      else {
+        err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run)`);
+        process.exitCode = 1;
+      }
+    } else {
+      // alias: `sparra eval [dir] [--contract f] [--holdout f] [--backend b] [--out f]`
+      // — a standalone evaluator on a WIP tree (defaults the brief).
+      const evalFlags: Record<string, string | boolean> = { ...flags, kind: "evaluator" };
+      if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
+      await cmdRoleRun(roleCtx, evalFlags);
+    }
+    return;
+  }
+
   // All other commands need an initialized project.
   const ctx = await loadCtx(root);
 
@@ -135,21 +155,6 @@ async function main(): Promise<void> {
     case "new":
       await cmdNew(ctx, positionals.slice(1).join(" "));
       break;
-    case "role":
-      if (positionals[1] === "run") await cmdRoleRun(ctx, flags);
-      else {
-        err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run)`);
-        process.exitCode = 1;
-      }
-      break;
-    case "eval": {
-      // alias: `sparra eval [dir] [--contract f] [--holdout f] [--backend b] [--out f]`
-      // — a standalone evaluator on a WIP tree (defaults the brief).
-      const evalFlags: Record<string, string | boolean> = { ...flags, kind: "evaluator" };
-      if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
-      await cmdRoleRun(ctx, evalFlags);
-      break;
-    }
     case "resume":
       await resume(ctx);
       break;

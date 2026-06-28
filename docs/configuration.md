@@ -2,6 +2,8 @@
 
 Every knob lives in **`.sparra/config.yaml`** (seeded on `init` with mode-aware defaults; edit and re-run any phase — changes are picked up live). Models accept SDK aliases (`opus` · `sonnet` · `haiku` · `fable`) or full model ids. Anything you omit inherits the default.
 
+> **Zero-setup standalone surfaces.** `sparra eval`, `sparra role run`, and the MCP `run_role` tool work in a repo with **no `.sparra/`** — they fall back to the built-in defaults (this same `defaultConfig` + the built-in role prompts) with an in-memory greenfield store, so `sparra init` is **not** required for an ad-hoc cross-model eval/role-run. Run `init` only to customize (per-role backends, rubric, edited prompts) or to drive the full `plan → freeze → build` loop. An existing `.sparra/config.yaml` is always honored unchanged.
+
 ```yaml
 roles:                        # per role: { backend?, model, effort?, baseUrl?, apiKey?, skills?, sandbox? }  (backend defaults to "claude")
   orienter:          { model: sonnet, effort: high }

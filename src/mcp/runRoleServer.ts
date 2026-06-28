@@ -2,7 +2,7 @@ import { Writable } from "node:stream";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadCtx } from "../context.ts";
+import { loadCtxForRole } from "../context.ts";
 import { runRole, type RoleKind } from "../build/roleRun.ts";
 
 /**
@@ -11,7 +11,9 @@ import { runRole, type RoleKind } from "../build/roleRun.ts";
  * the holdout boundary is enforced server-side: the conductor passes a holdout
  * PATH, never contents, and the server returns only normalized artifacts — for the
  * evaluator, the parsed VERDICT (never the raw evaluator output, which could quote
- * holdout). Pair it with a project's `.sparra/` config (per-role backends, rubric).
+ * holdout). It works config-less (no `sparra init` needed) — a missing `.sparra/`
+ * yields a default-backed context; an existing `.sparra/` config (per-role backends,
+ * rubric) is honored unchanged.
  *
  * Wire it into Claude Code as an MCP server pointed at your project root, e.g.:
  *   { "mcpServers": { "sparra-run": { "command": "node",
@@ -55,7 +57,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
     },
     async (args) => {
       try {
-        const ctx = await loadCtx(root);
+        const ctx = await loadCtxForRole(root);
         const r = await runRole({
           ctx,
           roleKind: args.roleKind as RoleKind,

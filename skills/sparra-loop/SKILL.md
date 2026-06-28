@@ -18,11 +18,15 @@ You are the **conductor**. You drive the loop; the **rigor lives in the runner**
 through Sparra's existing seam, so you can pit models against each other.
 
 ## Setup (first run) — init + pick the model split
-The runner reuses the project's `.sparra/` (config, prompts, rubric), so set it up once:
+The runner reuses the project's `.sparra/` (config, prompts, rubric) when present, so set
+it up once. **`sparra init` is OPTIONAL:** ad-hoc `sparra eval` / `run_role` / `role run`
+work config-less (default backends + built-in prompts) with no `.sparra/` — skip init for
+a quick cross-model second opinion. Run init for a customized or full plan→build loop:
 
-1. **Initialize** if there's no `.sparra/` dir: run `sparra init` (greenfield/existing is
-   auto-detected; add `--docs docs` to keep planning files in a subfolder). This scaffolds
-   `.sparra/config.yaml` + role prompts.
+1. **Initialize** (only for customization or the full loop) if there's no `.sparra/` dir:
+   run `sparra init` (greenfield/existing is auto-detected; add `--docs docs` to keep
+   planning files in a subfolder). This scaffolds `.sparra/config.yaml` + role prompts. For
+   a one-off eval you can skip this and pass `--backend`/`--model` per call instead.
 2. **Pick who builds vs judges** with the user, then edit `.sparra/config.yaml` `roles.*`
    (each role: `backend` claude|codex, `model`, optional `effort`). The high-value default
    is **cross-model**: one family builds, another judges. Example:

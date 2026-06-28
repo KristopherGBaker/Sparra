@@ -31,7 +31,8 @@ claude plugin install sparra@sparra-skills        # gives you /sparra-loop
 ```
 Then, in any project, invoke **`/sparra-loop`** — it runs `sparra init`, helps set the
 per-role backend/model split, optionally scaffolds a holdout, and drives the loop. (No
-plugin? Use `sparra role run` directly after `sparra init`.) Versions move fast — if a
+plugin? Use `sparra role run` / `sparra eval` directly — no `sparra init` required for
+ad-hoc eval; the MCP tool likewise needs no init'd project.) Versions move fast — if a
 flag differs, check `claude mcp --help` / `claude plugin --help`.
 
 **Picking up edits to the skill/agents.** The plugin is a snapshot pinned to a git
@@ -124,9 +125,14 @@ Claude generates, Codex evaluates (or vice versa) — the same cross-backend eva
 Sparra supports, now one call away in an interactive session.
 
 ## Honest limits
-- It needs the project's `.sparra/` (config, prompts, rubric) — run `sparra init` once. The
-  **`sparra-loop` skill drives this for you**: it runs init, helps set the per-role
-  backend/model split (cross-model), and can scaffold a holdout, before driving the loop.
+- **Zero-setup:** `sparra eval` / `sparra role run` / the MCP `run_role` tool work in a
+  repo with **no `.sparra/`** — they synthesize a default-backed context (built-in
+  prompts + `defaultConfig`'s per-role backends + an in-memory greenfield store), so no
+  `sparra init` is required for an ad-hoc cross-model second opinion. `sparra init` is
+  **optional** — run it only to customize (per-role backends, rubric, edited prompts, a
+  scaffolded holdout) or to run the full `plan → freeze → build` loop. An existing
+  `.sparra/config.yaml` is always honored unchanged. The **`sparra-loop` skill** can
+  drive init + the per-role backend/model split + a holdout when you want them.
 - The runner is a **single-shot role**, not the full loop — it injects the contract,
   conventions (CODEBASE_MAP/Apple), and memory, but not multi-round pivot/feedback state
   (the conductor threads that between calls).
