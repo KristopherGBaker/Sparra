@@ -30,6 +30,12 @@ export interface AuditResult {
   notes?: string;
 }
 
+/** The INDEPENDENT verifier's verdict: it re-derives the original's rules and checks each survives. */
+export interface VerifierResult {
+  complete?: boolean;
+  missing?: Array<{ rule: string }>;
+}
+
 /** Deterministic size measure: chars and an approximate token count (chars/4, rounded up). */
 export function measurePrompt(text: string): { chars: number; tokens: number } {
   const chars = text.length;
@@ -52,6 +58,15 @@ export function shouldApply(a: AuditResult | null | undefined): boolean {
   );
 }
 
+/**
+ * The INDEPENDENT verifier's apply decision. Unlike `shouldApply`, this does NOT consult the
+ * auditor's self-reported coverage — it trusts ONLY a separate verifier pass that re-derives the
+ * original's rules from source. Approve ONLY when the verifier explicitly confirms nothing missing.
+ */
+export function verifierApproves(v: VerifierResult | null | undefined): boolean {
+  return v?.complete === true && Array.isArray(v?.missing) && v.missing.length === 0;
+}
+
 /** Why an `--apply` was refused — for the warning + review file. */
 function skipReason(a: AuditResult | null | undefined): string {
   if (!a) return "unparseable JSON (no audit object returned)";
@@ -60,6 +75,13 @@ function skipReason(a: AuditResult | null | undefined): string {
   if (!Array.isArray(a.coverage) || a.coverage.length === 0) return "coverage report is empty";
   if (a.coverage.some((c) => c.dropped)) return "a rule was marked dropped";
   return "coverage guard not satisfied";
+}
+
+/** Why the INDEPENDENT verifier refused an `--apply` — distinct from the coverage reason. */
+function verifierSkipReason(v: VerifierResult | null | undefined): string {
+  if (!v) return "verifier returned unparseable JSON";
+  const n = Array.isArray(v.missing) ? v.missing.length : 0;
+  return `verifier flagged ${n} missing rule(s)`;
 }
 
 export interface AuditRow {
@@ -102,7 +124,8 @@ function renderReview(
   after: { chars: number; tokens: number },
   pctDelta: number,
   parsed: AuditResult | null,
-  outcome: string
+  outcome: string,
+  verifier?: { ran: boolean; result: VerifierResult | null }
 ): string {
   const droppedNothing = parsed?.droppedNothing === true;
   const coverage = Array.isArray(parsed?.coverage) ? parsed!.coverage : [];
@@ -114,6 +137,19 @@ function renderReview(
         .join("\n")
     : "_no coverage reported_";
   const tightened = typeof parsed?.tightened === "string" && parsed.tightened.trim() ? parsed.tightened : "_none_";
+  let verifierSection = "";
+  if (verifier?.ran) {
+    const v = verifier.result;
+    const missing = Array.isArray(v?.missing) ? v!.missing : [];
+    const missingLines = missing.length
+      ? missing.map((m) => `- "${m.rule}" → missing/weakened`).join("\n")
+      : "_none_";
+    verifierSection =
+      `## Independent verifier\n` +
+      `- ran: yes\n` +
+      `- complete: ${v?.complete === true}\n` +
+      `- missing rules (${missing.length}):\n${missingLines}\n\n`;
+  }
   return (
     `# Prompt audit — ${role}\n\n` +
     `- size before: ${before.chars} chars (~${before.tokens} tokens)\n` +
@@ -122,6 +158,7 @@ function renderReview(
     `- droppedNothing: ${droppedNothing}\n` +
     `- outcome: ${outcome}\n\n` +
     `## Coverage (${coverage.length} rule${coverage.length === 1 ? "" : "s"})\n${coverageLines}\n\n` +
+    verifierSection +
     `## Notes\n${parsed?.notes?.trim() || "_none_"}\n\n` +
     `## Tightened proposal\n${tightened}\n`
   );
@@ -145,6 +182,7 @@ export async function auditPrompts(ctx: Ctx, opts: AuditOptions = {}): Promise<A
   };
   const targets = opts.roles?.length ? opts.roles : Object.keys(DEFAULT_PROMPTS);
   const system = await loadPrompt(ctx.paths, "prompt-auditor");
+  const verifierSystem = await loadPrompt(ctx.paths, "prompt-audit-verifier");
   const traceDir = path.join(ctx.paths.traces, `prompt-audit-${stampFromDate(new Date())}`);
 
   const rows: AuditRow[] = [];
@@ -194,10 +232,63 @@ ${current}
     const pctDelta = sizeBefore.chars > 0 ? Math.round(((sizeAfter.chars - sizeBefore.chars) / sizeBefore.chars) * 100) : 0;
     const droppedNothing = parsed?.droppedNothing === true;
 
-    // source="default" is always report-only — applying would rewrite src/prompts.ts source.
-    const apply = !fromDefault && !!opts.apply && shouldApply(parsed);
+    // First gate: the auditor's own coverage cross-check. source="default" is always report-only
+    // (applying would rewrite src/prompts.ts source).
+    const coverageOk = !fromDefault && !!opts.apply && shouldApply(parsed);
+
+    // Second, INDEPENDENT gate (--apply only, and only once coverage passed): a separate verifier
+    // re-derives the ORIGINAL's rules FROM SOURCE (not from the auditor's coverage) and confirms
+    // each survives in the tightened text. This catches rules the auditor MISSED (never enumerated),
+    // which the coverage cross-check cannot see. Skipped for report-only / source=default — no call.
+    let verifierRan = false;
+    let verifierResult: VerifierResult | null = null;
+    if (coverageOk) {
+      verifierRan = true;
+      seq++;
+      const vtask = `Independently verify this prompt tightening preserves EVERY rule from the ORIGINAL. Return ONLY the JSON object.
+
+ROLE: ${r}
+
+ORIGINAL PROMPT:
+---
+${current}
+---
+
+PROPOSED TIGHTENED PROMPT:
+---
+${tightened}
+---`;
+      const vres = await run({
+        role: `prompt-audit-verifier-${r}`,
+        prompt: vtask,
+        systemPrompt: verifierSystem,
+        backend: role.backend,
+        model: role.model,
+        effort: role.effort,
+        baseUrl: role.baseUrl,
+        apiKey: role.apiKey,
+        cwd: ctx.root,
+        tools: [],
+        readOnly: true,
+        maxTurns: ctx.config.build.maxTurnsPerSession,
+        maxBudgetUsd: ctx.config.build.maxBudgetUsdPerItem,
+        traceDir,
+        traceSeq: seq,
+      });
+      verifierResult = extractJsonWhere<VerifierResult>(
+        vres.resultText,
+        (v) => v && typeof v === "object" && ("complete" in v || "missing" in v)
+      );
+    }
+
+    // Effective apply = coverage cross-check AND independent verifier approval.
+    const apply = coverageOk && verifierApproves(verifierResult);
     const skipped = !fromDefault && !!opts.apply && !apply;
-    const reason = skipped ? skipReason(parsed) : undefined;
+    const reason = skipped
+      ? verifierRan
+        ? verifierSkipReason(verifierResult)
+        : skipReason(parsed)
+      : undefined;
     const outcome = apply
       ? "APPLIED"
       : fromDefault && opts.apply
@@ -207,7 +298,10 @@ ${current}
           : "report-only";
 
     const reviewPath = path.join(ctx.paths.prompts, "audit", `${r}.md`);
-    await writeText(reviewPath, renderReview(r, sizeBefore, sizeAfter, pctDelta, parsed, outcome));
+    await writeText(
+      reviewPath,
+      renderReview(r, sizeBefore, sizeAfter, pctDelta, parsed, outcome, { ran: verifierRan, result: verifierResult })
+    );
 
     // Apply only behind the verified coverage guard; otherwise the prompt file is left BYTE-IDENTICAL.
     if (apply) await writeText(ctx.paths.promptFile(r), tightened.replace(/\n*$/, "") + "\n");

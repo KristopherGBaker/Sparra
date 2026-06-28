@@ -170,6 +170,16 @@ wording can be **tighter without losing any rule**.
   tightened text is non-empty AND `coverage` is a non-empty array with NO `dropped` entry. Any other
   shape (false/missing `droppedNothing`, unparseable JSON, empty tightened, empty coverage, or a
   dropped rule) is SKIPPED, leaving the prompt byte-identical. Without `--apply` it is report-only.
+- **Plus an INDEPENDENT verifier pass (on `--apply` only).** The coverage cross-check trusts the
+  auditor's OWN enumeration of the original's rules — so a rule the auditor simply MISSES (never
+  lists) looks fully covered, and `--apply` could silently drop it. To close that gap, once the
+  coverage guard passes, a SEPARATE read-only `prompt-audit-verifier` run is given the ORIGINAL and
+  the TIGHTENED text and INDEPENDENTLY re-enumerates the original's rules (NOT from the auditor's
+  coverage), returning `{ "complete": boolean, "missing": [{"rule"}] }`. The prompt is overwritten
+  ONLY if the verifier reports `complete: true` with an empty `missing`; otherwise (incomplete,
+  missing rules, or unparseable) it is SKIPPED with a distinct "verifier flagged N missing rule(s)"
+  reason and left byte-identical. The verifier runs ONCE per applied role; report-only and
+  `--source default` never invoke it. Its outcome is recorded in the per-role review file.
 - Safety: the audit operates ONLY on role-prompt text — it injects no holdout/memory/plan and the
   auditor is read-only (the prompt is passed inline; it has no Write/Edit/Bash tools).
 

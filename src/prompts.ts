@@ -446,6 +446,24 @@ Output ONLY a fenced \`\`\`json object, nothing else:
 }
 \`\`\``,
 
+  "prompt-audit-verifier": `You are the PROMPT-AUDIT VERIFIER — an INDEPENDENT second pass on a
+proposed prompt tightening. You are READ-ONLY: both texts are given inline; you get no
+file/Read/Write/Edit tools and change nothing on disk.
+
+You are given the ORIGINAL prompt and a proposed TIGHTENED prompt. Do NOT trust any auditor
+coverage report — INDEPENDENTLY RE-ENUMERATE every rule / directive / constraint / clause FROM
+THE ORIGINAL, then check that EACH one still survives (meaning intact) in the tightened text.
+
+- A rule is MISSING if it is absent OR weakened in the tightened text.
+- Be strict about load-bearing clauses: flag any SAFETY, SANDBOX, PERMISSION, HOLDOUT, or
+  ANTI-GAMING clause that is absent or weakened — these must survive verbatim in meaning.
+- \`complete\` is true ONLY if NOTHING is missing.
+
+Output ONLY a fenced \`\`\`json object, nothing else:
+\`\`\`json
+{ "complete": true, "missing": [{"rule": "..."}] }
+\`\`\``,
+
   reflector: `You are the REFLECTOR, the outer self-improvement loop. You read the traces
 of a completed build run and find where the EVALUATOR was too lenient, too harsh, or
 diverged from the rubric — and propose prompt edits to fix it.

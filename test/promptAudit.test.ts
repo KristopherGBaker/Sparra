@@ -6,7 +6,14 @@ import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import { seedPrompts, DEFAULT_PROMPTS } from "../src/prompts.ts";
-import { measurePrompt, shouldApply, auditPrompts, type AuditResult } from "../src/build/promptAudit.ts";
+import {
+  measurePrompt,
+  shouldApply,
+  verifierApproves,
+  auditPrompts,
+  type AuditResult,
+  type VerifierResult,
+} from "../src/build/promptAudit.ts";
 import type { Ctx } from "../src/context.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
 
@@ -30,6 +37,31 @@ function fakeRun(
     return {
       ok: true, subtype: "success", resultText: text, sessionId: "s",
       costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+    };
+  };
+}
+
+const APPROVE: VerifierResult = { complete: true, missing: [] };
+
+/**
+ * A role-aware fake: returns the auditor payload for the auditor session and the verifier payload
+ * for the verifier session. We distinguish by the role string carrying "prompt-audit-verifier"
+ * (an EXACT substring) — NOT startsWith("prompt-auditor"), which would prefix-collide.
+ */
+function fakeRoleAware(
+  auditor: AuditResult | string,
+  verifier: VerifierResult | string,
+  capture?: { auditor?: (p: RunSessionParams) => void; verifier?: (p: RunSessionParams) => void }
+): (p: RunSessionParams) => Promise<RunResult> {
+  const toText = (pl: AuditResult | VerifierResult | string) =>
+    typeof pl === "string" ? pl : "```json\n" + JSON.stringify(pl) + "\n```";
+  return async (p) => {
+    const isVerifier = p.role.includes("prompt-audit-verifier");
+    if (isVerifier) capture?.verifier?.(p);
+    else capture?.auditor?.(p);
+    return {
+      ok: true, subtype: "success", resultText: isVerifier ? toText(verifier) : toText(auditor),
+      sessionId: "s", costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
     };
   };
 }
@@ -71,6 +103,20 @@ describe("shouldApply (fail-closed + coverage cross-check)", () => {
   });
 });
 
+describe("verifierApproves (independent second gate)", () => {
+  it("true ONLY for complete:true with an empty missing array", () => {
+    expect(verifierApproves({ complete: true, missing: [] })).toBe(true);
+  });
+  it("false on every other shape", () => {
+    expect(verifierApproves(null)).toBe(false);
+    expect(verifierApproves(undefined)).toBe(false);
+    expect(verifierApproves({ complete: false, missing: [] })).toBe(false);
+    expect(verifierApproves({ complete: true })).toBe(false); // missing not an array
+    expect(verifierApproves({ complete: true, missing: [{ rule: "x" }] })).toBe(false);
+    expect(verifierApproves({ missing: [] })).toBe(false); // complete absent
+  });
+});
+
 describe("auditPrompts — review file", () => {
   it("writes a per-role review with coverage, droppedNothing, and before→after sizes", async () => {
     const { ctx, dir } = await ctxFor();
@@ -98,11 +144,21 @@ describe("auditPrompts — review file", () => {
 });
 
 describe("auditPrompts — apply gate (fail-closed + coverage cross-check)", () => {
-  it("SAFE + --apply overwrites the prompt with the tightened text", async () => {
+  it("SAFE + --apply overwrites the prompt with the tightened text (verifier approves)", async () => {
     const { ctx, dir } = await ctxFor();
-    const rows = await auditPrompts(ctx, { roles: ["generator"], apply: true, runSessionFn: fakeRun(SAFE) });
+    let auditorCalls = 0;
+    let verifierCalls = 0;
+    const rows = await auditPrompts(ctx, {
+      roles: ["generator"], apply: true,
+      runSessionFn: fakeRoleAware(SAFE, APPROVE, {
+        auditor: () => auditorCalls++,
+        verifier: () => verifierCalls++,
+      }),
+    });
     expect(rows[0]!.applied).toBe(true);
     expect(rows[0]!.skipped).toBe(false);
+    expect(auditorCalls).toBe(1);
+    expect(verifierCalls).toBe(1);
     const onDisk = fs.readFileSync(ctx.paths.promptFile("generator"), "utf8");
     expect(onDisk).toContain(SAFE.tightened!);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -137,6 +193,107 @@ describe("auditPrompts — apply gate (fail-closed + coverage cross-check)", () 
     expect(rows[0]!.applied).toBe(false);
     expect(rows[0]!.skipped).toBe(false);
     expect(fs.readFileSync(ctx.paths.promptFile("generator"), "utf8")).toBe(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("auditPrompts — independent verifier gate (the missed-rule guard)", () => {
+  const disapprovals: Array<[string, VerifierResult | string]> = [
+    ["verifier complete:false", { complete: false, missing: [] }],
+    ["verifier non-empty missing", { complete: false, missing: [{ rule: "never read the holdout" }] }],
+    ["verifier unparseable JSON", "the model said nothing structured"],
+  ];
+  for (const [name, vpayload] of disapprovals) {
+    it(`SAFE auditor but ${name} ⇒ prompt BYTE-IDENTICAL + skipReason /verifier/i`, async () => {
+      const { ctx, dir } = await ctxFor();
+      const before = fs.readFileSync(ctx.paths.promptFile("generator"), "utf8");
+      const rows = await auditPrompts(ctx, {
+        roles: ["generator"], apply: true, runSessionFn: fakeRoleAware(SAFE, vpayload),
+      });
+      expect(rows[0]!.applied).toBe(false);
+      expect(rows[0]!.skipped).toBe(true);
+      expect(rows[0]!.skipReason).toMatch(/verifier/i);
+      // NOT the generic coverage reason — coverage passed; the verifier is what refused.
+      expect(rows[0]!.skipReason).not.toMatch(/coverage/i);
+      expect(fs.readFileSync(ctx.paths.promptFile("generator"), "utf8")).toBe(before);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
+  it("auditor UNSAFE (shouldApply false) ⇒ byte-identical AND the verifier is NEVER called", async () => {
+    const { ctx, dir } = await ctxFor();
+    const before = fs.readFileSync(ctx.paths.promptFile("generator"), "utf8");
+    let verifierCalls = 0;
+    const unsafe: AuditResult = { ...SAFE, droppedNothing: false };
+    const rows = await auditPrompts(ctx, {
+      roles: ["generator"], apply: true,
+      runSessionFn: fakeRoleAware(unsafe, APPROVE, { verifier: () => verifierCalls++ }),
+    });
+    expect(rows[0]!.applied).toBe(false);
+    expect(verifierCalls).toBe(0);
+    expect(fs.readFileSync(ctx.paths.promptFile("generator"), "utf8")).toBe(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("report-only (no --apply) NEVER calls the verifier", async () => {
+    const { ctx, dir } = await ctxFor();
+    let verifierCalls = 0;
+    await auditPrompts(ctx, {
+      roles: ["generator"], runSessionFn: fakeRoleAware(SAFE, APPROVE, { verifier: () => verifierCalls++ }),
+    });
+    expect(verifierCalls).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("source=default + --apply NEVER calls the verifier (report-only)", async () => {
+    const { ctx, dir } = await ctxFor();
+    let verifierCalls = 0;
+    await auditPrompts(ctx, {
+      roles: ["generator"], source: "default", apply: true,
+      runSessionFn: fakeRoleAware(SAFE, APPROVE, { verifier: () => verifierCalls++ }),
+    });
+    expect(verifierCalls).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("INDEPENDENCE: the verifier sees BOTH original + tightened, its OWN system prompt, read-only, no write tools, overrides applied", async () => {
+    const { ctx, dir } = await ctxFor();
+    let auditorReq: RunSessionParams | undefined;
+    let verifierReq: RunSessionParams | undefined;
+    await auditPrompts(ctx, {
+      roles: ["generator"], apply: true, backend: "codex", model: "gpt-5.5", effort: "xhigh",
+      runSessionFn: fakeRoleAware(SAFE, APPROVE, {
+        auditor: (p) => (auditorReq = p),
+        verifier: (p) => (verifierReq = p),
+      }),
+    });
+    expect(verifierReq).toBeDefined();
+    // re-derives FROM SOURCE: the verifier prompt carries BOTH the original and the tightened text
+    expect(verifierReq!.prompt).toContain(DEFAULT_PROMPTS["generator"]!.slice(0, 40)); // original
+    expect(verifierReq!.prompt).toContain(SAFE.tightened!); // proposed tightened
+    // its own system prompt, distinct from the auditor's
+    expect(verifierReq!.systemPrompt).not.toBe(auditorReq!.systemPrompt);
+    expect(verifierReq!.systemPrompt).toMatch(/VERIFIER/);
+    // safety + overrides
+    expect(verifierReq!.readOnly).toBe(true);
+    expect(verifierReq!.tools ?? []).not.toContain("Write");
+    expect(verifierReq!.tools ?? []).not.toContain("Edit");
+    expect(verifierReq!.tools ?? []).not.toContain("Bash");
+    expect(verifierReq!.backend).toBe("codex");
+    expect(verifierReq!.model).toBe("gpt-5.5");
+    expect(verifierReq!.effort).toBe("xhigh");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("records the verifier outcome in the review file on a verifier-skip --apply", async () => {
+    const { ctx, dir } = await ctxFor();
+    const flagged: VerifierResult = { complete: false, missing: [{ rule: "never read the holdout" }] };
+    const rows = await auditPrompts(ctx, {
+      roles: ["generator"], apply: true, runSessionFn: fakeRoleAware(SAFE, flagged),
+    });
+    const review = fs.readFileSync(rows[0]!.reviewPath, "utf8");
+    expect(review).toMatch(/verifier/i);
+    expect(review).toContain("never read the holdout");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -236,6 +393,21 @@ describe("prompt-auditor DEFAULT_PROMPTS text", () => {
     expect(t).toMatch(/permission/i);
     expect(t).toMatch(/holdout/i);
     expect(t).toMatch(/anti-gaming/i);
+  });
+});
+
+describe("prompt-audit-verifier DEFAULT_PROMPTS text", () => {
+  it("carries the independent-enumeration cue, the protect-safety discipline, and the JSON fields", () => {
+    const t = DEFAULT_PROMPTS["prompt-audit-verifier"]!;
+    expect(t).toMatch(/independent/i);
+    expect(t).toMatch(/re-enumerate/i);
+    expect(t).toMatch(/original/i);
+    expect(t).toMatch(/safety/i);
+    expect(t).toMatch(/holdout/i);
+    expect(t).toMatch(/complete/);
+    expect(t).toMatch(/missing/);
+    // it must NOT derive from the auditor's coverage
+    expect(t).toMatch(/coverage/i);
   });
 });
 
