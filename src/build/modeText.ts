@@ -20,9 +20,9 @@ there is no prior behavior to preserve.`;
 export function selfVerifyGuidance(ctx: Ctx): string {
   const cmds = ctx.config.build.verifyCommands;
   if (!cmds.length || !ctx.store.data.build.branch) return "";
-  return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash (e.g. ${cmds
-    .slice(0, 4)
-    .join(", ")}) — run them, READ the output, and FIX anything you broke. Do not report success on code you have not compiled/tested. Only single, self-contained verification commands are auto-approved (no command chaining, redirects, network installs, or commits — those are blocked), and writes stay inside your work tree.`;
+  return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash. Use these commands AS WRITTEN: ${cmds
+    .slice(0, 6)
+    .join(", ")} — run them, READ the output, and FIX anything you broke. Do not report success on code you have not compiled/tested. ONLY these exact command forms are auto-approved: package-runner / path-qualified variants (\`npx tsc\`, \`./node_modules/.bin/vitest\`) and command chaining, redirects, network installs, or commits are NOT — they will be blocked, so don't substitute them. Writes stay inside your work tree.`;
 }
 
 /** The generator's deviation policy text, by mode + strictness. */

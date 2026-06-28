@@ -9,10 +9,33 @@ import {
   denyBashMutation,
   denyAmbientMcp,
   allowVerifyBash,
+  allowReadInScope,
   writeScopeViolations,
 } from "../src/sdk/scoping.ts";
 
 const VERIFY = ["npm test", "tsc", "npm run typecheck", "swift test"];
+
+describe("allowReadInScope (always-readable workspace — Item B)", () => {
+  const SCOPES = ["/work", "/extra"];
+  it("auto-approves an explicit in-scope Read/Glob/Grep (absolute or relative)", () => {
+    expect(allowReadInScope("Read", { file_path: "/work/src/a.ts" }, SCOPES)).toMatch(/Auto-approved/);
+    expect(allowReadInScope("Grep", { path: "/extra/lib", pattern: "x" }, SCOPES)).toMatch(/Auto-approved/);
+    expect(allowReadInScope("Read", { file_path: "src/a.ts" }, SCOPES)).toMatch(/Auto-approved/); // relative → SCOPES[0]
+  });
+  it("defers an out-of-scope target (does not broaden beyond the scope)", () => {
+    expect(allowReadInScope("Read", { file_path: "/etc/passwd" }, SCOPES)).toBeNull();
+    expect(allowReadInScope("Read", { file_path: "/work/../etc/x" }, SCOPES)).toBeNull();
+  });
+  it("defers a pathless search (could surface a cwd-resident holdout — never auto-grant)", () => {
+    expect(allowReadInScope("Grep", { pattern: "secret" }, SCOPES)).toBeNull();
+    expect(allowReadInScope("Glob", { pattern: "**/*.ts" }, SCOPES)).toBeNull();
+  });
+  it("ignores non-read tools and an empty scope", () => {
+    expect(allowReadInScope("Bash", { command: "ls" }, SCOPES)).toBeNull();
+    expect(allowReadInScope("Write", { file_path: "/work/a.ts" }, SCOPES)).toBeNull();
+    expect(allowReadInScope("Read", { file_path: "/work/a.ts" }, [])).toBeNull();
+  });
+});
 
 describe("allowVerifyBash (generator self-verify auto-approval)", () => {
   it("allows a self-contained verification command (exact or with args)", () => {

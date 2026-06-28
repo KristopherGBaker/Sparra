@@ -1,5 +1,6 @@
 import type { HookCallbackMatcher, HookEvent, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import {
+  allowReadInScope,
   allowVerifyBash,
   denyAmbientMcp,
   denyAnyWrite,
@@ -12,6 +13,15 @@ import {
 
 type Decider = (toolName: string, input: any) => string | null;
 export type HookConfig = Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+
+/** Shared read-scope/extra-deny knobs every role-hook accepts. `readScopes` AUTO-APPROVES
+ *  in-scope Read/Glob/Grep so a role can always read its workspace; `extraDeny` lets the runner
+ *  compose more deny-deciders (e.g. the holdout-read block) into the SAME hook, so deny still
+ *  wins over the read allow. */
+export interface RoleHookOpts {
+  readScopes?: string[];
+  extraDeny?: Decider[];
+}
 
 /**
  * Build a PreToolUse deny-hook from a set of deciders. PreToolUse hooks run
@@ -84,13 +94,22 @@ export function mergeHooks(...configs: HookConfig[]): HookConfig {
  *  `verifyCommands` is non-empty, also AUTO-APPROVES those self-contained verification commands
  *  (typecheck/test/build) so the generator can verify its own work — the caller gates this to a
  *  worktree/branch boundary. */
-export function scopedWriterHooks(writeRoots: string[], denyBashContains: string[], verifyCommands: string[] = []): HookConfig {
+export function scopedWriterHooks(
+  writeRoots: string[],
+  denyBashContains: string[],
+  verifyCommands: string[] = [],
+  opts: RoleHookOpts = {}
+): HookConfig {
+  const { readScopes = [], extraDeny = [] } = opts;
   const deny: Decider[] = [
     (t) => denyAmbientMcp(t),
     (t, i) => denyWriteOutsideRoots(t, i, writeRoots),
     (t, i) => denyBash(t, i, denyBashContains),
+    ...extraDeny, // e.g. the holdout-read block — checked BEFORE the read allow below, so deny wins
   ];
-  const allow: Decider[] = verifyCommands.length ? [(t, i) => allowVerifyBash(t, i, verifyCommands, denyBashContains)] : [];
+  const allow: Decider[] = [];
+  if (readScopes.length) allow.push((t, i) => allowReadInScope(t, i, readScopes));
+  if (verifyCommands.length) allow.push((t, i) => allowVerifyBash(t, i, verifyCommands, denyBashContains));
   return makeGuardHook(deny, allow);
 }
 
@@ -103,16 +122,25 @@ export function singleFileHooks(allowedFile: string, denyBashContains: string[])
   ]);
 }
 
-/** Read-only: blocks every write and any Bash mutation. */
-export function readOnlyHooks(denyBashContains: string[]): HookConfig {
-  return makeDenyHook([(t) => denyAmbientMcp(t), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains)]);
+/** Read-only: blocks every write and any Bash mutation. Auto-approves in-scope reads when
+ *  `readScopes` is given, so a read-only role can always read its workspace. */
+export function readOnlyHooks(denyBashContains: string[], opts: RoleHookOpts = {}): HookConfig {
+  const { readScopes = [], extraDeny = [] } = opts;
+  const deny: Decider[] = [(t) => denyAmbientMcp(t), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains), ...extraDeny];
+  const allow: Decider[] = readScopes.length ? [(t, i) => allowReadInScope(t, i, readScopes)] : [];
+  return makeGuardHook(deny, allow);
 }
 
-/** Evaluator: blocks source writes, but allows Bash to exercise the artifact (minus dangerous patterns). */
-export function evaluatorHooks(denyBashContains: string[]): HookConfig {
-  return makeDenyHook([
+/** Evaluator: blocks source writes, but allows Bash to exercise the artifact (minus dangerous patterns).
+ *  Auto-approves in-scope reads when `readScopes` is given so it can always read the artifact. */
+export function evaluatorHooks(denyBashContains: string[], opts: RoleHookOpts = {}): HookConfig {
+  const { readScopes = [], extraDeny = [] } = opts;
+  const deny: Decider[] = [
     (t) => denyAmbientMcp(t),
     (t) => (denyAnyWrite(t) ? `Evaluator does not edit source (${t} blocked). Exercise via Bash / the exercise tools.` : null),
     (t, i) => denyBash(t, i, denyBashContains),
-  ]);
+    ...extraDeny,
+  ];
+  const allow: Decider[] = readScopes.length ? [(t, i) => allowReadInScope(t, i, readScopes)] : [];
+  return makeGuardHook(deny, allow);
 }

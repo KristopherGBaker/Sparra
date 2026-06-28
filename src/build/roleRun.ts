@@ -6,7 +6,6 @@ import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
-import { makeDenyHook, mergeHooks } from "../sdk/hooks.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
@@ -20,6 +19,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
+import { changedFiles } from "../util/git.ts";
 import { warn } from "../util/log.ts";
 
 /**
@@ -95,6 +95,10 @@ export interface RoleRunRequest {
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
   integrityDeps?: IntegrityDeps;
+  /** Injectable for tests; lists the workspace's changed/untracked files (abs paths) — used to
+   *  detect a writer that produced ZERO file changes (the permission-starved no-progress case).
+   *  Defaults to `changedFiles` (git status --porcelain). */
+  changedFilesFn?: (workspace: string) => string[];
   traceDir?: string;
   traceSeq?: number;
 }
@@ -118,6 +122,12 @@ export interface RoleRunResult {
    *  NOT as a behavioral failure to feed back to the generator. Auto-fallback via
    *  `roles.<role>.fallback` is tried first; this is set only if the whole chain was exhausted. */
   limitHit?: LimitHit;
+  /** Set for a WRITER role (generator) that finished WITHOUT changing any file — the
+   *  permission-starved / blocked-brief signature (the failure where every read was denied and the
+   *  run produced nothing while burning tokens). Like `limitHit`, the conductor should treat this
+   *  as "investigate the brief/permissions", NOT a behavioral FAIL to feed back to the generator.
+   *  Never set when `limitHit` is (a limited run legitimately did nothing). */
+  noProgress?: boolean;
 }
 
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
@@ -337,21 +347,24 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     }
   }
 
-  // Guard: Claude-side permission/hooks. For forbid roles, also deny reading the holdout file.
-  let guard: Guard =
-    spec.guard === "writer"
-      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true })
-      : spec.guard === "evaluator"
-        ? evaluatorGuard(ctx)
-        : readOnlyGuard(ctx);
-  if (!evaluator) {
-    guard = { ...guard, hooks: mergeHooks(guard.hooks, makeDenyHook([makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)])) };
-  }
-
   // Forbid roles never get the holdout/.sparra scope granted as readable; the evaluator
   // (allowed to see holdout) keeps the full scope. This shrinks the off-disk read residual
-  // (esp. on Codex, which ignores the deny-hook above).
+  // (esp. on Codex, which ignores the deny-hook below).
   const readDirs = buildReadDirs(ctx, workspace, { excludeHoldoutScope: !evaluator });
+
+  // Guard: Claude-side permission/hooks. A role can ALWAYS read its own workspace + granted
+  // read dirs (auto-approved in-hook, mode-independent), so a writer never silently starves
+  // on denied reads. For forbid roles the holdout-read block is folded in as an extra DENY
+  // decider — it runs BEFORE the read allow in the same hook, so a holdout/.sparra read still
+  // loses even though in-scope reads are granted.
+  const readScopes = [workspace, ...(readDirs ?? [])];
+  const extraDeny = evaluator ? [] : [makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)];
+  const guard: Guard =
+    spec.guard === "writer"
+      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, readScopes, extraDeny })
+      : spec.guard === "evaluator"
+        ? evaluatorGuard(ctx, { readScopes, extraDeny })
+        : readOnlyGuard(ctx, { readScopes, extraDeny });
 
   // Reduced-surface, not closed: if a forbid role's readable scope (its cwd or a granted
   // dir) still contains a PRESENT holdout AND it runs on a hooks-ignoring backend (Codex),
@@ -385,6 +398,13 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
   // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.
   const snap = exerciseScratch ? snapshotArtifact(workspace, integrityDeps) : undefined;
+
+  // For a WRITER role, record the workspace's changed-file set BEFORE the run, so we can detect a
+  // generator that finished without changing anything (the permission-starved / blocked no-progress
+  // case) and surface a distinct signal instead of a silent FAIL.
+  const isWriter = spec.guard === "writer";
+  const listChanges = req.changedFilesFn ?? changedFiles;
+  const writerBefore = isWriter ? new Set(listChanges(workspace)) : undefined;
 
   // Backend-agnostic request shared across attempts. Backend-specific fields (backend/model/effort/
   // baseUrl/apiKey/resume/traceSeq) are filled per attempt in the fallback loop below.
@@ -460,6 +480,23 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     errors: res.errors,
     limitHit: res.limitHit,
   };
+
+  // No-progress fast-fail: a writer that changed NO file (no new/edited path appeared) didn't
+  // build anything — almost always permission starvation or a blocked brief, not a real "the work
+  // is wrong" outcome. Surface it distinctly (but never over a real limit, where doing nothing is
+  // expected). The conductor treats this like `limitHit`: investigate, don't feed back as a FAIL.
+  if (isWriter && writerBefore && !res.limitHit) {
+    const after = listChanges(workspace);
+    const progressed = after.some((p) => !writerBefore.has(p));
+    if (!progressed) {
+      result.noProgress = true;
+      const msg =
+        `role-run-${roleKind}: writer changed no files — likely blocked reads/Bash or an unactionable brief, ` +
+        `not a behavioral failure. Check the brief is actionable and the workspace is readable; re-run.`;
+      if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+      warn(msg);
+    }
+  }
 
   if (evaluator) {
     // Redact any holdout the evaluator quoted, so it can't reach the conductor via

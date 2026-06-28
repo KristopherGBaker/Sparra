@@ -3,6 +3,9 @@ import path from "node:path";
 /** Tools that write to the filesystem. */
 export const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
+/** Read-only tools a build role may always use within its read scope. */
+export const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
+
 export function within(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
@@ -88,6 +91,24 @@ export function allowVerifyBash(toolName: string, input: any, allowPrefixes: str
   if (disqualify.some((b) => b && cmd.includes(b))) return null;
   const ok = allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "));
   return ok ? `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}` : null;
+}
+
+/**
+ * ALLOW-decider: auto-approve a READ tool (Read/Glob/Grep) whose explicit target is within the
+ * role's read scope, so a generator/evaluator can ALWAYS read its own workspace regardless of the
+ * resolved permission mode or a model classifier (the failure mode where a writer had every
+ * Read/Grep denied and produced nothing). Deny-deciders run FIRST in the same hook, so a holdout /
+ * `.sparra` read is still denied before this can grant it — keep the holdout decider in the deny
+ * list. A read with NO explicit path (a Glob/Grep over the cwd) is NOT auto-granted here (it could
+ * surface a cwd-resident holdout); it defers to the permission mode, so this never broadens scope
+ * beyond an explicit in-scope target.
+ */
+export function allowReadInScope(toolName: string, input: any, readScopes: string[]): string | null {
+  if (!READ_TOOLS.has(toolName) || readScopes.length === 0) return null;
+  const target = (input?.file_path ?? input?.path) as string | undefined;
+  if (!target) return null; // pathless search → defer to the permission mode (don't broaden)
+  const abs = path.isAbsolute(target) ? target : path.resolve(readScopes[0]!, target);
+  return readScopes.some((r) => within(abs, r)) ? `Auto-approved in-scope ${toolName}: ${abs}` : null;
 }
 
 /** Deny Bash that mutates the filesystem (for read-only / read-mostly roles). */

@@ -74,6 +74,17 @@ loop. The result reflects the backend that actually ran; if the whole chain was 
 result carries `limitHit` (and the MCP payload includes it). Treat `limitHit` as **retry/fall
 back, not a behavioral failure** — never feed it back to the generator.
 
+**Always-readable workspace + no-progress fast-fail.** Every role's workspace and granted read
+dirs are **auto-approved for reads in the guard itself** (Read/Glob/Grep with an explicit in-scope
+path), independent of the resolved permission mode or a model classifier — so a writer can never
+silently starve with every read denied (the failure where a generator burned tokens and produced
+nothing). The holdout-read block is composed into the *same* hook as a deny-decider, so it still
+wins over the read allow (a holdout/`.sparra` read is denied even though it sits in the read scope);
+a pathless `Grep`/`Glob` over the cwd is **not** auto-granted (it could surface a cwd-resident
+holdout) and defers to the permission mode. As a backstop, a **writer that finishes without
+changing any file** is flagged `noProgress: true` on the result and the MCP payload — like
+`limitHit`, the conductor treats it as "investigate the brief/permissions", not a behavioral FAIL.
+
 #### Subagent delegation (the conductor's pattern)
 The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
 plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead

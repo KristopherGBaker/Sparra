@@ -45,3 +45,27 @@ describe("scopedWriterHooks — generator self-verify auto-approval", () => {
     expect(await decide(cfg, "Read", { file_path: "/x" })).toBe("defer");
   });
 });
+
+describe("scopedWriterHooks — always-readable workspace (Item B)", () => {
+  it("AUTO-APPROVES an in-scope Read/Glob/Grep so a writer never starves on denied reads", async () => {
+    const cfg = scopedWriterHooks(ROOTS, [], [], { readScopes: ROOTS });
+    expect(await decide(cfg, "Read", { file_path: "/work/src/a.ts" })).toBe("allow");
+    expect(await decide(cfg, "Grep", { path: "/work/src", pattern: "foo" })).toBe("allow");
+    expect(await decide(cfg, "Read", { file_path: "src/a.ts" })).toBe("allow"); // relative → resolved in scope
+  });
+
+  it("DEFERS an out-of-scope or pathless read (never broadens beyond the scope)", async () => {
+    const cfg = scopedWriterHooks(ROOTS, [], [], { readScopes: ROOTS });
+    expect(await decide(cfg, "Read", { file_path: "/etc/passwd" })).toBe("defer");
+    expect(await decide(cfg, "Grep", { pattern: "secret" })).toBe("defer"); // pathless → defer, don't auto-grant
+  });
+
+  it("DENY wins over the read allow: an extraDeny (holdout) read loses even inside the read scope", async () => {
+    const denyHoldout = (t: string, i: any) =>
+      (t === "Read" || t === "Grep") && String(i?.file_path ?? i?.path ?? "").includes("HOLDOUT") ? "holdout is evaluator-only" : null;
+    const cfg = scopedWriterHooks(ROOTS, [], [], { readScopes: ROOTS, extraDeny: [denyHoldout] });
+    // A holdout file physically inside the workspace would be in readScopes — deny must still win.
+    expect(await decide(cfg, "Read", { file_path: "/work/.sparra/HOLDOUT.md" })).toBe("deny");
+    expect(await decide(cfg, "Read", { file_path: "/work/src/a.ts" })).toBe("allow"); // ordinary reads still granted
+  });
+});

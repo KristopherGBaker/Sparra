@@ -80,6 +80,11 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    chain was limited it surfaces `limitHit` — then switch that role to another
    backend/model (`--backend`/`backend`) or retry later. (This is the interactive
    analogue of the CLI loop's auto-restart/fallback.)
+   **No progress ≠ fail:** if a generator summary carries `noProgress: true`, the writer
+   changed no files — a blocked brief or a starved permission path, not "the work is
+   wrong." Don't feed it back as a behavioral FAIL; check the brief is actionable and the
+   workspace readable, then re-run (a writer can always read its workspace, so a real
+   no-progress almost always means the brief had nothing to do).
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
 
 ## Two ways to be interactive — pick by scope

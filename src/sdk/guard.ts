@@ -3,7 +3,7 @@ import type { Ctx } from "../context.ts";
 import { warn, detail } from "../util/log.ts";
 import { readTextSync } from "../util/io.ts";
 import { probeAutoSupported } from "./capabilities.ts";
-import { evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig } from "./hooks.ts";
+import { evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig, type RoleHookOpts } from "./hooks.ts";
 import { makeFormatHook, type FormatOptions } from "./format.ts";
 
 /**
@@ -55,9 +55,16 @@ export function formatOptions(ctx: Ctx): FormatOptions {
  *  Pass `{ verify: true }` to let the generator auto-run its project's verification commands
  *  (`build.verifyCommands`) — ENABLED ONLY on a git worktree/branch boundary (the same wall that
  *  gates Codex full-access), so an in-place run never auto-approves Bash execution. */
-export function scopedWriterGuard(ctx: Ctx, writeRoots: string[], opts: { format?: boolean; verify?: boolean } = {}): Guard {
+export function scopedWriterGuard(
+  ctx: Ctx,
+  writeRoots: string[],
+  opts: { format?: boolean; verify?: boolean } & RoleHookOpts = {}
+): Guard {
   const verifyCommands = opts.verify && ctx.store.data.build.branch ? ctx.config.build.verifyCommands : [];
-  let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands);
+  let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands, {
+    readScopes: opts.readScopes,
+    extraDeny: opts.extraDeny,
+  });
   if (opts.format) hooks = mergeHooks(hooks, makeFormatHook(formatOptions(ctx)));
   return { permissionMode: autonomousPermissionMode(ctx), hooks };
 }
@@ -68,11 +75,11 @@ export function singleFileGuard(ctx: Ctx, allowedFile: string): Guard {
 }
 
 /** Read-only roles (orient, decompose, contract negotiation). */
-export function readOnlyGuard(ctx: Ctx): Guard {
-  return { permissionMode: autonomousPermissionMode(ctx), hooks: readOnlyHooks(ctx.config.permission.denyBashContains) };
+export function readOnlyGuard(ctx: Ctx, opts: RoleHookOpts = {}): Guard {
+  return { permissionMode: autonomousPermissionMode(ctx), hooks: readOnlyHooks(ctx.config.permission.denyBashContains, opts) };
 }
 
 /** Evaluator: no source writes, but may exercise via Bash + exercise MCP. */
-export function evaluatorGuard(ctx: Ctx): Guard {
-  return { permissionMode: autonomousPermissionMode(ctx), hooks: evaluatorHooks(ctx.config.permission.denyBashContains) };
+export function evaluatorGuard(ctx: Ctx, opts: RoleHookOpts = {}): Guard {
+  return { permissionMode: autonomousPermissionMode(ctx), hooks: evaluatorHooks(ctx.config.permission.denyBashContains, opts) };
 }

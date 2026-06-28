@@ -472,3 +472,70 @@ describe("runRole — auto-fallback on a provider limit", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("runRole — writer no-progress fast-fail (Item B)", () => {
+  /** A changedFilesFn returning a scripted result per call (before-run, then after-run). */
+  function changes(seq: string[][]) {
+    let i = 0;
+    return () => seq[Math.min(i++, seq.length - 1)]!;
+  }
+
+  it("flags noProgress when a generator changes NO file (the permission-starved signature)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder("I could not read the workspace.");
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build the artifact.",
+      runSessionFn: rec.fn,
+      changedFilesFn: changes([[], []]), // same (empty) set before and after → nothing written
+    });
+    expect(r.noProgress).toBe(true);
+    expect(r.errors.some((e) => /changed no files/.test(e))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT flag noProgress when the generator wrote a file", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build the artifact.",
+      runSessionFn: rec.fn,
+      changedFilesFn: changes([[], [path.join(dir, "src/new.ts")]]), // a new path appeared → progress
+    });
+    expect(r.noProgress).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("never flags noProgress for a read-only role (evaluator) even if nothing changed", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: rec.fn,
+      changedFilesFn: changes([[], []]),
+    });
+    expect(r.noProgress).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("prefers limitHit over noProgress (a limited run legitimately did nothing)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback → surfaces the limit
+    const rec = limiter(new Set(["codex"]));
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: changes([[], []]),
+    });
+    expect(r.limitHit).toBeDefined();
+    expect(r.noProgress).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -109,6 +109,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               tokens: r.tokens,
               costUsd: r.costUsd,
               limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
+              noProgress: r.noProgress, // writer changed no files → blocked reads/brief, NOT a behavioral fail
             };
         return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
       } catch (e) {
