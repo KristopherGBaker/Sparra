@@ -1,7 +1,9 @@
 import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
+import { holdoutFreeCwd } from "./readscope.ts";
 import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
@@ -31,9 +33,15 @@ export async function negotiateContract(
   traceDir: string,
   traceSeqStart: number,
   /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
-  priorLearnings?: string
+  priorLearnings?: string,
+  /** The worktree for an isolated build, else `ctx.root`; selects a holdout-free cwd. */
+  workspaceDir?: string,
+  /** Injectable for tests; defaults to the real SDK session (mirrors generateItem). */
+  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>
 ): Promise<ContractResult> {
   const file = ctx.paths.contractFile(item.id);
+  const run = runSessionFn ?? runSession;
+  const cwd = holdoutFreeCwd(ctx, workspaceDir ?? ctx.root);
 
   // Resume: if a contract was already agreed, reuse it. A human may have edited it
   // (interactive contract steering), so leak-check the reused text here — fail clearly
@@ -79,17 +87,18 @@ export async function negotiateContract(
     const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. REVISE the contract to address every point.\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
 
     assertNoHoldoutLeak("contract-generator", genTask, holdout);
-    const genRes = await runSession({
+    const genRes = await run({
       role: "contract-generator",
       prompt: genTask,
       systemPrompt: genSystem,
       backend: genRole.backend,
       model: genRole.model,
       effort: genRole.effort,
-      cwd: ctx.root,
+      cwd,
       tools: ["Read", "Glob", "Grep"],
-      // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
-      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
+      // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
+      // tracks THAT cwd as defense-in-depth on hooks-aware backends.
+      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
       maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,
@@ -99,17 +108,18 @@ export async function negotiateContract(
 
     const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\nPROPOSED CONTRACT:\n${proposal}`;
     assertNoHoldoutLeak("contract-evaluator", evalTask, holdout);
-    const evalRes = await runSession({
+    const evalRes = await run({
       role: "contract-evaluator",
       prompt: evalTask,
       systemPrompt: evalSystem,
       backend: evalRole.backend,
       model: evalRole.model,
       effort: evalRole.effort,
-      cwd: ctx.root,
+      cwd,
       tools: ["Read", "Glob", "Grep"],
-      // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
-      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
+      // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
+      // tracks THAT cwd as defense-in-depth on hooks-aware backends.
+      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
       maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,

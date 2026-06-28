@@ -11,6 +11,36 @@ function expandHome(p: string): string {
 }
 
 /**
+ * The holdout artifacts whose presence makes a dir UNSAFE for a forbid role's cwd/read scope:
+ * the `.sparra` machinery (`ctx.paths.dir`: verdicts, evaluator traces, frozen copies), the live
+ * holdout (`ctx.paths.holdout` — NOT always under `.sparra`: a configured `docsDir` resolves it to
+ * `<docsBase>/HOLDOUT.md`), and the frozen holdout (`ctx.paths.frozenHoldout`). One list, reused by
+ * `buildReadDirs`'s `excludeHoldoutScope` and `holdoutFreeCwd` (DRY — the single source of truth).
+ */
+function holdoutArtifacts(ctx: Ctx): string[] {
+  return [ctx.paths.dir, ctx.paths.holdout, ctx.paths.frozenHoldout].map((p) => path.resolve(p));
+}
+
+/** True if `dir` contains (or IS) any holdout artifact — i.e. it is NOT holdout-free. */
+function containsHoldoutArtifact(ctx: Ctx, dir: string): boolean {
+  const c = path.resolve(dir);
+  return holdoutArtifacts(ctx).some((a) => within(a, c));
+}
+
+/**
+ * The cwd to give a build-loop FORBID role (decomposer, contract-generator/-evaluator): the
+ * `workspaceDir` when it is holdout-free — it is NOT `ctx.root` AND no holdout artifact is `within`
+ * it — else `ctx.root`. A build WORKTREE is a sibling source checkout WITHOUT the holdout (`.sparra`
+ * is gitignored), so running the role there removes the holdout from its cwd tree entirely (closing
+ * the pathless-search leak). In-place runs (`workspaceDir === ctx.root`) keep `cwd = ctx.root`.
+ * Never returns a dir that contains a holdout. Pure.
+ */
+export function holdoutFreeCwd(ctx: Ctx, workspaceDir: string): string {
+  if (workspaceDir !== ctx.root && !containsHoldoutArtifact(ctx, workspaceDir)) return workspaceDir;
+  return ctx.root;
+}
+
+/**
  * Directories the build (generator + evaluator) may read, as `additionalDirectories`:
  * the repo root (when building on a separate worktree) plus any `build.extraReadDirs`
  * (absolute, `~`-prefixed, or repo-root-relative). Deduped; the work dir itself is omitted
@@ -39,13 +69,7 @@ export function buildReadDirs(
   }
   let deduped = [...new Set(dirs)].filter((d) => d !== workspaceDir);
   if (opts?.excludeHoldoutScope) {
-    const artifacts = [ctx.paths.dir, ctx.paths.holdout, ctx.paths.frozenHoldout].map((p) =>
-      path.resolve(p)
-    );
-    deduped = deduped.filter((d) => {
-      const c = path.resolve(d);
-      return !artifacts.some((a) => within(a, c));
-    });
+    deduped = deduped.filter((d) => !containsHoldoutArtifact(ctx, d));
   }
   return deduped.length ? deduped : undefined;
 }

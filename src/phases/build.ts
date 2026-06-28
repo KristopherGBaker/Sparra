@@ -183,7 +183,7 @@ export async function cmdBuild(
   }
 
   // Decompose (idempotent).
-  const allItems = await d.decompose(ctx, traceDir, opts.fresh);
+  const allItems = await d.decompose(ctx, traceDir, opts.fresh, workspaceDir);
   b.build.lastBuiltPlanHash = planHash;
   await ctx.store.save();
   if (allItems.length === 0) {
@@ -505,7 +505,7 @@ export async function cmdBuild(
     // 1) Negotiate the "done" contract.
     st.status = "contracting";
     await ctx.store.save();
-    const contract = await d.negotiateContract(ctx, item, traceDir, nextSeq(), priorLearnings);
+    const contract = await d.negotiateContract(ctx, item, traceDir, nextSeq(), priorLearnings, workspaceDir);
     // negotiateContract advanced the global seq via its own writes; bump our counter past it.
     b.build.traceSeq = (b.build.traceSeq ?? 0) + contract.tracesUsed;
 

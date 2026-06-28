@@ -1,7 +1,9 @@
 import type { Ctx } from "../context.ts";
 import { runSession } from "../sdk/session.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
 import { makeHoldoutReadDecider } from "./holdout.ts";
+import { holdoutFreeCwd } from "./readscope.ts";
 import { extractJson } from "../util/extract.ts";
 import { readJson, readText, writeJson, exists } from "../util/io.ts";
 import { info, warn } from "../util/log.ts";
@@ -21,8 +23,19 @@ shippable value; fold them into the first feature item that needs them (that ite
 contract can still check the project builds). Order items so dependencies come first. The
 plan is a strong prior, not a contract; do not over-specify implementation.`;
 
-/** Read the frozen plan and produce items.json. Idempotent unless force is set. */
-export async function decompose(ctx: Ctx, traceDir: string, force = false): Promise<WorkItem[]> {
+/** Read the frozen plan and produce items.json. Idempotent unless force is set.
+ *  `workspaceDir` (the worktree for an isolated build, else `ctx.root`) selects a holdout-free cwd;
+ *  `runSessionFn` is an injectable seam for tests (mirrors generateItem). Both default to today's
+ *  behavior (`cwd: ctx.root`, real `runSession`). */
+export async function decompose(
+  ctx: Ctx,
+  traceDir: string,
+  force = false,
+  workspaceDir?: string,
+  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>
+): Promise<WorkItem[]> {
+  const run = runSessionFn ?? runSession;
+  const cwd = holdoutFreeCwd(ctx, workspaceDir ?? ctx.root);
   if (!force && exists(ctx.paths.workitemsFile)) {
     const existing = await readJson<WorkItem[]>(ctx.paths.workitemsFile);
     if (existing && existing.length) {
@@ -59,17 +72,18 @@ Output ONLY a fenced \`\`\`json block: an array of objects with fields:
 Order matters: earlier items should not depend on later ones.`;
 
   info("Decomposing frozen plan into work items…");
-  const res = await runSession({
+  const res = await run({
     role: "decomposer",
     prompt: task,
     systemPrompt: DECOMPOSE_SYSTEM,
     backend: role.backend,
     model: role.model,
     effort: role.effort,
-    cwd: ctx.root,
+    cwd,
     tools: ["Read", "Glob", "Grep"],
-    // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
-    ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
+    // Forbid role: run in a holdout-free cwd (the worktree when building isolated; else ctx.root).
+    // Keep the deny-decider attached (tracking THAT cwd) as defense-in-depth on hooks-aware backends.
+    ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
     maxTurns: 20,
     traceDir,
     traceSeq: 1,
