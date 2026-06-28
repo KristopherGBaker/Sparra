@@ -77,7 +77,17 @@ export interface AuditRow {
 export interface AuditOptions {
   /** Roles to audit; defaults to ALL roles in DEFAULT_PROMPTS. */
   roles?: string[];
-  /** Overwrite the on-disk prompt when the coverage guard passes (else report-only). */
+  /**
+   * Which prompt text to audit:
+   *  - "effective" (default): the EFFECTIVE prompt — on-disk `.sparra/prompts/<role>.md` if present,
+   *    else the built-in default (via `loadPrompt`). What a project actually runs.
+   *  - "default": the built-in `DEFAULT_PROMPTS[role]` directly — what the HARNESS ships. Use this
+   *    to audit Sparra's OWN prompts (a project snapshot can be stale). REPORT-ONLY: `apply` is
+   *    refused for this source (applying would rewrite `src/prompts.ts` source, which the tool
+   *    does not do — port the proposal by hand).
+   */
+  source?: "effective" | "default";
+  /** Overwrite the on-disk prompt when the coverage guard passes (else report-only). Ignored for source="default". */
   apply?: boolean;
   backend?: string;
   model?: string;
@@ -139,9 +149,13 @@ export async function auditPrompts(ctx: Ctx, opts: AuditOptions = {}): Promise<A
 
   const rows: AuditRow[] = [];
   let seq = 0;
+  // source="default" audits the SHIPPING DEFAULT_PROMPTS directly (for auditing the harness's own
+  // prompts, since a project's on-disk snapshot can be stale); it is REPORT-ONLY (never rewrites
+  // src/prompts.ts source). source="effective" (default) audits what the project actually runs.
+  const fromDefault = opts.source === "default";
   for (const r of targets) {
     seq++;
-    const current = await loadPrompt(ctx.paths, r);
+    const current = fromDefault ? DEFAULT_PROMPTS[r] ?? "" : await loadPrompt(ctx.paths, r);
     const sizeBefore = measurePrompt(current);
 
     // The auditor is READ-ONLY: the prompt TEXT is inlined; no tools, no holdout/memory/plan.
@@ -180,10 +194,17 @@ ${current}
     const pctDelta = sizeBefore.chars > 0 ? Math.round(((sizeAfter.chars - sizeBefore.chars) / sizeBefore.chars) * 100) : 0;
     const droppedNothing = parsed?.droppedNothing === true;
 
-    const apply = !!opts.apply && shouldApply(parsed);
-    const skipped = !!opts.apply && !apply;
+    // source="default" is always report-only — applying would rewrite src/prompts.ts source.
+    const apply = !fromDefault && !!opts.apply && shouldApply(parsed);
+    const skipped = !fromDefault && !!opts.apply && !apply;
     const reason = skipped ? skipReason(parsed) : undefined;
-    const outcome = apply ? "APPLIED" : opts.apply ? `SKIPPED (${reason})` : "report-only";
+    const outcome = apply
+      ? "APPLIED"
+      : fromDefault && opts.apply
+        ? "report-only (source=default: port to src/prompts.ts by hand)"
+        : opts.apply
+          ? `SKIPPED (${reason})`
+          : "report-only";
 
     const reviewPath = path.join(ctx.paths.prompts, "audit", `${r}.md`);
     await writeText(reviewPath, renderReview(r, sizeBefore, sizeAfter, pctDelta, parsed, outcome));

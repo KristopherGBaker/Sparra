@@ -194,6 +194,33 @@ describe("auditPrompts — effective-prompt resolution", () => {
   });
 });
 
+describe("auditPrompts — source=default (audit the shipping DEFAULT_PROMPTS)", () => {
+  it("audits DEFAULT_PROMPTS even when a drifted on-disk prompt exists", async () => {
+    const { ctx, dir } = await ctxFor();
+    fs.writeFileSync(ctx.paths.promptFile("generator"), "DRIFTED LOCAL — ignore me\n");
+    let req: RunSessionParams | undefined;
+    const rows = await auditPrompts(ctx, {
+      roles: ["generator"], source: "default", runSessionFn: fakeRun(SAFE, (p) => (req = p)),
+    });
+    expect(req!.prompt).not.toContain("DRIFTED LOCAL"); // the on-disk drift is ignored
+    expect(req!.prompt).toContain(DEFAULT_PROMPTS["generator"]!.slice(0, 40)); // the built-in default is audited
+    expect(rows[0]!.sizeBefore.chars).toBe(DEFAULT_PROMPTS["generator"]!.length);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is REPORT-ONLY: --apply never rewrites the on-disk prompt for source=default", async () => {
+    const { ctx, dir } = await ctxFor();
+    const before = fs.readFileSync(ctx.paths.promptFile("generator"), "utf8");
+    const rows = await auditPrompts(ctx, {
+      roles: ["generator"], source: "default", apply: true, runSessionFn: fakeRun(SAFE),
+    });
+    expect(rows[0]!.applied).toBe(false);
+    expect(rows[0]!.skipped).toBe(false); // report-only, not a coverage skip
+    expect(fs.readFileSync(ctx.paths.promptFile("generator"), "utf8")).toBe(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("prompt-auditor DEFAULT_PROMPTS text", () => {
   it("carries the enumerate/coverage/protect discipline and the JSON schema fields", () => {
     const t = DEFAULT_PROMPTS["prompt-auditor"]!;

@@ -78,8 +78,13 @@ export async function cmdPrompts(
 
   if (sub === "audit") {
     banner("prompt audit (conciseness)");
+    const source = flags.source === "default" ? "default" : "effective";
+    if (source === "default" && flags.apply) {
+      info("source=default is report-only (applying would rewrite src/prompts.ts) — port proposals by hand.");
+    }
     const rows = await auditPrompts(ctx, {
       roles: role ? [role] : undefined,
+      source,
       apply: !!flags.apply,
       backend: typeof flags.backend === "string" ? flags.backend : undefined,
       model: typeof flags.model === "string" ? flags.model : undefined,
@@ -102,5 +107,5 @@ export async function cmdPrompts(
     return;
   }
 
-  warn(`Unknown subcommand "${sub}". Use: sparra prompts [status|sync|audit] [--role <role>] [--dry-run] [audit: --apply --backend b --model m --effort e]`);
+  warn(`Unknown subcommand "${sub}". Use: sparra prompts [status|sync|audit] [--role <role>] [--dry-run] [audit: --source default|effective --apply --backend b --model m --effort e]`);
 }
