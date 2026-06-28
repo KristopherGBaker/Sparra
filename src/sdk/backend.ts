@@ -93,6 +93,13 @@ export interface AgentRequest {
   writeScope?: string[];
   /** No writes at all — evaluator / plan-only roles (Claude → plan mode, Codex → read-only). */
   readOnly?: boolean;
+  /**
+   * Write-role sandbox scope for a backend with a native OS sandbox (Codex → ThreadOptions
+   * .sandboxMode). `readOnly` ALWAYS wins; unset → "workspace-write". "danger-full-access"
+   * lifts the sandbox for native toolchains and MUST be gated to a git worktree/branch
+   * boundary by the caller. A backend without an OS sandbox (Claude) ignores it.
+   */
+  sandbox?: "workspace-write" | "danger-full-access";
   /** Bash substrings always denied. */
   denyBashContains?: string[];
   /** Optional JSON Schema for structured output (native where supported, else emulated). */

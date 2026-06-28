@@ -9,6 +9,7 @@ import { makeDenyHook, mergeHooks } from "../sdk/hooks.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
+import { gateSandbox } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout } from "./holdout.ts";
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText } from "./modeText.ts";
@@ -328,8 +329,18 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     tools: spec.tools,
     skills: skillsForRole(ctx, spec.skillsName),
     // Backend-agnostic safety intent so Codex sandboxes correctly (it ignores Claude hooks):
-    // only the generator may write; every other role is read-only.
-    ...(spec.guard === "writer" ? { writeScope: [workspace] } : { readOnly: true }),
+    // only the generator may write; every other role is read-only. A write role's native-sandbox
+    // scope comes from the role config, gated to a git worktree/branch boundary for full access.
+    ...(spec.guard === "writer"
+      ? {
+          writeScope: [workspace],
+          sandbox: gateSandbox({
+            requested: role.sandbox,
+            hasBranch: !!ctx.store.data.build.branch,
+            roleLabel: `role-run-${roleKind}`,
+          }),
+        }
+      : { readOnly: true }),
     ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     ...guard,
     maxTurns: ctx.config.build.maxTurnsPerSession,

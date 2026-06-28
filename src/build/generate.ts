@@ -15,6 +15,7 @@ import { deviationPolicy } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
+import { gateSandbox } from "./sandbox.ts";
 
 export interface Deviation {
   summary: string;
@@ -96,6 +97,13 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
     skills: skillsForRole(ctx, "generator"),
+    // Native-sandbox intent (Codex honors it; Claude ignores it). danger-full-access is
+    // gated to a git worktree/branch boundary — the only safety wall on an autonomous run.
+    sandbox: gateSandbox({
+      requested: role.sandbox,
+      hasBranch: !!ctx.store.data.build.branch,
+      roleLabel: `generator-${item.id}`,
+    }),
     ...scopedWriterGuard(ctx, [workspaceDir], { format: true }),
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,

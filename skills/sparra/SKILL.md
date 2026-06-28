@@ -84,9 +84,12 @@ an out-of-repo work dir.
 Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/configuration.md`.
 The few that matter most:
 
-- **`roles.<role>: { backend?, model, effort?, baseUrl?, apiKey?, skills? }`** — `backend`
+- **`roles.<role>: { backend?, model, effort?, baseUrl?, apiKey?, skills?, sandbox? }`** — `backend`
   defaults to `claude`; set `codex` to run that role on Codex. `baseUrl` points a codex role at a
-  local OpenAI-compatible endpoint (LM Studio/Ollama). Roles: orienter, planner, **decomposer**,
+  local OpenAI-compatible endpoint (LM Studio/Ollama). `sandbox` (`workspace-write` default |
+  `danger-full-access`) widens a **write** role's Codex OS sandbox for native toolchains (e.g.
+  `xcodebuild`); full access is honored **only on a git worktree/branch** boundary, else downgraded
+  with a loud warning. Roles: orienter, planner, **decomposer**,
   prototyper, contractGenerator, contractEvaluator, generator, evaluator, **reviewer**, reflector.
 - **`roles.generatorLocal`** + work-item **`gen: "local"`** — hybrid builds: tagged items build on
   a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;

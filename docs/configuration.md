@@ -3,7 +3,7 @@
 Every knob lives in **`.sparra/config.yaml`** (seeded on `init` with mode-aware defaults; edit and re-run any phase — changes are picked up live). Models accept SDK aliases (`opus` · `sonnet` · `haiku` · `fable`) or full model ids. Anything you omit inherits the default.
 
 ```yaml
-roles:                        # per role: { backend?, model, effort?, baseUrl?, apiKey?, skills? }  (backend defaults to "claude")
+roles:                        # per role: { backend?, model, effort?, baseUrl?, apiKey?, skills?, sandbox? }  (backend defaults to "claude")
   orienter:          { model: sonnet, effort: high }
   planner:           { model: opus,   effort: high }
   decomposer:        { model: sonnet, effort: high }   # plan → work items (a planning act)
@@ -21,6 +21,8 @@ roles:                        # per role: { backend?, model, effort?, baseUrl?, 
   #   generatorLocal: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # LM Studio
   # Fallback model when the primary's backend is rate/usage-limited (needs build.autoRestart):
   #   generator: { backend: codex, model: gpt-5-codex, fallback: { backend: claude, model: opus } }
+  # Widen a Codex WRITE role's native sandbox for toolchains the default profile blocks (xcodebuild):
+  #   generator: { backend: codex, model: gpt-5-codex, sandbox: danger-full-access }  # needs a worktree
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions
@@ -85,6 +87,7 @@ batch: { K: 3 }
 ## Notes on a few knobs
 - **`roles.*.backend`** — `claude` (default) or `codex`. See [backends](backends.md). Decomposition reads best on Claude; keep `decomposer` there if you put the builder on Codex.
 - **`roles.*.baseUrl` / `roles.*.apiKey`** — point a role at an OpenAI-compatible endpoint instead of the backend default — e.g. a **local** model served by LM Studio (`http://localhost:1234/v1`) or Ollama. Only the **`codex`** backend honors it (Codex supplies the agent loop + tools; the model runs locally). `model` is then the local model id; `apiKey` defaults to a dummy. See [backends — local models](backends.md#local-models-lm-studio--ollama).
+- **`roles.*.sandbox`** — `workspace-write` (default) | `danger-full-access`, for a **write** role on the **`codex`** backend (Claude has no OS sandbox and ignores it). `workspace-write` scopes writes to the work tree with no network; `danger-full-access` lifts the sandbox so a Codex generator can run native toolchains the default Seatbelt profile blocks — e.g. `xcodebuild`. **Read-only roles ignore this — they are always `read-only`.** **Safety:** `danger-full-access` is honored **only when the build runs on a git worktree/branch** (`git.strategy: worktree`/`branch`); on an in-place / greenfield-no-git run it is downgraded to `workspace-write` with a loud warning (the worktree is the only safety boundary, since Codex runs with no interception hooks). See [backends — per-role sandbox](backends.md#per-role-sandbox-codex--the-worktree-safety-gate).
 - **`roles.generatorLocal`** — an optional **second generator** for **hybrid builds**. Work items the decomposer tags `gen: "local"` (trivially-simple or privacy-sensitive) build on `generatorLocal`; everything else uses `generator`. Unset → all items use `generator`. You can add/remove the `gen` tag per item in `.sparra/workitems/items.json` before building (the decomposer only proposes it, and only when `generatorLocal` is configured).
 - **`permission.mode`** — `auto` uses the SDK's model-classifier approvals when available on your plan, else `acceptEdits`; either way a deny-hook (Claude) / sandbox (Codex) enforces scope. `bypassPermissions` is refused.
 - **`contract`** — the assertion range is an *upper guide*, scaled down for small items; the evaluator rejects padding and over-specification. See [build loop](build-loop.md).

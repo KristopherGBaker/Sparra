@@ -69,9 +69,26 @@ roles:
 A request carries **backend-agnostic intent** — `writeScope`, `readOnly`, `outputSchema`, `maxTokens` — and each backend satisfies it natively:
 
 - **Claude** → PreToolUse scoping hooks + permission mode; `outputSchema` via instruct-and-extract.
-- **Codex** → OS `sandbox_mode` (`read-only` / `workspace-write`) + `approvalPolicy: never`; `outputSchema` natively.
+- **Codex** → OS `sandbox_mode` (`read-only` / `workspace-write` / `danger-full-access`) + `approvalPolicy: never`; `outputSchema` natively.
 
 The **git worktree is the outer boundary for every backend**, with `writeScopeViolations()` as a backend-independent post-hoc backstop (see [sandbox-first safety](build-loop.md#sandbox-first-safety)).
+
+### Per-role sandbox (Codex) + the worktree safety gate
+A **write** role can widen the native sandbox via `roles.<role>.sandbox`
+(`workspace-write` | `danger-full-access`). `workspace-write` (the default) scopes writes to
+the work tree with no network; `danger-full-access` lifts the sandbox so a Codex generator can
+run native toolchains the default Seatbelt profile blocks — e.g. `xcodebuild` — and so
+generation load can move off Claude's session limits onto Codex's quota. Mapping
+(`src/sdk/backends/codex.ts` `codexSandboxMode`): `readOnly` → `read-only` **always** (read-only
+roles ignore the knob); otherwise the requested sandbox, defaulting to `workspace-write`.
+
+**Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
+worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when
+the build is on a worktree/branch** (`build.branch` set). On an in-place / greenfield-no-git run
+the request is downgraded to `workspace-write` with a **loud warning** — never silently granted.
+The gate lives at the request-construction layer (`src/build/generate.ts` / `roleRun.ts`, via
+`gateSandbox`), which is the only place that can see git state; the backend cannot. Use
+`git.strategy: worktree` to enable full access.
 
 ## Adding a backend
 Implement `AgentBackend` (`id`, `capabilities`, `runTask(req) → AgentResult`) in `src/sdk/backends/<id>.ts`, `registerBackend(...)` it, and import it for its side effect in `session.ts`. The engine reads `capabilities` and uses the richest path available, degrading otherwise. Nothing else changes.

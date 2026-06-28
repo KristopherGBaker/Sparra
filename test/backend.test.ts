@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getBackend, listBackends, registerBackend, type AgentBackend } from "../src/sdk/backend.ts";
+import { codexSandboxMode } from "../src/sdk/backends/codex.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
 
 describe("agent backend registry (the AgentBackend seam)", () => {
@@ -75,4 +76,24 @@ describe("codex backend", () => {
   // the adapter (try/catch around the lazy import) but isn't unit-tested: the package is
   // an optional dependency, so it's present in dev/CI, and invoking runTask for real would
   // spawn the codex CLI (network). The live path is validated by a manual smoke test.
+
+  // The sandbox DECISION is extracted into a pure helper so we can exercise it without
+  // spawning the CLI. (Mirrors the no-live-call rule in test/build.test.ts.)
+  describe("codexSandboxMode (req → ThreadOptions.sandboxMode)", () => {
+    it("readOnly ALWAYS wins, even when a sandbox knob is set", () => {
+      expect(codexSandboxMode({ readOnly: true })).toBe("read-only");
+      expect(codexSandboxMode({ readOnly: true, sandbox: "danger-full-access" })).toBe("read-only");
+      expect(codexSandboxMode({ readOnly: true, sandbox: "workspace-write" })).toBe("read-only");
+    });
+
+    it("a write role defaults to workspace-write when the knob is unset (unchanged from today)", () => {
+      expect(codexSandboxMode({})).toBe("workspace-write");
+      expect(codexSandboxMode({ readOnly: false })).toBe("workspace-write");
+    });
+
+    it("honors the requested write-role sandbox", () => {
+      expect(codexSandboxMode({ sandbox: "workspace-write" })).toBe("workspace-write");
+      expect(codexSandboxMode({ sandbox: "danger-full-access" })).toBe("danger-full-access");
+    });
+  });
 });

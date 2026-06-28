@@ -34,7 +34,7 @@ class CodexBackend implements AgentBackend {
   };
 
   async runTask(req: AgentRequest): Promise<AgentResult> {
-    const sandboxMode = req.readOnly ? "read-only" : "workspace-write";
+    const sandboxMode = codexSandboxMode(req);
     // Codex's SDK has no system-prompt channel — the input string is the only one. Fold the
     // role's system prompt (and any inlined skills) in ahead of the task, or it's lost.
     const skillsBlock = req.skills?.length ? inlineSkillsBlock(req.skills) : "";
@@ -155,6 +155,22 @@ class CodexBackend implements AgentBackend {
 
     return result;
   }
+}
+
+/** Codex's native sandbox scopes (matches @openai/codex-sdk `SandboxMode`). */
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+
+/**
+ * Map a normalized request's safety intent onto Codex's `ThreadOptions.sandboxMode`.
+ * Pure + exported so the decision is unit-testable without spawning the codex CLI.
+ *   readOnly → "read-only" ALWAYS (read-only wins over any sandbox knob).
+ *   otherwise → the requested `sandbox`, defaulting to "workspace-write" when unset.
+ * The danger-full-access worktree gate lives at the request-construction layer (which can
+ * see git state); this backend has none (hooks:false, approvalPolicy:never) and trusts `req`.
+ */
+export function codexSandboxMode(req: Pick<AgentRequest, "readOnly" | "sandbox">): CodexSandboxMode {
+  if (req.readOnly) return "read-only";
+  return req.sandbox ?? "workspace-write";
 }
 
 /** Classify a provider rate/usage limit from Codex error strings (no reset time available). */

@@ -25,6 +25,16 @@ export interface RoleConfig {
    */
   skills?: string[];
   /**
+   * Native OS-sandbox scope for a WRITE role on a backend that has one (Codex today; Claude
+   * ignores it). Unset → "workspace-write" (the default — writes scoped to the work tree, no
+   * network). "danger-full-access" lifts the sandbox so a Codex generator can run native
+   * toolchains the default Seatbelt profile blocks (e.g. `xcodebuild`). Read-only roles ignore
+   * this (they are always read-only). "danger-full-access" is honored ONLY when the build runs
+   * on a git worktree/branch boundary; on an in-place/greenfield-no-git run it is downgraded to
+   * "workspace-write" with a loud warning (the worktree is the only safety boundary).
+   */
+  sandbox?: "workspace-write" | "danger-full-access";
+  /**
    * Fallback model for this role, used when the primary's BACKEND is in a provider limit
    * window (requires `build.autoRestart.enabled`). On a limit the loop switches to this
    * model — ideally on a DIFFERENT backend (e.g. primary gpt-5.5 on codex → fallback opus
