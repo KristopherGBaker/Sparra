@@ -6,10 +6,19 @@ import type { Ctx } from "../src/context.ts";
 import type { SparraState, ItemState } from "../src/state.ts";
 import { planTurn, planningOpeningPrompt } from "../src/phases/plan.ts";
 import { newRunId } from "../src/context.ts";
+import { activePause, applyDecision, readPauseSummary, PAUSE_DECISIONS, type Step } from "../src/build/interactive.ts";
 import { readState, activeTraceFile, tailLines, spawnSparra, type ChildHandle } from "./lib.ts";
 
-type View = "dashboard" | "plan" | "logs";
+type View = "dashboard" | "plan" | "logs" | "pause";
 const CAP = 400;
+
+/** The interactive checkpoint the TUI is rendering a prompt for. */
+interface PausePrompt {
+  kind: Step;
+  itemId: string;
+  round: number;
+  summary: string;
+}
 
 interface Msg {
   role: "you" | "planner";
@@ -37,6 +46,9 @@ export default function App({ ctx }: { ctx: Ctx }) {
   const childRef = useRef<ChildHandle | null>(null);
   const [running, setRunning] = useState<string | null>(null);
 
+  // interactive (`build --step`) pause prompt
+  const [pause, setPause] = useState<PausePrompt | null>(null);
+
   // watch state.json + active trace for the dashboard
   const [traceTail, setTraceTail] = useState<string[]>([]);
   useEffect(() => {
@@ -58,7 +70,7 @@ export default function App({ ctx }: { ctx: Ctx }) {
 
   const pushLog = (line: string) => setLogs((p) => [...p, line].slice(-CAP));
 
-  function runAction(label: string, args: string[]) {
+  function runAction(label: string, args: string[], afterExit?: () => void) {
     if (running) {
       pushLog(`(${running} still running — press k to cancel)`);
       return;
@@ -70,7 +82,49 @@ export default function App({ ctx }: { ctx: Ctx }) {
       pushLog(`— ${label} exited (${code}) —`);
       setRunning(null);
       childRef.current = null;
+      afterExit?.();
     });
+  }
+
+  // After a stepped build (or a resume) exits, surface an inline prompt if it paused at a
+  // checkpoint. Reads fresh from disk — the exit closure's `state` may lag the watcher.
+  function offerPausePrompt() {
+    const s = readState(ctx.paths);
+    const p = activePause(s);
+    if (!p || !s?.build.runId) return;
+    readPauseSummary(ctx.paths, s.build.runId, p.itemId)
+      .then((summary) => {
+        setPause({ kind: p.kind, itemId: p.itemId, round: p.round, summary });
+        setView("pause");
+      })
+      .catch((err) => pushLog(`⚠ could not read pause summary: ${(err as Error).message}`));
+  }
+
+  // Record the human's decision to the pause folder, then resume with a plain `sparra build`
+  // (interactive mode is remembered in state, so no --step on resume). Write failures surface in
+  // the log instead of crashing the TUI.
+  function submitPause(decision: string, reason: string, feedback: string) {
+    const p = pause;
+    const s = readState(ctx.paths);
+    if (!p || !s?.build.runId) {
+      setPause(null);
+      setView("logs");
+      return;
+    }
+    const runId = s.build.runId;
+    setPause(null);
+    setView("logs");
+    applyDecision(ctx.paths, runId, p.itemId, {
+      kind: p.kind,
+      decision,
+      reason: reason || undefined,
+      feedback: feedback || undefined,
+    })
+      .then(() => {
+        pushLog(`▸ ${p.itemId}: ${p.kind} → ${decision} — resuming…`);
+        runAction("build (resume)", ["build"], offerPausePrompt);
+      })
+      .catch((err) => pushLog(`⚠ could not record decision (${(err as Error).message}); pause left intact — resume from a terminal.`));
   }
 
   async function submitTurn(userText: string) {
@@ -126,6 +180,7 @@ export default function App({ ctx }: { ctx: Ctx }) {
       if (key.escape) setView("dashboard");
       return; // let TextInput handle the rest
     }
+    if (view === "pause") return; // the Pause component owns its own input (menu + TextInput)
     if (key.tab) {
       const order: View[] = ["dashboard", "plan", "logs"];
       setView(order[(order.indexOf(view) + 1) % order.length]!);
@@ -140,6 +195,7 @@ export default function App({ ctx }: { ctx: Ctx }) {
     else if (ch === "s") runAction("snapshot", ["snapshot"]);
     else if (ch === "f") runAction("freeze", ["freeze"]);
     else if (ch === "b") runAction("build", ["build"]);
+    else if (ch === "B") runAction("build --step", ["build", "--step=contract,round,commit,item"], offerPausePrompt);
     else if (ch === "r") runAction("reflect", ["reflect"]);
     else if (ch === "o") runAction("orient", ["orient"]);
   });
@@ -160,6 +216,7 @@ export default function App({ ctx }: { ctx: Ctx }) {
         <Interview transcript={transcript} streaming={streaming} busy={busy} input={input} setInput={setInput} onSubmit={onInputSubmit} />
       )}
       {view === "logs" && <Logs logs={logs} />}
+      {view === "pause" && pause && <Pause prompt={pause} onSubmit={submitPause} />}
       <Footer view={view} busy={busy} />
     </Box>
   );
@@ -269,10 +326,71 @@ function Footer({ view, busy }: { view: View; busy: boolean }) {
   const keys =
     view === "plan"
       ? "type to answer · Enter send · Esc dashboard · Ctrl+C quit"
-      : "[d]ash [p]lan [l]ogs · [o]rient [s]napshot [f]reeze [b]uild [r]eflect · [k]ill [q]uit · Tab cycles";
+      : view === "pause"
+      ? "↑/↓ choose · Enter select · type to add feedback/reason · Ctrl+C quit"
+      : "[d]ash [p]lan [l]ogs · [o]rient [s]napshot [f]reeze [b]uild [B]uild-step [r]eflect · [k]ill [q]uit · Tab cycles";
   return (
     <Box borderStyle="round" borderColor="gray" paddingX={1}>
       <Text dimColor>{busy ? "planner is thinking…  " : ""}{keys}</Text>
+    </Box>
+  );
+}
+
+/** Inline prompt for a `build --step` checkpoint: shows the (already holdout-redacted) summary,
+ *  a menu of the kind's allowed decisions, and — for a `round` — an optional feedback box (a reason
+ *  box when accepting). On submit the parent records the decision via `applyDecision` and resumes.
+ *  This component owns its own input; the app-level keybindings are suspended on the pause view. */
+function Pause({ prompt, onSubmit }: { prompt: PausePrompt; onSubmit: (decision: string, reason: string, feedback: string) => void }) {
+  const options = PAUSE_DECISIONS[prompt.kind];
+  const [idx, setIdx] = useState(0);
+  const [stage, setStage] = useState<"menu" | "feedback" | "reason">("menu");
+  const [chosen, setChosen] = useState<string>(options[0] ?? "");
+  const [text, setText] = useState("");
+
+  useInput((ch, key) => {
+    if (stage !== "menu") return; // a TextInput is focused — let it handle typing
+    if (key.upArrow || ch === "k") setIdx((i) => (i + options.length - 1) % options.length);
+    else if (key.downArrow || ch === "j") setIdx((i) => (i + 1) % options.length);
+    else if (key.return) {
+      const d = options[idx] ?? options[0] ?? "";
+      setChosen(d);
+      // `round` is the only kind that collects free text: feedback to steer continue/pivot, a
+      // reason when accepting. Everything else submits immediately on selection.
+      if (prompt.kind === "round" && (d === "continue" || d === "pivot")) setStage("feedback");
+      else if (prompt.kind === "round" && d === "accept") setStage("reason");
+      else onSubmit(d, "", "");
+    }
+  });
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text bold color="yellow">
+        ⏸ build paused — {prompt.kind} · {prompt.itemId}
+        {prompt.kind === "round" ? ` (round ${prompt.round})` : ""}
+      </Text>
+      <Box flexDirection="column" marginY={1}>
+        {prompt.summary.trim().split("\n").slice(0, 18).map((l, i) => (
+          <Text key={i} dimColor>
+            {l.slice(0, 110)}
+          </Text>
+        ))}
+      </Box>
+      {stage === "menu" ? (
+        <Box flexDirection="column">
+          <Text bold>Decide:</Text>
+          {options.map((o, i) => (
+            <Text key={o} color={i === idx ? "cyan" : undefined}>
+              {i === idx ? "❯ " : "  "}
+              {o}
+            </Text>
+          ))}
+        </Box>
+      ) : (
+        <Box>
+          <Text color="green">{stage === "reason" ? `reason (why accept) › ` : "feedback (steer next round) › "}</Text>
+          <TextInput value={text} onChange={setText} onSubmit={(v) => onSubmit(chosen, stage === "reason" ? v : "", stage === "feedback" ? v : "")} placeholder="optional — Enter to submit" />
+        </Box>
+      )}
     </Box>
   );
 }

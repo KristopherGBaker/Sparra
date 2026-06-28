@@ -1,5 +1,7 @@
 import path from "node:path";
 import type { Ctx } from "../context.ts";
+import type { Paths } from "../paths.ts";
+import type { SparraState } from "../state.ts";
 import type { Verdict } from "./types.ts";
 import { redactHoldout } from "./holdout.ts";
 import { ensureDir, exists, readText, writeText } from "../util/io.ts";
@@ -189,4 +191,62 @@ export async function readItemDecision(ctx: Ctx, runId: string, itemId: string):
     }
   }
   return "continue";
+}
+
+// ── Pure decision plumbing (used by the Ink TUI to drive a pause without a text editor) ──
+// These mirror the file contract the resume path in build.ts reads (decision.json + feedback.md),
+// so a TUI-recorded decision round-trips through readRoundDecision / readCommitDecision /
+// readItemDecision exactly like a hand-edited one. The TUI never reads holdout; feedback it writes
+// here is still leak-checked by build.ts on resume (this layer doesn't bypass that wall).
+
+/** The pause kinds and the decisions each one accepts (the menu the TUI offers + the validation
+ *  wall for `applyDecision`). `contract` is a no-op `resume` — the human edits the contract file
+ *  in their editor; resuming just acknowledges it. */
+export const PAUSE_DECISIONS: Record<Step, readonly string[]> = {
+  contract: ["resume"],
+  round: ["continue", "pivot", "accept", "abandon"],
+  commit: ["commit", "skip"],
+  item: ["continue", "stop"],
+};
+
+/** A `Paths`-based pause dir (the `Ctx`-based `pauseDir` is unchanged for the build orchestration;
+ *  the TUI only has `Paths` in hand). */
+function pauseDirOf(paths: Paths, runId: string, itemId: string): string {
+  return path.join(paths.dir, "interactive", runId, itemId);
+}
+
+/** The active interactive checkpoint a build is paused at, or null when it isn't paused. Pure. */
+export function activePause(state: SparraState | null | undefined): { kind: Step; itemId: string; round: number } | null {
+  return state?.build.paused ?? null;
+}
+
+/** The already-redacted, human-facing pause summary (`pause.md`) for display in the TUI. Returns
+ *  "" if the pause folder/file is missing. The TUI shows this verbatim — it is holdout-redacted at
+ *  write time, so no holdout reaches it. */
+export async function readPauseSummary(paths: Paths, runId: string, itemId: string): Promise<string> {
+  return (await readText(path.join(pauseDirOf(paths, runId, itemId), "pause.md"))) ?? "";
+}
+
+export interface DecisionInput {
+  /** The pause kind, so the decision is validated against the right allowed set. */
+  kind: Step;
+  decision: string;
+  reason?: string;
+  feedback?: string;
+}
+
+/** Record a human's decision for a pause exactly the way the resume path expects: write
+ *  `decision.json` (`{ decision, reason }`) and, when `feedback` is given, `feedback.md`. Throws on
+ *  a decision not allowed for the kind. Round-trips with the matching `read*Decision`. */
+export async function applyDecision(paths: Paths, runId: string, itemId: string, input: DecisionInput): Promise<void> {
+  const allowed = PAUSE_DECISIONS[input.kind];
+  if (!allowed || !allowed.includes(input.decision)) {
+    throw new Error(
+      `Invalid decision "${input.decision}" for a ${input.kind} pause — expected one of: ${allowed?.join(", ") ?? "(unknown kind)"}.`
+    );
+  }
+  const dir = pauseDirOf(paths, runId, itemId);
+  await ensureDir(dir);
+  await writeText(path.join(dir, "decision.json"), JSON.stringify({ decision: input.decision, reason: input.reason ?? "" }, null, 2) + "\n");
+  if (input.feedback != null) await writeText(path.join(dir, "feedback.md"), input.feedback);
 }
