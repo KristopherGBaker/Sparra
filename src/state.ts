@@ -74,11 +74,11 @@ export interface SparraState {
     /** Hash of the frozen plan the current items were decomposed from — lets `build`
      *  warn when the plan changed but the run wasn't re-decomposed (`--fresh` / `new`). */
     lastBuiltPlanHash?: string;
-    /** Interactive checkpoints enabled this run (`sparra build --step=contract,round`).
+    /** Interactive checkpoints enabled this run (`sparra build --step=contract,round,commit,item`).
      *  Persisted so a resume (`sparra build`) keeps the same human-in-the-loop mode. */
-    step?: ("contract" | "round")[];
+    step?: ("contract" | "round" | "commit" | "item")[];
     /** An active checkpoint the build is paused at, awaiting the human (then resume). */
-    paused?: { kind: "contract" | "round"; itemId: string; round: number };
+    paused?: { kind: "contract" | "round" | "commit" | "item"; itemId: string; round: number };
   };
   /** Last SDK session id per role, for resume/fork. */
   sessions: Record<string, string>;

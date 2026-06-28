@@ -58,7 +58,7 @@ ${color.bold("Commands")}
   log-finding <FINDINGS.md>                     fold prototype findings back into PLAN.md
   snapshot                                      checkpoint PLAN.md (+ CODEBASE_MAP.md)
   freeze                                        FREEZE GATE: lock the plan as build input (your decision)
-  build [--fresh] [--only <item-id>] [--step contract,round]
+  build [--fresh] [--only <item-id>] [--step contract,round,commit,item]
                                                 Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
   prompts [status|sync] [--role <r>] [--dry-run] compare/sync .sparra/prompts with the built-in defaults

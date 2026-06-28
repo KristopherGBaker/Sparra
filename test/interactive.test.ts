@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { cmdBuild, type BuildDeps } from "../src/phases/build.ts";
-import { pauseDir } from "../src/build/interactive.ts";
+import { pauseDir, parseSteps, writeCommitPause, writeItemPause } from "../src/build/interactive.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
@@ -260,6 +260,235 @@ describe("cmdBuild --step=contract — pause before generation", () => {
     await cmdBuild(ctx, { workspaceOverride: dir }, deps); // resume → contract acked → builds (passes)
     expect(genCalls).toHaveLength(1);
     expect(status(ctx)).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+const item2: WorkItem = { id: "item-002", title: "second", summary: "", dependsOn: [], rationale: "" };
+/** A ctx with autoCommit + a Sparra branch, so the commit gate can engage in tests. */
+async function makeCommitCtx(): Promise<{ ctx: Ctx; dir: string }> {
+  const { ctx, dir } = await makeCtx();
+  ctx.config.git = { ...ctx.config.git, autoCommit: true };
+  ctx.store.data.build.branch = "sparra/test";
+  return { ctx, dir };
+}
+
+describe("parseSteps", () => {
+  it("bare --step (raw === true) enables all four gates", () => {
+    expect(parseSteps(true)).toEqual(["contract", "round", "commit", "item"]);
+  });
+  it("parses a CSV list, dedupes, and ignores unknown tokens", () => {
+    expect(parseSteps("commit,item,commit,bogus,round")).toEqual(["commit", "item", "round"]);
+  });
+  it("an absent flag is no gates", () => {
+    expect(parseSteps(undefined)).toEqual([]);
+  });
+});
+
+describe("commit/item pause files are holdout-redacted", () => {
+  const HOLD = "The exact byte-for-byte output must equal the golden file.";
+
+  it("writeCommitPause redacts the holdout out of pause.md (incl. the file plan)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const runId = "build-redact";
+    // A pathological plan text that echoes a holdout line — it must be scrubbed like the round pause.
+    await writeCommitPause(ctx, {
+      runId,
+      itemId: "item-001",
+      itemTitle: "first",
+      planText: `- src/foo.ts\n- ${HOLD}`,
+      holdoutText: `# Holdout\n- ${HOLD}\n`,
+    });
+    const md = fs.readFileSync(path.join(pauseDir(ctx, runId, "item-001"), "pause.md"), "utf8");
+    expect(md).not.toContain(HOLD);
+    expect(md).toContain("[redacted: holdout]");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writeItemPause redacts the holdout out of pause.md", async () => {
+    const { ctx, dir } = await makeCtx();
+    const runId = "build-redact";
+    await writeItemPause(ctx, {
+      runId,
+      itemId: "item-001",
+      itemTitle: `first ${HOLD}`, // a leaked title must still be scrubbed
+      status: "passed",
+      holdoutText: `# Holdout\n- ${HOLD}\n`,
+    });
+    const md = fs.readFileSync(path.join(pauseDir(ctx, runId, "item-001"), "pause.md"), "utf8");
+    expect(md).not.toContain(HOLD);
+    expect(md).toContain("[redacted: holdout]");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild --step=commit — pause before commit", () => {
+  it("accepts (passed) but defers the commit; resume with 'commit' commits exactly once", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async (_c, a) => { commitCalls.push(a.item.id); return { ok: true, commits: 1 }; },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["commit"] }, deps);
+    expect(ctx.store.data.build.paused).toMatchObject({ kind: "commit", itemId: "item-001" });
+    expect(status(ctx)).toBe("passed"); // accepted, just not committed
+    expect(commitCalls).toHaveLength(0); // NOT committed before the pause
+    const pd = pauseDir(ctx, ctx.store.data.build.runId!, "item-001");
+    expect(fs.existsSync(path.join(pd, "pause.md"))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(pd, "decision.json"), "utf8")).decision).toBe("commit");
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // resume with default "commit"
+    expect(commitCalls).toEqual(["item-001"]);
+    expect(ctx.store.data.build.paused).toBeUndefined();
+    expect(status(ctx)).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("resume with 'skip' does NOT commit; the item stays passed", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async (_c, a) => { commitCalls.push(a.item.id); return { ok: true, commits: 1 }; },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["commit"] }, deps);
+    setDecision(ctx, "skip");
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(commitCalls).toHaveLength(0); // skipped — never committed
+    expect(ctx.store.data.build.paused).toBeUndefined();
+    expect(status(ctx)).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a --only that would skip a commit pause", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async () => ({ ok: true, commits: 1 }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["commit"] }, deps); // pause @ commit on item-001
+    expect(ctx.store.data.build.paused?.kind).toBe("commit");
+    await cmdBuild(ctx, { workspaceOverride: dir, only: "item-002" }, deps); // should refuse
+    expect(ctx.store.data.build.paused?.itemId).toBe("item-001"); // pause intact
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild --step=item — pause between items", () => {
+  it("pauses after item-001 (before item-002), and NOT after the final item", async () => {
+    const { ctx, dir } = await makeCtx();
+    const genCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async (a) => { genCalls.push(a.item.id); return genOut(); },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["item"] }, deps);
+    expect(status(ctx)).toBe("passed");
+    expect(ctx.store.data.build.paused).toMatchObject({ kind: "item", itemId: "item-001" });
+    expect(genCalls).toEqual(["item-001"]); // item-002 not generated yet
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // resume (default continue)
+    expect(genCalls).toEqual(["item-001", "item-002"]);
+    expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
+    expect(ctx.store.data.build.paused).toBeUndefined(); // no pause after the last item
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("'stop' ends the run cleanly; a re-run advances to the next item", async () => {
+    const { ctx, dir } = await makeCtx();
+    const genCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async (a) => { genCalls.push(a.item.id); return genOut(); },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["item"] }, deps); // pause after item-001
+    setDecision(ctx, "stop");
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // stop → run ends here
+    expect(ctx.store.data.build.paused).toBeUndefined(); // pause cleared (no infinite stop)
+    expect(ctx.store.data.build.items["item-002"]).toBeUndefined(); // item-002 untouched
+    expect(genCalls).toEqual(["item-001"]);
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // re-run advances
+    expect(genCalls).toEqual(["item-001", "item-002"]);
+    expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a --only that would skip an item pause", async () => {
+    const { ctx, dir } = await makeCtx();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["item"] }, deps); // pause @ item gate on item-001
+    expect(ctx.store.data.build.paused?.kind).toBe("item");
+    await cmdBuild(ctx, { workspaceOverride: dir, only: "item-002" }, deps); // should refuse
+    expect(ctx.store.data.build.paused?.itemId).toBe("item-001"); // pause intact
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a FAILED item that exhausted its rounds is advanced past on resume, not re-run", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 1 }); // one shot, so item-001 fails fast
+    const genCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async (a) => { genCalls.push(a.item.id); return genOut(); },
+      evaluateItem: async (a) => evalOut(a.item.id === "item-002"), // item-001 fails, item-002 passes
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["item"] }, deps); // item-001 fails → item gate
+    expect(status(ctx)).toBe("failed");
+    expect(ctx.store.data.build.paused).toMatchObject({ kind: "item", itemId: "item-001" });
+    expect(genCalls).toEqual(["item-001"]);
+
+    setDecision(ctx, "stop");
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // stop → run ends, pause cleared
+    expect(ctx.store.data.build.paused).toBeUndefined();
+    expect(genCalls).toEqual(["item-001"]); // item-001 NOT re-run, item-002 untouched
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // follow-up advances PAST the failed item
+    expect(genCalls).toEqual(["item-001", "item-002"]); // item-001 still not re-contracted/re-run
+    expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
+    expect(status(ctx)).toBe("failed"); // item-001 stays failed (terminal)
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — autonomous when no --step", () => {
+  it("commits inline and never pauses", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item, item2],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async (_c, a) => { commitCalls.push(a.item.id); return { ok: true, commits: 1 }; },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // no step → fully autonomous
+    expect(ctx.store.data.build.paused).toBeUndefined();
+    expect(status(ctx)).toBe("passed");
+    expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
+    expect(commitCalls).toEqual(["item-001", "item-002"]); // committed inline, both items
+    // Parity proof: a fully autonomous run writes NO interactive steering folder at all.
+    expect(fs.existsSync(path.join(ctx.paths.dir, "interactive"))).toBe(false);
+    expect(fs.existsSync(pauseDir(ctx, ctx.store.data.build.runId!, "item-001"))).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

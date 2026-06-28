@@ -21,7 +21,18 @@ import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
 import { assertNoHoldoutLeak, readHoldout } from "../build/holdout.ts";
-import { writeContractPause, writeRoundPause, readRoundDecision, pauseDirRel, type Step, type Decision } from "../build/interactive.ts";
+import {
+  writeContractPause,
+  writeRoundPause,
+  readRoundDecision,
+  writeCommitPause,
+  readCommitDecision,
+  writeItemPause,
+  readItemDecision,
+  pauseDirRel,
+  type Step,
+  type Decision,
+} from "../build/interactive.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { appendLearning, readMemory } from "../memory.ts";
 import { promptDrift } from "../prompts.ts";
@@ -220,19 +231,51 @@ export async function cmdBuild(
     await ctx.store.save();
   }
   let pausedRun = false;
+  let humanStop = false; // an `item`-gate "stop" decision ended this run cleanly (resumable)
+
+  // A holdout-free summary of the change about to be committed (file paths only), for the
+  // commit checkpoint's pause.md. Never reads holdout content — the holdout file itself is
+  // excluded from the listing (it's evaluator-only machinery).
+  const commitPlanText = (): string => {
+    const holdoutRel = [ctx.paths.holdout, ctx.paths.frozenHoldout]
+      .map((p) => path.relative(workspaceDir, p))
+      .filter((p) => p && !p.startsWith(".."));
+    const files = changedFiles(workspaceDir)
+      .map((p) => path.relative(workspaceDir, p))
+      .filter((f) => !holdoutRel.includes(f));
+    const cap = 50;
+    const shown = files.slice(0, cap).map((f) => `- ${f}`);
+    if (files.length > cap) shown.push(`- …(+${files.length - cap} more)`);
+    return shown.join("\n");
+  };
+
+  // ── Interactive: ITEM gate. Pause before advancing to the NEXT item (never after the last
+  // item in this run). Returns true when a pause was written (caller sets pausedRun + breaks). ──
+  const maybeItemGate = async (it: WorkItem, st: ItemState): Promise<boolean> => {
+    if (!steps.has("item")) return false;
+    const idx = items.findIndex((i) => i.id === it.id);
+    if (idx < 0 || idx >= items.length - 1) return false; // not found, or the last item → no pause
+    await writeItemPause(ctx, { runId, itemId: it.id, itemTitle: it.title, status: st.status, holdoutText: await readHoldout(ctx) });
+    b.build.paused = { kind: "item", itemId: it.id, round: st.round };
+    await ctx.store.save();
+    info(`${it.id}: paused after the item (${st.status}) — decide in ${pauseDirRel(ctx, runId, it.id)}/decision.json, then \`sparra build\`.`);
+    return true;
+  };
 
   // Accept an item on a human decision (--step mode): mark passed, reconcile, optionally
   // commit, record an (optional) override reason. Mirrors the autonomous accept minus the
-  // review gate — the human IS the gate here.
-  const acceptItem = async (st: ItemState, item: WorkItem, deviations: Deviation[], overrideReason?: string): Promise<void> => {
+  // review gate — the human IS the gate here. Returns "commit-paused" when the commit gate
+  // deferred the commit to the human (the caller must break), else "done".
+  const acceptItem = async (
+    st: ItemState,
+    item: WorkItem,
+    deviations: Deviation[],
+    overrideReason?: string
+  ): Promise<"done" | "commit-paused"> => {
     st.status = "passed";
     if (overrideReason) st.overrideReason = overrideReason;
     await ctx.store.save();
     await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
-    if (ctx.config.git.autoCommit && b.build.branch) {
-      const cr = await d.commitItem(ctx, { item, deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
-      detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
-    }
     await d.appendLearning(ctx.paths, {
       item: item.id,
       kind: "passed",
@@ -241,7 +284,22 @@ export async function cmdBuild(
         : `human-accepted round ${st.round} (score ${st.lastScore ?? 0}).`,
       at: stamp(),
     });
+    // ── Interactive: COMMIT gate — the item is accepted (passed); defer the commit to the human. ──
+    if (steps.has("commit") && ctx.config.git.autoCommit && b.build.branch) {
+      st.lastDeviations = deviations; // stash for the deferred commit on resume
+      await writeCommitPause(ctx, { runId, itemId: item.id, itemTitle: item.title, planText: commitPlanText(), holdoutText: await readHoldout(ctx) });
+      b.build.paused = { kind: "commit", itemId: item.id, round: st.round };
+      await ctx.store.save();
+      ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
+      info(`${item.id}: paused before commit — review ${pauseDirRel(ctx, runId, item.id)}/pause.md, then \`sparra build\`.`);
+      return "commit-paused";
+    }
+    if (ctx.config.git.autoCommit && b.build.branch) {
+      const cr = await d.commitItem(ctx, { item, deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
+      detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
+    }
     ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
+    return "done";
   };
 
   // Called after every generator/evaluator session. On a provider rate/usage limit it either
@@ -288,7 +346,48 @@ export async function cmdBuild(
     const st = (b.build.items[item.id] ??= freshItemState());
     if (st.costUsd == null) st.costUsd = 0;
     if (st.tokensUsed == null) st.tokensUsed = 0;
-    if (st.status === "passed" || st.status === "abandoned" || st.status === "budget_exceeded") {
+
+    // ── Interactive: resume a COMMIT pause. Detected BEFORE the passed/abandoned/budget skip
+    // below, because the item is already `passed` — skipping it would never run the deferred
+    // commit. The commit was withheld at accept time; honour the human's commit/skip here. ──
+    if (b.build.paused?.itemId === item.id && b.build.paused.kind === "commit") {
+      const decision = await readCommitDecision(ctx, runId, item.id);
+      if (decision === "commit" && ctx.config.git.autoCommit && b.build.branch) {
+        const cr = await d.commitItem(ctx, { item, deviations: (st.lastDeviations ?? []) as Deviation[], runId, workspaceDir, traceDir, traceSeq: nextSeq() });
+        detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
+      } else {
+        detail(`${item.id}: commit skipped by human (item stays passed).`);
+      }
+      b.build.paused = undefined;
+      await ctx.store.save();
+      // The item is already passed — fall through to the item gate, then the passed-skip.
+      if (await maybeItemGate(item, st)) { pausedRun = true; break; }
+    }
+
+    // ── Interactive: resume an ITEM pause. The item is already terminal; apply continue/stop. ──
+    if (b.build.paused?.itemId === item.id && b.build.paused.kind === "item") {
+      const decision = await readItemDecision(ctx, runId, item.id);
+      b.build.paused = undefined;
+      await ctx.store.save();
+      if (decision === "stop") {
+        info(`${item.id}: run stopped by human — \`sparra build\` resumes from the next item.`);
+        humanStop = true;
+        break;
+      }
+      // continue → fall through to the terminal-status skip, which advances to the next item.
+    }
+
+    // A FAILED item that exhausted its rounds is terminal under the ITEM gate: on resume it must
+    // be advanced PAST (an item-gate "stop" then a later `sparra build` lands on the NEXT item),
+    // never re-contracted/rebuilt. Scoped to `steps.has("item")` so the autonomous failed-item
+    // retry-on-resume semantics are unchanged.
+    const exhaustedFail = st.status === "failed" && st.round >= ctx.config.build.maxRoundsPerItem;
+    if (
+      st.status === "passed" ||
+      st.status === "abandoned" ||
+      st.status === "budget_exceeded" ||
+      (steps.has("item") && exhaustedFail)
+    ) {
       detail(`${item.id} already ${st.status} — skipping.`);
       continue;
     }
@@ -380,6 +479,7 @@ export async function cmdBuild(
         await d.appendLearning(ctx.paths, { item: item.id, kind: "note", detail: `human-abandoned round ${st.round} (score ${st.lastScore ?? 0}).`, at: stamp() });
         await ctx.store.save();
         warn(`${item.id}: abandoned by human.`);
+        if (await maybeItemGate(item, st)) { pausedRun = true; break; }
         continue;
       }
       if (res.decision === "accept") {
@@ -392,7 +492,9 @@ export async function cmdBuild(
             throw new Error(`${item.id}: your accept reason contains holdout content — remove it (holdout is evaluator-only).`);
           }
         }
-        await acceptItem(st, item, (st.lastDeviations ?? []) as Deviation[], wasFail ? res.reason.trim() : undefined);
+        const accepted = await acceptItem(st, item, (st.lastDeviations ?? []) as Deviation[], wasFail ? res.reason.trim() : undefined);
+        if (accepted === "commit-paused") { pausedRun = true; break; }
+        if (await maybeItemGate(item, st)) { pausedRun = true; break; }
         continue;
       }
       // continue / pivot → steer the next generation round (leak-check human-edited feedback first)
@@ -549,6 +651,23 @@ export async function cmdBuild(
           st.status = "passed";
           await ctx.store.save();
           await d.reconcilePlan(ctx, item, gen.deviations, traceDir, nextSeq());
+          // ── Interactive: COMMIT gate — accept now (passed), defer the commit to the human. ──
+          if (steps.has("commit") && ctx.config.git.autoCommit && b.build.branch) {
+            st.lastDeviations = gen.deviations; // stash for the deferred commit on resume
+            await d.appendLearning(ctx.paths, {
+              item: item.id,
+              kind: "passed",
+              detail: `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`,
+              at: stamp(),
+            });
+            await writeCommitPause(ctx, { runId, itemId: item.id, itemTitle: item.title, planText: commitPlanText(), holdoutText: await readHoldout(ctx) });
+            b.build.paused = { kind: "commit", itemId: item.id, round: st.round };
+            await ctx.store.save();
+            ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
+            info(`${item.id}: paused before commit — review ${pauseDirRel(ctx, runId, item.id)}/pause.md, then \`sparra build\`.`);
+            pausedRun = true;
+            break;
+          }
           // Conventional commit of the accepted item — only onto the Sparra-created
           // branch/worktree (never your main branch), and only when opted in.
           if (ctx.config.git.autoCommit && b.build.branch) {
@@ -628,6 +747,26 @@ export async function cmdBuild(
       });
     }
     await ctx.store.save();
+
+    // ── Interactive: ITEM gate — pause before advancing to the next item (the item just
+    // terminalized: passed / failed / budget_exceeded). No pause after the final item. ──
+    if (await maybeItemGate(item, st)) { pausedRun = true; break; }
+  }
+
+  // Stopped at the human's request (`item` gate "stop"): stay in phase "build" — NOT done —
+  // with no pause set, so a plain `sparra build` resumes from the NEXT item.
+  if (humanStop) {
+    await ctx.store.save();
+    banner("BUILD STOPPED — by you");
+    info("Stopped at your request. Re-run `sparra build` to resume from the next item.");
+    const states0 = Object.values(b.build.items);
+    return {
+      passed: states0.filter((s) => s.status === "passed").length,
+      failed: states0.filter((s) => s.status === "failed").length,
+      budgetExceeded: states0.filter((s) => s.status === "budget_exceeded").length,
+      total: items.length,
+      runId,
+    };
   }
 
   // Summary.

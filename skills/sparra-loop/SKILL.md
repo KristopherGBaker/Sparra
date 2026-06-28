@@ -81,7 +81,7 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
   cross-model second opinion. Use this for everything that ISN'T a full multi-item build.
 - **The full engine, with human gates:** when the user wants Sparra's real loop
   (decompose, deps, budget, pivots, review, reconcile, commit, resume) but with steering,
-  use **`sparra build --step=contract,round`** — don't re-implement the loop here.
+  use **`sparra build --step=contract,round,commit,item`** — don't re-implement the loop here.
 
 ### Standalone eval on a WIP tree
 `sparra eval [dir] --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md]`
@@ -95,6 +95,11 @@ user act on it, then re-run `sparra build` to continue. At each pause:
   verdict summary), then set `decision.json` to **continue** (edit `feedback.md` to steer),
   **pivot** (rebuild fresh), **accept** (overriding a FAIL needs a `reason` — it's recorded
   to memory), or **abandon**. Then `sparra build` resumes.
+- `--step=commit` → the item is already accepted (**passed**); `pause.md` lists the files to be
+  committed. Set `decision.json` to **commit** (land it on the Sparra branch — the default) or
+  **skip** (leave it uncommitted; still passed). Only active when `git.autoCommit` is on.
+- `--step=item` → after an item finishes, set `decision.json` to **continue** (next item — the
+  default) or **stop** (end the run; a later `sparra build` resumes from the next item).
 Never read the holdout to write feedback — the summary is already redacted; pasting holdout
 into `feedback.md` is rejected on resume.
 

@@ -14,14 +14,18 @@ import { ensureDir, exists, readText, writeText } from "../util/io.ts";
  * Humans edit FILES, not state.json. Holdout never reaches these notes (redacted).
  */
 
-export type Step = "contract" | "round";
+export type Step = "contract" | "round" | "commit" | "item";
 export type Decision = "continue" | "pivot" | "accept" | "abandon";
+/** A `commit` checkpoint's resolution: commit the accepted item, or skip the commit. */
+export type CommitDecision = "commit" | "skip";
+/** An `item` checkpoint's resolution: advance to the next item, or stop the run. */
+export type ItemDecision = "continue" | "stop";
 
-/** Parse `--step=contract,round` (or `--step round`) into a deduped list. */
+/** Parse `--step=contract,round,commit,item` (or `--step round`) into a deduped list. */
 export function parseSteps(raw: string | boolean | undefined): Step[] {
-  if (raw === true) return ["contract", "round"]; // bare --step → both
+  if (raw === true) return ["contract", "round", "commit", "item"]; // bare --step → step through everything
   if (typeof raw !== "string") return [];
-  const valid = new Set<Step>(["contract", "round"]);
+  const valid = new Set<Step>(["contract", "round", "commit", "item"]);
   return [...new Set(raw.split(",").map((s) => s.trim()).filter((s): s is Step => valid.has(s as Step)))];
 }
 
@@ -114,4 +118,75 @@ export async function readRoundDecision(ctx: Ctx, runId: string, itemId: string)
   }
   const fb = exists(path.join(dir, "feedback.md")) ? (await readText(path.join(dir, "feedback.md"))) ?? "" : "";
   return { decision, reason, feedback: fb };
+}
+
+/** Pause at the commit checkpoint: the item has been accepted (status=passed) but is NOT yet
+ *  committed; show the proposed commit plan and let the human `commit` or `skip`. `planText` is
+ *  a summary (file paths only) the caller derives from the workspace; like every human-facing
+ *  note it is holdout-redacted before it's written (a path could still echo a holdout token). */
+export async function writeCommitPause(
+  ctx: Ctx,
+  args: { runId: string; itemId: string; itemTitle: string; planText: string; holdoutText: string }
+): Promise<void> {
+  const dir = pauseDir(ctx, args.runId, args.itemId);
+  await ensureDir(dir);
+  const summary =
+    `# Paused BEFORE committing ${args.itemId} — ${args.itemTitle}\n\n` +
+    `The item was accepted (it's marked **passed**) but has NOT been committed yet. ` +
+    `Review the proposed commit, then edit \`decision.json\`:\n\n` +
+    `- \`commit\` — commit the accepted change onto the Sparra branch (the default).\n` +
+    `- \`skip\` — leave the change uncommitted (the item still counts as passed).\n\n` +
+    `## Files to be committed\n${args.planText || "_no changed files detected_"}\n\n` +
+    `Then run \`sparra build\` to continue.\n`;
+  await writeText(path.join(dir, "pause.md"), redactHoldout(summary, args.holdoutText));
+  await writeText(path.join(dir, "decision.json"), JSON.stringify({ decision: "commit" }, null, 2) + "\n");
+}
+
+/** Read the human's commit decision. Defaults to `commit` if missing/unparseable; only an
+ *  explicit `"skip"` opts out of the commit. */
+export async function readCommitDecision(ctx: Ctx, runId: string, itemId: string): Promise<CommitDecision> {
+  const raw = await readText(path.join(pauseDir(ctx, runId, itemId), "decision.json"));
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { decision?: string };
+      if (parsed.decision === "skip") return "skip";
+    } catch {
+      /* keep default */
+    }
+  }
+  return "commit";
+}
+
+/** Pause at the item checkpoint: the item reached a terminal status; let the human `continue`
+ *  to the next item or `stop` the run (resumable later). The note is holdout-redacted like
+ *  every other human-facing pause file. */
+export async function writeItemPause(
+  ctx: Ctx,
+  args: { runId: string; itemId: string; itemTitle: string; status: string; holdoutText: string }
+): Promise<void> {
+  const dir = pauseDir(ctx, args.runId, args.itemId);
+  await ensureDir(dir);
+  const summary =
+    `# Paused AFTER ${args.itemId} — ${args.itemTitle}\n\n` +
+    `The item finished with status **${args.status}**. Decide whether to keep going, then edit \`decision.json\`:\n\n` +
+    `- \`continue\` — move on to the next work item (the default).\n` +
+    `- \`stop\` — end the run here; a later \`sparra build\` resumes from the NEXT item.\n\n` +
+    `Then run \`sparra build\` to continue.\n`;
+  await writeText(path.join(dir, "pause.md"), redactHoldout(summary, args.holdoutText));
+  await writeText(path.join(dir, "decision.json"), JSON.stringify({ decision: "continue" }, null, 2) + "\n");
+}
+
+/** Read the human's item-gate decision. Defaults to `continue` if missing/unparseable; only an
+ *  explicit `"stop"` ends the run. */
+export async function readItemDecision(ctx: Ctx, runId: string, itemId: string): Promise<ItemDecision> {
+  const raw = await readText(path.join(pauseDir(ctx, runId, itemId), "decision.json"));
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { decision?: string };
+      if (parsed.decision === "stop") return "stop";
+    } catch {
+      /* keep default */
+    }
+  }
+  return "continue";
 }
