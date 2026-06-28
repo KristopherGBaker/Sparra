@@ -66,6 +66,14 @@ generator the evaluator's blocking points for another round), pass
 differs, since session ids aren't portable across backends. Every result returns `sessionId`
 + `backend` for exactly this.
 
+**Provider limits / empty completions.** If a backend hits a rate/usage/session limit — or
+returns a **silent empty completion** (`tokens: 0`, no output, which the Codex backend now
+classifies as a limit rather than a bogus empty result) — `run_role` **auto-falls-back** down
+`roles.<role>.fallback` (skipping a fallback on an already-limited backend), mirroring the build
+loop. The result reflects the backend that actually ran; if the whole chain was limited, the
+result carries `limitHit` (and the MCP payload includes it). Treat `limitHit` as **retry/fall
+back, not a behavioral failure** — never feed it back to the generator.
+
 #### Subagent delegation (the conductor's pattern)
 The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
 plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead

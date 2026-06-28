@@ -141,10 +141,20 @@ class CodexBackend implements AgentBackend {
       result.tokens = totalTokens(usage);
       result.numTurns = 1;
       result.ok = result.errors.length === 0;
+      // A SILENT empty completion — no error, but zero tokens and no output — is not a real
+      // answer; it's almost always provider unavailability or a usage/session window. Classify it
+      // as a limit so the caller falls back / retries instead of mistaking it for a genuine empty
+      // result (which would, e.g., parse as a bogus failing verdict and churn the loop).
+      if (result.ok && result.tokens === 0 && !result.resultText.trim()) {
+        result.ok = false;
+        result.errors.push("Codex returned an empty completion (0 tokens, no output) — likely provider unavailability or a usage/session limit.");
+        result.limitHit = { kind: "session", raw: result.errors[result.errors.length - 1]! };
+      }
       result.subtype = result.ok ? "success" : "error";
       // Codex gives no structured reset time — sniff the error strings; the build loop
-      // then falls back to fixed-interval polling (no resetAt).
-      if (!result.ok) result.limitHit = limitFromErrors(result.errors);
+      // then falls back to fixed-interval polling (no resetAt). (Don't clobber an empty-completion
+      // limitHit already set above.)
+      if (!result.ok && !result.limitHit) result.limitHit = limitFromErrors(result.errors);
       if (req.outputSchema && result.resultText) result.structured = extractJson(result.resultText) ?? undefined;
       emit(req.onEvent, { kind: "result", ok: result.ok, costUsd: 0, subtype: result.subtype });
     } catch (e) {

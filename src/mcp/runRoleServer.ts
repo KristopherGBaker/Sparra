@@ -96,6 +96,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               outPath: r.outPath,
               tokens: r.tokens,
               costUsd: r.costUsd,
+              limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
             }
           : {
               roleKind: r.roleKind,
@@ -107,6 +108,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               outPath: r.outPath,
               tokens: r.tokens,
               costUsd: r.costUsd,
+              limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
             };
         return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
       } catch (e) {

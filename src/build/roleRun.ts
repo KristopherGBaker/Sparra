@@ -4,6 +4,7 @@ import type { RoleConfig } from "../config.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
+import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
 import { makeDenyHook, mergeHooks } from "../sdk/hooks.ts";
 import { skillsForRole } from "../sdk/skills.ts";
@@ -112,6 +113,11 @@ export interface RoleRunResult {
   costUsd: number;
   tokens: number;
   errors: string[];
+  /** Set when the FINAL attempt still hit a provider rate/usage/session limit (or an empty
+   *  completion classified as one). The conductor should treat this as "retry / fall back",
+   *  NOT as a behavioral failure to feed back to the generator. Auto-fallback via
+   *  `roles.<role>.fallback` is tried first; this is set only if the whole chain was exhausted. */
+  limitHit?: LimitHit;
 }
 
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
@@ -281,18 +287,15 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const workspace = req.workspace ?? ctx.root;
   const run = req.runSessionFn ?? runSession;
 
-  // Optional session resume (e.g. iterating the generator) — only honored when the prior
-  // session belongs to the SAME backend we're about to run; a session id isn't portable.
-  const effectiveBackend = role.backend ?? "claude";
-  let resume: string | undefined;
-  if (req.resumeSessionId) {
-    if (req.resumeBackend && req.resumeBackend !== effectiveBackend) {
-      warn(
-        `role-run-${roleKind}: ignoring resumeSessionId (belongs to backend "${req.resumeBackend}", not "${effectiveBackend}"; session ids aren't portable) — starting fresh.`
-      );
-    } else {
-      resume = req.resumeSessionId;
-    }
+  // Optional session resume (e.g. iterating the generator) — only honored when the attempt's
+  // backend matches the prior session's; a session id isn't portable across backends (so a
+  // fallback to a different backend below naturally starts fresh).
+  const resumeFor = (be: string): string | undefined =>
+    req.resumeSessionId && (!req.resumeBackend || req.resumeBackend === be) ? req.resumeSessionId : undefined;
+  if (req.resumeSessionId && req.resumeBackend && req.resumeBackend !== (role.backend ?? "claude")) {
+    warn(
+      `role-run-${roleKind}: ignoring resumeSessionId (belongs to backend "${req.resumeBackend}", not "${role.backend ?? "claude"}"; session ids aren't portable) — starting fresh.`
+    );
   }
 
   let brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
@@ -382,15 +385,13 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
   // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.
   const snap = exerciseScratch ? snapshotArtifact(workspace, integrityDeps) : undefined;
-  const res = await run({
+
+  // Backend-agnostic request shared across attempts. Backend-specific fields (backend/model/effort/
+  // baseUrl/apiKey/resume/traceSeq) are filled per attempt in the fallback loop below.
+  const commonReq = {
     role: `role-run-${roleKind}`,
     prompt: task,
     systemPrompt: system,
-    backend: role.backend,
-    model: role.model,
-    effort: role.effort,
-    baseUrl: role.baseUrl,
-    apiKey: role.apiKey,
     cwd: workspace,
     additionalDirectories: readDirs,
     tools: spec.tools,
@@ -410,23 +411,54 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
       : { readOnly: true, ...(exerciseScratch ? { exerciseScratch: true } : {}) }),
     ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     ...guard,
-    resume,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: ctx.config.build.maxBudgetUsdPerItem,
     traceDir,
-    traceSeq: req.traceSeq ?? 1,
-  });
+  };
+
+  // Auto-fallback on a provider limit (or an empty completion classified as one) — mirror the
+  // build loop's per-role `fallback`, so an interactive run_role doesn't dead-end on a limited
+  // backend. Try the chain in order, skipping a fallback whose backend already hit a limit.
+  const chain: RoleConfig[] = [];
+  for (let r: RoleConfig | undefined = role; r; r = r.fallback) chain.push(r);
+  const limitedBackends = new Set<string>();
+  let res!: RunResult;
+  let ranRole: RoleConfig = role;
+  for (let i = 0; i < chain.length; i++) {
+    const attempt = chain[i]!;
+    const be = attempt.backend ?? "claude";
+    if (i > 0 && limitedBackends.has(be)) continue; // a fallback on an already-limited backend can't help
+    ranRole = attempt;
+    res = await run({
+      ...commonReq,
+      backend: attempt.backend,
+      model: attempt.model,
+      effort: attempt.effort,
+      baseUrl: attempt.baseUrl,
+      apiKey: attempt.apiKey,
+      resume: resumeFor(be),
+      traceSeq: (req.traceSeq ?? 1) + i,
+    });
+    if (!res.limitHit) break; // a real (non-limit) result — done, even if it's a failure
+    limitedBackends.add(be);
+    const next = chain.slice(i + 1).find((f) => !limitedBackends.has(f.backend ?? "claude"));
+    warn(
+      `role-run-${roleKind}: ${be}/${attempt.model} hit a ${res.limitHit.kind} limit (or empty completion)` +
+        (next ? ` — falling back to ${next.backend ?? "claude"}/${next.model}.` : " — no usable fallback left; surfacing the limit.")
+    );
+  }
 
   const result: RoleRunResult = {
     ok: res.ok,
     roleKind,
-    backend: role.backend ?? "claude",
-    model: role.model,
+    backend: ranRole.backend ?? "claude",
+    model: ranRole.model,
     resultText: res.resultText,
     sessionId: res.sessionId,
     costUsd: res.costUsd,
     tokens: res.tokens,
     errors: res.errors,
+    limitHit: res.limitHit,
   };
 
   if (evaluator) {

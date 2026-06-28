@@ -114,6 +114,14 @@ commands only (chaining/redirect/network-install/mutation/commit are disqualifie
 the worktree + "never commit to main" + that disqualifier list are the guarantees (the same
 residual as the Claude evaluator's in-process exercise). In-place runs never auto-approve Bash.
 
+**Provider limits & empty completions.** A backend reports a hit window via `AgentResult.limitHit`
+(rate / usage / session). The Codex backend also classifies a **silent empty completion**
+(`tokens: 0`, no output, no error) as a limit — it's almost always unavailability or a usage
+window, and treating it as a real empty result would churn the loop with a bogus failure. Both the
+autonomous build loop (`build.autoRestart` + `roles.*.fallback`) and the interactive role-runner
+(auto-fallback in `run_role`, see [role-runner](role-runner.md)) act on `limitHit` — switch to a
+fallback backend/model or wait — rather than failing the work.
+
 ## Adding a backend
 Implement `AgentBackend` (`id`, `capabilities`, `runTask(req) → AgentResult`) in `src/sdk/backends/<id>.ts`, `registerBackend(...)` it, and import it for its side effect in `session.ts`. The engine reads `capabilities` and uses the richest path available, degrading otherwise. Nothing else changes.
 

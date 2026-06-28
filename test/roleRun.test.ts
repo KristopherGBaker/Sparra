@@ -400,3 +400,75 @@ describe("runRole — session resume (run_role iterate)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+/** A fake session that returns a provider-limit result for any call on a backend in `limited`,
+ *  and a normal success otherwise (mirroring what the Codex backend now produces for an empty
+ *  completion). */
+function limiter(limited: Set<string>) {
+  const calls: RunSessionParams[] = [];
+  const fn = async (p: RunSessionParams): Promise<RunResult> => {
+    calls.push(p);
+    const be = p.backend ?? "claude";
+    const isLimited = limited.has(be);
+    return {
+      ok: !isLimited,
+      subtype: isLimited ? "error" : "success",
+      resultText: isLimited ? "" : p.role.includes("evaluator") ? EVAL_JSON : "done",
+      sessionId: "r",
+      costUsd: 0,
+      tokens: isLimited ? 0 : 7,
+      numTurns: 1,
+      hitMaxTurns: false,
+      hitBudget: false,
+      limitHit: isLimited ? { kind: "usage", raw: "limited" } : undefined,
+      errors: isLimited ? ["limited"] : [],
+      tracePath: "",
+    };
+  };
+  return { calls, fn };
+}
+
+describe("runRole — auto-fallback on a provider limit", () => {
+  it("falls back to a different-backend fallback when the primary is limited", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = limiter(new Set(["codex"]));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.map((c) => c.backend)).toEqual(["codex", "claude"]); // tried primary, then fallback
+    expect(r.backend).toBe("claude"); // result reflects the backend that actually ran
+    expect(r.limitHit).toBeUndefined(); // resolved by the fallback
+    expect(r.verdict?.verdict).toBe("pass");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("surfaces limitHit (not a real fail) when the whole chain is limited", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = limiter(new Set(["codex", "claude"]));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.length).toBe(2); // tried both
+    expect(r.limitHit).toBeDefined();
+    expect(r.ok).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips a fallback that is on the SAME (already-limited) backend", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "codex", model: "gpt", fallback: { backend: "codex", model: "gpt-mini" } };
+    const rec = limiter(new Set(["codex"]));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.length).toBe(1); // the same-backend fallback can't help → skipped
+    expect(r.limitHit).toBeDefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no limit → runs once, no fallback attempt", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "claude", model: "opus", fallback: { backend: "codex", model: "gpt" } };
+    const rec = limiter(new Set()); // nothing limited
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.length).toBe(1);
+    expect(r.limitHit).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

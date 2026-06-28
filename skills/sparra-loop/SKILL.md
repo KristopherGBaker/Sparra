@@ -73,6 +73,13 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    not a raw re-read of the verdict file. If it passes, accept (commit if the user
    wants). If it fails, feed the blocking issues back into the generator brief and
    repeat. Pivot to a fresh approach after repeated failures on the same point.
+   **Limit ≠ fail:** if the summary carries a `limitHit` (a provider rate/usage/session
+   limit, or a Codex empty completion classified as one — e.g. `tokens: 0`), the role
+   never really ran. Do NOT treat it as a behavioral FAIL or feed it back to the
+   generator. `run_role` auto-falls-back to `roles.<role>.fallback` first; if the whole
+   chain was limited it surfaces `limitHit` — then switch that role to another
+   backend/model (`--backend`/`backend`) or retry later. (This is the interactive
+   analogue of the CLI loop's auto-restart/fallback.)
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
 
 ## Two ways to be interactive — pick by scope
