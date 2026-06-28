@@ -13,6 +13,7 @@ roles:                        # per role: { backend?, model, effort?, baseUrl?, 
   generator:         { model: sonnet, effort: high }
   evaluator:         { model: opus,   effort: high }
   reviewer:          { model: opus,   effort: high }   # code-review gate (opt-in; see `review`)
+  committer:         { model: haiku,  effort: low }    # authors commit(s) when git.agentCommits=agent
   reflector:         { model: opus,   effort: high }
   # Cross-backend example: generator: { backend: codex, model: gpt-5-codex }
   # Hybrid (local for trivial/sensitive items, cloud for the hard ones):
@@ -28,8 +29,12 @@ permission:
 git:
   strategy: worktree          # worktree | branch | inplace
   branchPrefix: "sparra/"
-  autoCommit: false           # true → one conventional commit per accepted item, ONLY on
-                              # the Sparra worktree/branch (never your main branch / in-place)
+  autoCommit: false           # true → commit each accepted item, ONLY on the Sparra
+                              # worktree/branch (never your main branch / in-place)
+  agentCommits: agent         # agent → the `committer` role splits the diff into atomic
+                              # conventional commit(s), harness executes (model never runs
+                              # git), Sparra-Item trailer appended, sweep + template fallback.
+                              # template → one deterministic commit from item title/summary.
 
 rubric:
   weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 }

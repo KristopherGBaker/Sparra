@@ -5,7 +5,8 @@ import { newRunId } from "../context.ts";
 import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
 import { exists, readText } from "../util/io.ts";
-import { prepareWorkspace, changedFiles, commitAll } from "../util/git.ts";
+import { prepareWorkspace, changedFiles } from "../util/git.ts";
+import { commitItem } from "../build/commit.ts";
 import { writeScopeViolations } from "../sdk/scoping.ts";
 import { ensureAutoProbed } from "../sdk/guard.ts";
 import { decompose } from "../build/decompose.ts";
@@ -40,7 +41,7 @@ export interface BuildDeps {
   reconcilePlan: typeof reconcilePlan;
   appendLearning: typeof appendLearning;
   readMemory: typeof readMemory;
-  commitWork: typeof commitAll;
+  commitItem: typeof commitItem;
   waitForLimit: typeof waitForLimit;
 }
 
@@ -56,7 +57,7 @@ const defaultDeps: BuildDeps = {
   reconcilePlan,
   appendLearning,
   readMemory,
-  commitWork: commitAll,
+  commitItem,
   waitForLimit,
 };
 
@@ -91,14 +92,6 @@ function hasAvailableFallback(role: RoleConfig, limited: Map<string, number>, no
     r = r.fallback;
   }
   return false;
-}
-
-/** Build a conventional commit message for an accepted item (deterministic, no LLM call). */
-function commitMessage(item: WorkItem, deviations: Deviation[], runId: string): string {
-  const subject = `feat: ${item.title.charAt(0).toLowerCase()}${item.title.slice(1)}`.replace(/\.\s*$/, "");
-  const inScope = deviations.filter((d) => d.scope !== "out-of-scope");
-  const lines = [item.summary.trim(), ...(inScope.length ? ["", ...inScope.map((d) => `- ${d.summary}`)] : [])].filter(Boolean);
-  return `${subject}\n\n${lines.join("\n")}\n\nSparra-Item: ${item.id} · build ${runId}\n`;
 }
 
 function freshItemState(): ItemState {
@@ -237,8 +230,8 @@ export async function cmdBuild(
     await ctx.store.save();
     await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
     if (ctx.config.git.autoCommit && b.build.branch) {
-      const cr = d.commitWork(workspaceDir, commitMessage(item, deviations, runId));
-      detail(cr.ok ? `committed ${item.id} → ${b.build.branch}` : `commit skipped (${item.id}): ${cr.out.split("\n")[0]}`);
+      const cr = await d.commitItem(ctx, { item, deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
+      detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
     }
     await d.appendLearning(ctx.paths, {
       item: item.id,
@@ -559,8 +552,8 @@ export async function cmdBuild(
           // Conventional commit of the accepted item — only onto the Sparra-created
           // branch/worktree (never your main branch), and only when opted in.
           if (ctx.config.git.autoCommit && b.build.branch) {
-            const cr = d.commitWork(workspaceDir, commitMessage(item, gen.deviations, runId));
-            detail(cr.ok ? `committed ${item.id} → ${b.build.branch}` : `commit skipped (${item.id}): ${cr.out.split("\n")[0]}`);
+            const cr = await d.commitItem(ctx, { item, deviations: gen.deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
+            detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
           }
           await d.appendLearning(ctx.paths, {
             item: item.id,

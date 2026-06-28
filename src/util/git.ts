@@ -49,6 +49,33 @@ export function commitAll(root: string, message: string): { ok: boolean; out: st
   return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
 }
 
+/** A unified diff of the current changes (tracked vs HEAD) plus the list of untracked files —
+ *  enough context for a committer to group changes into commits. `exclude` paths (repo-relative)
+ *  are kept out via pathspec (used to keep the holdout out of the committer's view). Capped. */
+export function workingDiff(root: string, max = 12000, exclude: string[] = []): string {
+  if (!isGitRepo(root)) return "";
+  const ex = exclude.map((p) => `:(exclude)${p}`);
+  const tracked =
+    git(root, ["diff", "HEAD", "--stat", "--", ".", ...ex]).out + "\n" + git(root, ["diff", "HEAD", "--", ".", ...ex]).out;
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "--", ".", ...ex]).out.trim();
+  const u = untracked ? `\n\n# Untracked (new) files:\n${untracked}` : "";
+  const full = tracked + u;
+  return full.length > max ? full.slice(0, max) + `\n…(diff truncated at ${max} chars)` : full;
+}
+
+/** Commit EXACTLY `files` with `message` — atomic: the commit is restricted to those pathspecs,
+ *  so anything else staged/changed is left untouched. No-op (ok:false) if none of `files` changed. */
+export function commitPaths(root: string, files: string[], message: string): { ok: boolean; out: string } {
+  if (!isGitRepo(root)) return { ok: false, out: "not a git repo" };
+  if (!files.length) return { ok: false, out: "no files" };
+  const add = git(root, ["add", "--", ...files]); // stage (incl. new files / deletions) for these paths
+  if (!add.ok) return { ok: false, out: `git add failed: ${add.out.trim()}` };
+  if (git(root, ["diff", "--cached", "--quiet", "--", ...files]).ok) return { ok: false, out: "nothing to commit" };
+  // `-- <files>` restricts the commit to these paths regardless of what else is in the index.
+  const r = spawnSync("git", ["commit", "-F", "-", "--", ...files], { cwd: root, encoding: "utf8", input: message });
+  return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
+}
+
 /**
  * Prepare an isolated working location for the build per gitStrategy.
  * Returns the directory the build should run in.

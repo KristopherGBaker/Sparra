@@ -15,7 +15,9 @@
 
 5. **GAN-style pivot** — if an item stays below threshold on the **same rubric criterion** for `N` rounds, Sparra **discards and restarts it from scratch** with a different approach instead of patching forever (`N` and threshold configurable). The pivot is logged to memory.
 
-6. **Accept → reconcile → commit** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory. If `git.autoCommit` is on (and the build is on a Sparra-created branch/worktree), the item is committed as **one conventional commit** (`feat: <item> … Sparra-Item: <id>`) — incremental, revertable history, never on your main branch. In-place / non-git builds are never auto-committed.
+6. **Accept → reconcile → commit** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory. If `git.autoCommit` is on (and the build is on a Sparra-created branch/worktree), the item is committed — incremental, revertable history, never on your main branch. In-place / non-git builds are never auto-committed. Two authoring modes (`git.agentCommits`):
+   - **`agent`** (default) — the cheap **`committer`** role reads the diff and proposes **one or more atomic Conventional Commits**, split by logical change (a refactor, the feature, a docs tweak become separate commits). The harness *executes* the plan (the model never runs git), appends a `Sparra-Item: <id>` trailer to each, and sweeps anything the plan misses into a final commit so nothing is lost. On any failure it falls back to `template`. The committer is read-only, confined to the workspace, and never sees the holdout. Configure its model/backend via `roles.committer` (defaults to a cheap model — e.g. Haiku).
+   - **`template`** — one deterministic commit per item from the item title/summary (`feat: <item> … Sparra-Item: <id>`), no model call.
 
 ---
 

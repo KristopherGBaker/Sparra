@@ -60,6 +60,10 @@ export interface SparraConfig {
     evaluator: RoleConfig;
     /** Independent code review of the generated diff/source (opt-in via `review`). */
     reviewer: RoleConfig;
+    /** Authors the conventional commit(s) for an accepted item (when `git.agentCommits`).
+     *  A small, well-bounded task — defaults to a cheap model. Read-only: it emits a commit
+     *  PLAN; the harness executes it. */
+    committer: RoleConfig;
     reflector: RoleConfig;
   };
 
@@ -84,11 +88,19 @@ export interface SparraConfig {
     strategy: GitStrategy;
     branchPrefix: string;
     /**
-     * When true, commit each accepted item as one conventional commit — but ONLY onto the
-     * Sparra-created worktree/branch (never your main branch, never an in-place tree).
-     * Default false.
+     * When true, commit each accepted item — but ONLY onto the Sparra-created worktree/branch
+     * (never your main branch, never an in-place tree). Default false.
      */
     autoCommit: boolean;
+    /**
+     * How the commit(s) are authored when `autoCommit` is on:
+     *   agent    → the `committer` role reads the diff and proposes one or more atomic
+     *              Conventional-Commits (split by logical change); the harness executes the
+     *              plan and appends a `Sparra-Item` trailer. Falls back to `template` on
+     *              failure. (default)
+     *   template → one deterministic commit per item from the item's title/summary (no model).
+     */
+    agentCommits: "agent" | "template";
   };
 
   rubric: {
@@ -268,13 +280,14 @@ export function defaultConfig(): SparraConfig {
       generator: role("sonnet", "high"),
       evaluator: role("opus", "high"),
       reviewer: role("opus", "high"),
+      committer: role("haiku", "low"),
       reflector: role("opus", "high"),
     },
     permission: {
       mode: "auto",
       denyBashContains: ["rm -rf /", "git push", "shutdown", "mkfs", ":(){", "curl | sh", "sudo "],
     },
-    git: { strategy: "worktree", branchPrefix: "sparra/", autoCommit: false },
+    git: { strategy: "worktree", branchPrefix: "sparra/", autoCommit: false, agentCommits: "agent" },
     rubric: {
       weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 },
       passThreshold: 75,
