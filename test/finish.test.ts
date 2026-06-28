@@ -53,6 +53,8 @@ function fakeDeps(over: Partial<FinishDeps> = {}): FinishDeps {
     isTracked: vi.fn(() => false),
     ghAvailable: vi.fn(() => false),
     ghPrCreate: vi.fn(() => ({ ok: true, out: "" })),
+    branchExists: vi.fn(() => true),
+    currentBranch: vi.fn(() => null),
     confirm: vi.fn(() => false),
     ...over,
   };
@@ -293,6 +295,79 @@ describe("cmdFinish", () => {
     expect(fs.existsSync(path.join(paths.cycleDir("0001-first-feature"), "HOLDOUT.md"))).toBe(true);
     expect(fs.existsSync(paths.holdout)).toBe(false);
     process.exitCode = 0;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--branch lets finish land/teardown when build.branch is unset", async () => {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-wt-"));
+    const { ctx, dir } = await project();
+    ctx.store.data.build.branch = undefined; // no recorded branch
+    const deps = fakeDeps({ worktreeForBranch: vi.fn(() => real) });
+
+    const r = await cmdFinish(ctx, { branch: "sparra/manual", merge: true, yes: true }, deps);
+
+    // The explicit branch flows to the land + teardown deps.
+    expect(deps.mergeFfOnly).toHaveBeenCalledWith(dir, "main", "sparra/manual");
+    expect(r.landed).toBe("merge");
+    expect(deps.removeWorktree).toHaveBeenCalledWith(dir, real);
+    expect(deps.deleteBranch).toHaveBeenCalledWith(dir, "sparra/manual", false);
+    expect(r.tornDown).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(real, { recursive: true, force: true });
+  });
+
+  it("auto-detects a sparra/* current branch when build.branch is unset", async () => {
+    const { ctx, dir } = await project();
+    ctx.store.data.build.branch = undefined;
+    const deps = fakeDeps({ currentBranch: vi.fn(() => "sparra/auto") });
+
+    const r = await cmdFinish(ctx, { merge: true, yes: true }, deps);
+
+    expect(deps.mergeFfOnly).toHaveBeenCalledWith(dir, "main", "sparra/auto");
+    expect(r.landed).toBe("merge");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT auto-detect a non-sparra (main) current branch", async () => {
+    const { ctx, dir } = await project();
+    ctx.store.data.build.branch = undefined;
+    const deps = fakeDeps({ currentBranch: vi.fn(() => "main") });
+
+    const r = await cmdFinish(ctx, { merge: true, yes: true, teardown: true }, deps);
+
+    // main is never auto-selected — nothing to land or tear down.
+    expect(deps.mergeFfOnly).not.toHaveBeenCalled();
+    expect(deps.removeWorktree).not.toHaveBeenCalled();
+    expect(deps.deleteBranch).not.toHaveBeenCalled();
+    expect(r.landed).toBe("none");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a non-existent --branch before any side effect", async () => {
+    const { ctx, dir, paths } = await project();
+    const deps = fakeDeps({ branchExists: vi.fn(() => false) });
+
+    const r = await cmdFinish(ctx, { branch: "sparra/nope", merge: true, yes: true, teardown: true }, deps);
+
+    expect(r.refused).toBeTruthy();
+    expect(r.landed).toBe("none");
+    expect(deps.mergeFfOnly).not.toHaveBeenCalled();
+    expect(deps.removeWorktree).not.toHaveBeenCalled();
+    expect(deps.deleteBranch).not.toHaveBeenCalled();
+    // Hard stop: nothing archived.
+    expect(fs.existsSync(paths.cycleDir("0001-first-feature"))).toBe(false);
+    process.exitCode = 0;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an explicit --branch overrides a different build.branch in state", async () => {
+    const { ctx, dir } = await project({ branch: "sparra/recorded" });
+    const deps = fakeDeps();
+
+    const r = await cmdFinish(ctx, { branch: "sparra/explicit", merge: true, yes: true }, deps);
+
+    expect(deps.mergeFfOnly).toHaveBeenCalledWith(dir, "main", "sparra/explicit");
+    expect(r.landed).toBe("merge");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

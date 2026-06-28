@@ -15,6 +15,8 @@ import {
   isTracked,
   ghAvailable,
   ghPrCreate,
+  branchExists,
+  currentBranch,
 } from "../util/git.ts";
 
 /** Side-effecting git/gh/fs seam so `finish` is testable with NO live git/gh/network calls. */
@@ -29,6 +31,10 @@ export interface FinishDeps {
   isTracked: typeof isTracked;
   ghAvailable: typeof ghAvailable;
   ghPrCreate: typeof ghPrCreate;
+  /** Whether a local branch exists — resolves/validates an explicit `--branch`. */
+  branchExists: typeof branchExists;
+  /** The currently checked-out branch — used to auto-detect a Sparra branch when state is unset. */
+  currentBranch: typeof currentBranch;
   /** Interactive confirmation for the irreversible `--merge` land. Default refuses (require `--yes`). */
   confirm: () => boolean;
 }
@@ -44,6 +50,8 @@ const defaultDeps: FinishDeps = {
   isTracked,
   ghAvailable,
   ghPrCreate,
+  branchExists,
+  currentBranch,
   confirm: () => false,
 };
 
@@ -53,6 +61,8 @@ export interface FinishOpts {
   yes?: boolean;
   teardown?: boolean;
   force?: boolean;
+  /** Operate on this Sparra branch explicitly (wins over recorded/auto-detected state). */
+  branch?: string;
   /** Title for a chained fresh cycle (`--new "<title>"`); "" means `--new` with no title. */
   new?: string;
 }
@@ -100,7 +110,22 @@ export async function cmdFinish(
     process.exitCode = 1;
     return { refused: msg, landed: "none" };
   }
-  const branch = b.build.branch;
+  // ── Resolve the effective Sparra branch: explicit --branch ▸ recorded state ▸ auto-detect. ──
+  // An explicit --branch ALWAYS wins; if it doesn't exist, refuse BEFORE any side effect.
+  if (opts.branch !== undefined && !d.branchExists(ctx.root, opts.branch)) {
+    const msg = `--branch ${opts.branch} does not exist. Nothing to land or tear down.`;
+    err(msg);
+    process.exitCode = 1;
+    return { refused: msg, landed: "none" };
+  }
+  // Auto-detect the checked-out branch ONLY when it's a Sparra branch (carries the configured
+  // prefix) and is not the integration/default branch — never the user's main/master.
+  const detected = d.currentBranch(ctx.root);
+  const autoDetected =
+    detected && detected.startsWith(ctx.config.git.branchPrefix) && detected !== d.defaultBranch(ctx.root)
+      ? detected
+      : undefined;
+  const branch = opts.branch ?? b.build.branch ?? autoDetected;
   const workspaceDir = b.build.workspaceDir && b.build.workspaceDir !== ctx.root ? b.build.workspaceDir : null;
   const checkDir = workspaceDir ?? ctx.root;
   if (d.isDirty(checkDir)) {

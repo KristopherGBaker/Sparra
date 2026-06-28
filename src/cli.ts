@@ -65,7 +65,7 @@ ${color.bold("Commands")}
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
   status                                        show phase, items, and the suggested next command
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
-  finish [--pr|--merge --yes] [--teardown] [--force] [--new "<title>"]
+  finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   role run --kind <r> [--backend b] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
                                                 run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
@@ -165,6 +165,7 @@ async function main(): Promise<void> {
         yes: !!flags.yes,
         teardown: !!flags.teardown,
         force: !!flags.force,
+        branch: typeof flags.branch === "string" ? flags.branch : undefined,
         new: flags.new === undefined ? undefined : typeof flags.new === "string" ? flags.new : "",
       });
       break;

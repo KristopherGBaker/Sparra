@@ -59,7 +59,7 @@ and archives the cycle — **without ever silently touching your main branch.** 
 side effects) if the build is mid-flight or the working tree is dirty.
 
 ```
-sparra finish [--pr | --merge --yes] [--teardown] [--force] [--new "<title>"]
+sparra finish [--pr | --merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
 ```
 
 - **Land (opt-in; the default touches nothing).**
@@ -81,6 +81,13 @@ sparra finish [--pr | --merge --yes] [--teardown] [--force] [--new "<title>"]
 - **Archive** — calls the same `archiveCycle()` as `new`, moving the working set **including the
   live `HOLDOUT.md`** into `.sparra/cycles/<NNNN>-<slug>/`. With `--new "<title>"` it chains
   straight into a fresh cycle (`cmdNew`) instead of just closing.
+- **Branch resolution.** finish operates on the recorded `build.branch` by default, but can also
+  close out a Sparra branch it didn't create. The effective branch is
+  `--branch <name>` ▸ recorded `build.branch` ▸ **auto-detected** current branch. Auto-detect only
+  picks the checked-out branch when it carries the configured `branchPrefix` (e.g. `sparra/…`) and
+  is **not** your integration branch — your `main`/`master` is never auto-selected. An explicit
+  `--branch` always wins over recorded state; if the named branch doesn't exist, finish **refuses
+  before any side effect**.
 
 **Holdout safety:** `HOLDOUT.md` is archived privately into the cycle dir and **never** rides
 into a PR or a merge. `.sparra/` is gitignored, so the normal case is already safe; if a

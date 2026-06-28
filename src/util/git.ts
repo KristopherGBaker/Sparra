@@ -115,6 +115,12 @@ export function isDirty(dir: string): boolean {
   return git(dir, ["status", "--porcelain", "--untracked-files=all"]).out.trim() !== "";
 }
 
+/** True if a local branch `refs/heads/<branch>` exists (used to resolve/validate `finish --branch`). */
+export function branchExists(root: string, branch: string): boolean {
+  if (!isGitRepo(root)) return false;
+  return git(root, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+}
+
 /** Absolute path of the worktree that has `branch` checked out, or null if none/in-place. */
 export function worktreeForBranch(root: string, branch: string): string | null {
   if (!isGitRepo(root)) return null;
