@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mergeFfOnly, defaultBranch } from "../src/util/git.ts";
+import { mergeFfOnly, defaultBranch, isLinkedWorktree } from "../src/util/git.ts";
 
 /** A fake git runner that records the argv of every invocation and answers from a map. */
 function fakeRunner(answers: (args: string[]) => { ok: boolean; out: string }) {
@@ -64,5 +64,50 @@ describe("defaultBranch", () => {
     expect(defaultBranch("/repo", run)).toBe("");
     // It must never have asked for the current branch as a fallback.
     expect(run.mock.calls.some(([, args]) => args[0] === "rev-parse")).toBe(false);
+  });
+});
+
+describe("isLinkedWorktree", () => {
+  /** Answer rev-parse with a map keyed by the requested ref (--git-dir / --git-common-dir). */
+  function gitRunner(map: Record<string, { ok: boolean; out: string }>) {
+    return (_root: string, args: string[]) => {
+      if (args[0] === "rev-parse") return map[args[1]!] ?? { ok: false, out: "" };
+      return { ok: false, out: "" };
+    };
+  }
+
+  it("true when git-dir ≠ common-dir (a linked worktree)", () => {
+    const run = gitRunner({
+      "--git-dir": { ok: true, out: "/repo/.git/worktrees/wt-1\n" },
+      "--git-common-dir": { ok: true, out: "/repo/.git\n" },
+    });
+    expect(isLinkedWorktree("/repo/../wt", run)).toBe(true);
+  });
+
+  it("false in the main worktree — relative `.git` git-dir vs absolute common-dir that RESOLVE equal", () => {
+    // The main worktree commonly reports a relative `.git` for --git-dir and an absolute path for
+    // --git-common-dir; both must resolve (against root) to the same dir ⇒ false.
+    const run = gitRunner({
+      "--git-dir": { ok: true, out: ".git\n" },
+      "--git-common-dir": { ok: true, out: "/repo/.git\n" },
+    });
+    expect(isLinkedWorktree("/repo", run)).toBe(false);
+  });
+
+  it("false when both are the same absolute path (main worktree)", () => {
+    const run = gitRunner({
+      "--git-dir": { ok: true, out: "/repo/.git\n" },
+      "--git-common-dir": { ok: true, out: "/repo/.git\n" },
+    });
+    expect(isLinkedWorktree("/repo", run)).toBe(false);
+  });
+
+  it("false on a non-repo / git error (either rev-parse fails)", () => {
+    expect(isLinkedWorktree("/nope", gitRunner({}))).toBe(false);
+    const partial = gitRunner({
+      "--git-dir": { ok: true, out: "/repo/.git\n" },
+      "--git-common-dir": { ok: false, out: "fatal: not a git repository\n" },
+    });
+    expect(isLinkedWorktree("/repo", partial)).toBe(false);
   });
 });

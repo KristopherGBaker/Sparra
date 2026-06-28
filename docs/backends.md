@@ -98,6 +98,11 @@ naming the mutated files. Set `exercise.sandbox: read-only` to keep the strict p
 (scratch-needing tools will `EPERM`). The **Claude** evaluator exercises via an in-process runner
 and is unaffected.
 
+The "isolated-checkout boundary" is **a Sparra build branch (`state.build.branch`) OR a linked
+git worktree** (`isLinkedWorktree`) — not specifically `build.branch`. So a standalone `sparra
+eval`/`run_role` on a git worktree gets writable scratch **without editing `state.json`**. A plain
+in-place run (the main worktree, no `build.branch`) still gets **no** scratch.
+
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when
 the build is on a worktree/branch** (`build.branch` set). On an in-place / greenfield-no-git run

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { runRole, makeHoldoutReadDecider, type RoleKind } from "../src/build/roleRun.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -277,6 +278,72 @@ describe("runRole — exercising evaluator scratch + integrity guard", () => {
     expect(r.verdict?.verdict).toBe("fail"); // inconclusive → never accepted
     expect(r.ok).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/** A REAL offline git repo (main worktree) plus a linked worktree of it. Local `git` only — no
+ *  network/model. Returns both dirs so a test can target either as the eval workspace. */
+function makeRepoWithWorktree(): { repo: string; worktree: string } {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rr-repo-"));
+  const g = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+  g("init", "-q");
+  g("config", "user.email", "t@example.com");
+  g("config", "user.name", "Test");
+  g("commit", "--allow-empty", "-q", "-m", "init");
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rr-wt-"));
+  fs.rmSync(worktree, { recursive: true, force: true }); // git worktree add wants a non-existent dir
+  g("worktree", "add", "--detach", "-q", worktree, "HEAD");
+  return { repo, worktree };
+}
+
+describe("runRole — exerciseScratch on a REAL linked worktree (Item E)", () => {
+  it("grants exerciseScratch on a linked worktree even with state.build.branch UNSET (anti-no-op)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    expect(ctx.store.data.build.branch).toBeFalsy(); // no branch — the new path is the only reason
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: worktree, runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    // A no-op wiring (passing isWorktree:false / the old inline `&& !!build.branch`) FAILS this.
+    expect(ev.calls[0]!.exerciseScratch).toBe(true);
+    expect(ev.calls[0]!.readOnly).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("WALL: a REAL main worktree with no branch gets NO exerciseScratch", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: repo, runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(ev.calls[0]!.exerciseScratch).toBeUndefined(); // main worktree ⇒ isLinkedWorktree false
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("the integrity guard ARMS on the worktree-no-branch path (artifact write reverted + reported)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ev = recorder(); // model returns a PASSING verdict…
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      workspace: worktree,
+      runSessionFn: ev.fn,
+      integrityDeps: mutatingIntegrityDeps("src/App.ts"), // …but the guard saw a mutation
+    });
+    // Snapshot was gated on exerciseScratch, so the guard only arms because scratch was granted.
+    expect(r.verdict?.verdict).toBe("fail");
+    expect(r.verdict?.blocking[0]).toMatch(/Integrity violation/);
+    expect(r.verdict?.blocking[0]).toContain("src/App.ts");
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
   });
 });
 

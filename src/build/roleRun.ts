@@ -23,7 +23,8 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
-import { changedFiles } from "../util/git.ts";
+import { changedFiles, isLinkedWorktree } from "../util/git.ts";
+import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { warn } from "../util/log.ts";
 
 /**
@@ -293,10 +294,17 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const exerciser = evaluator ? buildExerciser(ctx.config, workspace) : undefined;
   const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "");
 
-  // The exercising evaluator (only) gets writable scratch on a worktree/branch boundary so a Codex
-  // exercise can write node_modules/.vite-temp etc.; the source-integrity guard reverts any artifact
-  // write it makes. Other read-only roles (reviewer, contract-*) never get it.
-  const exerciseScratch = evaluator && ctx.config.exercise.sandbox === "workspace-write" && !!ctx.store.data.build.branch;
+  // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
+  // build branch OR a linked git worktree) so a Codex exercise can write node_modules/.vite-temp etc.;
+  // the source-integrity guard reverts any artifact write it makes. Other read-only roles (reviewer,
+  // contract-*) never get it. `isLinkedWorktree(workspace)` is computed LAZILY (thunk) — only after the
+  // cheaper evaluator/sandbox/branch checks pass — so a non-evaluator role-run never spawns git.
+  const exerciseScratch = exerciseScratchEnabled({
+    evaluator,
+    sandbox: ctx.config.exercise.sandbox,
+    hasBranch: !!ctx.store.data.build.branch,
+    isWorktree: () => isLinkedWorktree(workspace),
+  });
   const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
 
   // Parity context the real roles inject (cheap reads; improves single-shot fidelity).

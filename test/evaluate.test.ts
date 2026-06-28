@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { evaluateItem } from "../src/build/evaluate.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -165,6 +166,35 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     const plain = await run(ctx, dir, recorder(PASS_JSON), cleanIntegrityDeps);
     expect(plain.verdict.exerciseStatus).toBe("ran");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("grants exerciseScratch on a REAL linked worktree with state.build.branch UNSET (Item E, anti-no-op)", async () => {
+    const { ctx, dir } = await makeCtx();
+    // A real offline git repo + linked worktree; only local `git` runs (no model/network).
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-eval-repo-"));
+    const g = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+    g("init", "-q");
+    g("config", "user.email", "t@example.com");
+    g("config", "user.name", "Test");
+    g("commit", "--allow-empty", "-q", "-m", "init");
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-eval-wt-"));
+    fs.rmSync(worktree, { recursive: true, force: true });
+    g("worktree", "add", "--detach", "-q", worktree, "HEAD");
+
+    ctx.config.exercise.sandbox = "workspace-write";
+    expect(ctx.store.data.build.branch).toBeFalsy(); // no branch — worktree is the only reason
+    const rec = recorder();
+    await run(ctx, worktree, rec, cleanIntegrityDeps);
+    expect(rec.calls[0]!.exerciseScratch).toBe(true); // fails for a no-op isWorktree:false wiring
+
+    // WALL: the same setup with workspace = the MAIN worktree gets NO scratch.
+    const recMain = recorder();
+    await run(ctx, repo, recMain, cleanIntegrityDeps);
+    expect(recMain.calls[0]!.exerciseScratch).toBeUndefined();
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
   });
 
   it("a blocked exercise can NEVER pass, even if the model claims pass with a high score (H3)", async () => {

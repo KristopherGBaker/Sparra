@@ -7,6 +7,8 @@ import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
+import { exerciseScratchEnabled } from "./exerciseScratch.ts";
+import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
@@ -65,9 +67,15 @@ export async function evaluateItem(args: {
   const role = args.role ?? ctx.config.roles.evaluator;
   const run = args.runSessionFn ?? runSession;
   const exerciser = buildExerciser(ctx.config, workspaceDir);
-  // Only relax the Codex exercise sandbox to workspace-write on a worktree/branch boundary (the
-  // integrity guard needs git to revert). Carries `exerciseScratch` + arms the source-integrity guard.
-  const exerciseScratch = ctx.config.exercise.sandbox === "workspace-write" && !!ctx.store.data.build.branch;
+  // Only relax the Codex exercise sandbox to workspace-write on an isolated-checkout boundary — a
+  // Sparra build branch OR a linked git worktree (the integrity guard needs git to revert). Carries
+  // `exerciseScratch` + arms the source-integrity guard. `isLinkedWorktree` is computed lazily.
+  const exerciseScratch = exerciseScratchEnabled({
+    evaluator: true,
+    sandbox: ctx.config.exercise.sandbox,
+    hasBranch: !!ctx.store.data.build.branch,
+    isWorktree: () => isLinkedWorktree(workspaceDir),
+  });
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {

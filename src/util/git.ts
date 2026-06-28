@@ -162,6 +162,30 @@ export function checkout(root: string, branch: string): { ok: boolean; out: stri
 }
 
 /**
+ * True iff `root` is a LINKED git worktree (an isolated checkout created by `git worktree add`),
+ * as opposed to the main worktree, a non-repo, or a path where git errors.
+ *
+ * A linked worktree's `git rev-parse --git-dir` resolves to `<main>/.git/worktrees/<name>` while
+ * `--git-common-dir` resolves to `<main>/.git` — so the two differ. In the main worktree both
+ * resolve to `<root>/.git`, so they match. Git may return either relative (`.git`) or absolute
+ * paths depending on cwd, so we resolve BOTH against `root` before comparing.
+ *
+ * The exercising evaluator uses this as the real safety boundary for writable scratch: an isolated
+ * checkout (not specifically `state.build.branch`) is what makes a write-then-revert exercise safe.
+ *
+ * `run` is an injectable git runner (default = real `git`) so the check is unit-testable.
+ */
+export function isLinkedWorktree(
+  root: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): boolean {
+  const gitDir = run(root, ["rev-parse", "--git-dir"]);
+  const commonDir = run(root, ["rev-parse", "--git-common-dir"]);
+  if (!gitDir.ok || !commonDir.ok) return false;
+  return path.resolve(root, gitDir.out.trim()) !== path.resolve(root, commonDir.out.trim());
+}
+
+/**
  * Fast-forward-only merge of `source` into the explicit `target` (default) branch.
  *
  * Fast-forwardability is determined BEFORE any checkout state changes: if `target` is not an
