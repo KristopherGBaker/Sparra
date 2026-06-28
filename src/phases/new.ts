@@ -28,15 +28,26 @@ function freshPlan(title: string, mode: string): string {
   return `${heading}\n\n> Co-edited with Sparra during \`sparra plan\`. High-level intent, not granular steps.\n\n## Intent\n_TBD — what are we building and why?_\n\n## Constraints\n_TBD_\n\n## Approach\n_TBD (high level)_\n\n${mode === "existing" ? "## Patterns to conform to\n_See CODEBASE_MAP.md._\n\n" : ""}## Risks & unknowns\n_TBD_\n\n## Open questions\n_TBD_\n\n## Success criteria\n_TBD_\n`;
 }
 
+export interface ArchiveResult {
+  /** Cycle number assigned. */
+  n: number;
+  /** `<NNNN>-<slug>` directory name. */
+  name: string;
+  /** Absolute path of the cycle dir. */
+  dest: string;
+  /** Count of artifact groups moved. */
+  archived: number;
+}
+
 /**
- * Start a NEW plan→build cycle in the same project. Archives the finished cycle's working
- * set (PLAN.md, frozen input, work items, contracts, verdicts, reviews, the run's traces)
- * into `.sparra/cycles/<NNNN>-<slug>/`, carries forward the cross-cycle artifacts
- * (memory.md, CHANGELOG.md, CODEBASE_MAP.md, config, calibration, prompts), resets the
- * build state, writes a fresh PLAN.md, and returns to the `plan` phase.
+ * Archive the finished cycle's working set into `.sparra/cycles/<NNNN>-<slug>/`: the plan,
+ * the live HOLDOUT.md, the frozen input, work items, contracts, verdicts, reviews, and the
+ * run's traces (move, not copy — the next cycle starts clean), plus a `cycle.json` manifest.
+ * Cross-cycle artifacts (memory.md, CHANGELOG.md, CODEBASE_MAP.md, config.yaml, calibration/,
+ * prompts/, proposals/, snapshots/) are deliberately left in place. Shared by `new` and
+ * `finish`; it does NOT re-scaffold or reset build state — that stays in `cmdNew`.
  */
-export async function cmdNew(ctx: Ctx, title: string): Promise<void> {
-  banner("NEW CYCLE");
+export async function archiveCycle(ctx: Ctx, title: string): Promise<ArchiveResult> {
   const { paths, store } = ctx;
   const b = store.data;
 
@@ -51,11 +62,12 @@ export async function cmdNew(ctx: Ctx, title: string): Promise<void> {
   const dest = paths.cycleDir(name);
   fs.mkdirSync(dest, { recursive: true });
 
-  // Move the finished cycle's working set into the archive (move, not copy, so the next
-  // cycle starts clean). Cross-cycle artifacts (memory.md, CHANGELOG.md, CODEBASE_MAP.md,
-  // config.yaml, calibration/, prompts/, proposals/, snapshots/) are deliberately left.
+  // Move the finished cycle's working set into the archive. The live HOLDOUT.md is archived
+  // alongside the rest so a stale per-cycle holdout never bleeds into the next cycle (and so
+  // it stays private — it is moved by path only, never read here).
   const moves: Array<[string, string]> = [
     [paths.plan, path.join(dest, "PLAN.md")],
+    [paths.holdout, path.join(dest, "HOLDOUT.md")],
     [paths.frozen, path.join(dest, "frozen")],
     [paths.workitems, path.join(dest, "workitems")],
     [paths.contracts, path.join(dest, "contracts")],
@@ -96,6 +108,22 @@ export async function cmdNew(ctx: Ctx, title: string): Promise<void> {
       2
     ) + "\n"
   );
+
+  return { n, name, dest, archived };
+}
+
+/**
+ * Start a NEW plan→build cycle in the same project. Archives the finished cycle's working
+ * set (via `archiveCycle`), carries forward the cross-cycle artifacts (memory.md,
+ * CHANGELOG.md, CODEBASE_MAP.md, config, calibration, prompts), resets the build state,
+ * writes a fresh PLAN.md, and returns to the `plan` phase.
+ */
+export async function cmdNew(ctx: Ctx, title: string): Promise<void> {
+  banner("NEW CYCLE");
+  const { paths, store } = ctx;
+  const b = store.data;
+
+  const { n, dest, archived } = await archiveCycle(ctx, title);
 
   // Recreate the now-empty working dirs, write a fresh plan, reset per-cycle state.
   await paths.ensureScaffold();
