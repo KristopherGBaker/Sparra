@@ -59,9 +59,17 @@ You can re-run `sparra init` later (it preserves existing config/PLAN), and twea
 Run **every** `run_role` call below inside a subagent that returns only a summary —
 see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
 
-1. **Contract.** Write/refine the "done" contract with the user (a short list of
-   checkable assertions). Optionally negotiate it: `run_role(contract-generator)` then
-   `run_role(contract-evaluator)`. Save it to a file (e.g. `.sparra/contract.md`).
+1. **Contract — negotiate it through the evaluator BEFORE locking it.** Don't lock a
+   contract you wrote (or the user wrote) without an adversarial pass — that's how a
+   loose/gameable "done" slips through. Mirror the CLI's `negotiateContract`: draft the
+   contract (a short list of checkable assertions), then **`run_role(contract-evaluator,
+   contractPath=…)`** to critique it adversarially; revise to address every point and
+   re-run the evaluator; repeat (a few rounds) until it agrees (emits `CONTRACT: AGREED`)
+   or rounds run out, then **save the agreed text** to a file (e.g. `.sparra/contract.md`)
+   and only then proceed to generate. Use `run_role(contract-generator)` for the drafting
+   step too when you want a model to propose rather than write it yourself. Skipping the
+   contract-evaluator gate is allowed only for a throwaway one-off the user explicitly
+   wants quick — say so when you skip it.
 2. **Generate.** `run_role(roleKind="generator", briefPath=…, contractPath=…,
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",
@@ -135,6 +143,12 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `out`). If that
   agent isn't available, spawn a general subagent and instruct it to call the
   `run_role` MCP tool with the same args and these same holdout rules.
+- **Run role-subagents in the BACKGROUND (`run_in_background: true`) by default.** Role
+  runs (especially a cross-model Codex evaluation) take minutes; a foreground subagent
+  blocks the whole session so the user can't talk to the conductor until it returns. A
+  background subagent runs async and notifies the conductor on completion — the user keeps
+  talking to you while it works, and you act on the summary when it lands. Foreground is
+  only worth it for a quick role run you'll immediately block on anyway.
 - **How the subagent reaches the role:** a subagent **inherits the session's MCP
   tools by default**, so it can call **`mcp__sparra-run__run_role`** from the
   `sparra-run` server (the `sparra-role` agent also lists it explicitly; a general
