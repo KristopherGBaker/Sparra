@@ -7,7 +7,7 @@ import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { buildExerciser } from "../sdk/exercise.ts";
+import { buildExerciser, type Exerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
@@ -104,6 +104,9 @@ export interface RoleRunRequest {
    *  detect a writer that produced ZERO file changes (the permission-starved no-progress case).
    *  Defaults to `changedFiles` (git status --porcelain). */
   changedFilesFn?: (workspace: string) => string[];
+  /** Injectable for tests; defaults to the real `buildExerciser` (evaluator role only). Lets a test
+   *  assert the harness-status override without driving a live model through run_command. */
+  buildExerciserFn?: (config: Ctx["config"], workspace: string) => Exerciser;
   traceDir?: string;
   traceSeq?: number;
 }
@@ -202,8 +205,14 @@ function redactVerdict(v: Verdict, holdoutText: string): Verdict {
   };
 }
 
-/** Parse + normalize an evaluator verdict the same way the build loop does. */
-function parseVerdict(ctx: Ctx, resultText: string): Verdict {
+/** Parse + normalize an evaluator verdict the same way the build loop does.
+ *  `harnessStatus` is the exerciser's deterministic verdict on whether the exercise actually ran
+ *  (from real `run_command`/`http_request` exit codes); when it's not "none" it OVERRIDES the
+ *  model's self-reported `exerciseStatus`, so a model can't launder a harness-observed block into a
+ *  pass — and so a blocked-but-unparseable verdict carries "blocked", not the hardcoded "ran". */
+function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "ran" | "none" = "none"): Verdict {
+  const decide = (modelStatus: "blocked" | "ran"): "blocked" | "ran" =>
+    harnessStatus !== "none" ? harnessStatus : modelStatus;
   const parsed = extractJsonWhere<Verdict>(
     resultText,
     (v) => v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v)
@@ -214,7 +223,9 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
       scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
       weightedTotal: 0,
       verdict: "fail",
-      exerciseStatus: "ran", // a missing verdict is a real failure, not a block
+      // A missing verdict is a real failure, not a block — UNLESS the harness observed a blocked
+      // exercise (then it's inconclusive, not a behavioral fail to feed back).
+      exerciseStatus: decide("ran"),
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -224,9 +235,11 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
     parsed.scores[c] = Math.max(0, Math.min(100, isFinite(v) ? v : 0));
   }
   const weighted = computeWeighted(ctx, parsed.scores);
+  const finalStatus = decide(parsed.exerciseStatus === "blocked" ? "blocked" : "ran");
   // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), regardless of
-  // what the model claimed or the score, so an unverified item is never silently accepted.
-  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass" && parsed.exerciseStatus !== "blocked";
+  // what the model claimed or the score, so an unverified item is never silently accepted. The
+  // harness-overridden status (not the raw self-report) gates the pass.
+  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass" && finalStatus !== "blocked";
   // Normalize to the EXACT schema — the evaluator's JSON is untrusted model output, so
   // drop any extra properties (e.g. a smuggled `holdoutQuote`) that would otherwise ride
   // through to conductor-facing artifacts.
@@ -242,7 +255,7 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
     scores: parsed.scores,
     weightedTotal: weighted,
     verdict: meets ? "pass" : "fail",
-    exerciseStatus: parsed.exerciseStatus === "blocked" ? "blocked" : "ran",
+    exerciseStatus: finalStatus,
     blocking: (Array.isArray(parsed.blocking) ? parsed.blocking : []).map((b) => String(b)),
     notes: String(parsed.notes ?? ""),
   };
@@ -291,7 +304,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const holdoutText = await resolveHoldout(req);
   const evaluator = isEvaluator(roleKind);
 
-  const exerciser = evaluator ? buildExerciser(ctx.config, workspace) : undefined;
+  const exerciser = evaluator ? (req.buildExerciserFn ?? buildExerciser)(ctx.config, workspace) : undefined;
   const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "");
 
   // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
@@ -485,7 +498,9 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     // Redact any holdout the evaluator quoted, so it can't reach the conductor via
     // the returned verdict or the `--out` file (the evaluator may cite holdout in
     // evidence/blocking/notes — it's allowed to see it; the conductor is not).
-    const verdict = redactVerdict(parseVerdict(ctx, res.resultText), holdoutText);
+    // The harness — not the model's self-report — decides whether run_command/http_request
+    // verifications actually ran; override feeds the pass gate above and the pivot/build branches.
+    const verdict = redactVerdict(parseVerdict(ctx, res.resultText, exerciser?.exerciseStatus()), holdoutText);
     // Source-integrity guard: revert any artifact write the evaluator made during the exercise; if
     // it mutated the surface, FORCE the verdict to fail (a verdict from an evaluator that edited the
     // code it grades cannot be trusted).

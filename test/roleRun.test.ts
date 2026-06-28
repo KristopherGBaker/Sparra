@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runRole, makeHoldoutReadDecider, type RoleKind } from "../src/build/roleRun.ts";
+import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
@@ -463,6 +464,76 @@ describe("runRole — verdict", () => {
     const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: recorder("no json here").fn });
     expect(r.verdict?.verdict).toBe("fail");
     expect(r.verdict?.blocking.length).toBeGreaterThan(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — harness exerciseStatus override (Item F)", () => {
+  const stubExerciser = (status: "blocked" | "ran" | "none"): Exerciser => ({
+    mcpServers: {},
+    allowedTools: ["mcp__exercise__run_command"],
+    guidance: "",
+    exerciseStatus: () => status,
+  });
+
+  it("harness 'blocked' overrides a model {pass, ran} — final blocked, never a pass", async () => {
+    const { ctx, dir } = await makeCtx();
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: recorder(EVAL_JSON).fn, // model: pass, exerciseStatus absent (ran)
+      buildExerciserFn: () => stubExerciser("blocked"),
+    });
+    expect(r.verdict?.exerciseStatus).toBe("blocked");
+    expect(r.verdict?.verdict).toBe("fail");
+    expect(r.ok).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("harness 'ran' overrides a model that self-reported blocked", async () => {
+    const { ctx, dir } = await makeCtx();
+    const blocked =
+      '```json\n{"assertions":[],"scores":{"design":90,"originality":90,"craft":90,"functionality":90},' +
+      '"verdict":"fail","exerciseStatus":"blocked","blocking":["claimed EPERM"],"notes":"n"}\n```';
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: recorder(blocked).fn,
+      buildExerciserFn: () => stubExerciser("ran"),
+    });
+    expect(r.verdict?.exerciseStatus).toBe("ran");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("harness 'none' falls back to the model's self-report", async () => {
+    const { ctx, dir } = await makeCtx();
+    const blocked =
+      '```json\n{"assertions":[],"scores":{"design":90,"originality":90,"craft":90,"functionality":90},' +
+      '"verdict":"fail","exerciseStatus":"blocked","blocking":["EPERM"],"notes":"n"}\n```';
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: recorder(blocked).fn,
+      buildExerciserFn: () => stubExerciser("none"),
+    });
+    expect(r.verdict?.exerciseStatus).toBe("blocked"); // model's value survives
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no-parseable-verdict + harness 'blocked' ⇒ verdict carries blocked (not the hardcoded 'ran')", async () => {
+    const { ctx, dir } = await makeCtx();
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: recorder("no json here").fn,
+      buildExerciserFn: () => stubExerciser("blocked"),
+    });
+    expect(r.verdict?.exerciseStatus).toBe("blocked");
+    expect(r.verdict?.verdict).toBe("fail");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

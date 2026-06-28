@@ -5,7 +5,7 @@ import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { buildExerciser } from "../sdk/exercise.ts";
+import { buildExerciser, type Exerciser } from "../sdk/exercise.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
@@ -17,7 +17,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./holdout.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
-import type { RoleConfig } from "../config.ts";
+import type { RoleConfig, SparraConfig } from "../config.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -62,11 +62,14 @@ export async function evaluateItem(args: {
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
   integrityDeps?: IntegrityDeps;
+  /** Injectable for tests; defaults to the real `buildExerciser`. Lets a test assert the
+   *  harness-status override without driving a live model through run_command. */
+  buildExerciserFn?: (config: SparraConfig, workspaceDir: string) => Exerciser;
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
   const role = args.role ?? ctx.config.roles.evaluator;
   const run = args.runSessionFn ?? runSession;
-  const exerciser = buildExerciser(ctx.config, workspaceDir);
+  const exerciser = (args.buildExerciserFn ?? buildExerciser)(ctx.config, workspaceDir);
   // Only relax the Codex exercise sandbox to workspace-write on an isolated-checkout boundary — a
   // Sparra build branch OR a linked git worktree (the integrity guard needs git to revert). Carries
   // `exerciseScratch` + arms the source-integrity guard. `isLinkedWorktree` is computed lazily.
@@ -124,6 +127,13 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     traceSeq: args.traceSeq,
   });
 
+  // The harness — not the model's self-report — decides whether run_command/http_request
+  // verifications actually ran (from real exit codes); when it's not "none" it OVERRIDES the
+  // model's `exerciseStatus`, on both the parsed and the no-parseable-verdict paths below.
+  const harnessStatus = exerciser.exerciseStatus();
+  const decideStatus = (modelStatus: "blocked" | "ran"): "blocked" | "ran" =>
+    harnessStatus !== "none" ? harnessStatus : modelStatus;
+
   // Shape-aware: the verdict is the JSON with rubric scores — not just the last
   // fenced block (evaluator output is full of incidental JSON/command snippets).
   const parsed = extractJsonWhere<Verdict>(
@@ -138,7 +148,9 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
       scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
       weightedTotal: 0,
       verdict: "fail",
-      exerciseStatus: "ran", // a missing verdict is a real failure, not a block
+      // A missing verdict is a real failure, not a block — UNLESS the harness observed a blocked
+      // exercise (then it's inconclusive, not a behavioral fail to feed back).
+      exerciseStatus: decideStatus("ran"),
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -152,14 +164,16 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     const modelSaidPass = parsed.verdict === "pass";
     const meetsThreshold = weighted >= ctx.config.rubric.passThreshold;
     // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), so an
-    // unverified item is never silently accepted regardless of the model's verdict or score.
-    const isBlocked = parsed.exerciseStatus === "blocked";
+    // unverified item is never silently accepted regardless of the model's verdict or score. The
+    // harness-overridden status (not the raw self-report) gates the pass.
+    const finalStatus = decideStatus(parsed.exerciseStatus === "blocked" ? "blocked" : "ran");
+    const isBlocked = finalStatus === "blocked";
     verdict = {
       assertions: Array.isArray(parsed.assertions) ? parsed.assertions : [],
       scores: parsed.scores,
       weightedTotal: weighted,
       verdict: modelSaidPass && meetsThreshold && !isBlocked ? "pass" : "fail",
-      exerciseStatus: isBlocked ? "blocked" : "ran",
+      exerciseStatus: finalStatus,
       blocking: Array.isArray(parsed.blocking) ? parsed.blocking : [],
       notes: parsed.notes ?? "",
     };

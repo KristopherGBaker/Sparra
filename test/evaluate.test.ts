@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { evaluateItem } from "../src/build/evaluate.ts";
+import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
@@ -195,6 +196,68 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(worktree, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  // A stub exerciser that reports a fixed harness status — no real run_command needed (the faked
+  // session never calls the tools, so the real exerciser would always report "none").
+  const stubExerciser = (status: "blocked" | "ran" | "none"): Exerciser => ({
+    mcpServers: {},
+    allowedTools: ["mcp__exercise__run_command"],
+    guidance: "",
+    exerciseStatus: () => status,
+  });
+
+  async function runWithExerciser(rec: ReturnType<typeof recorder>, status: "blocked" | "ran" | "none", dir: string, ctx: Ctx) {
+    return evaluateItem({
+      ctx,
+      item: ITEM,
+      contractText: "contract",
+      workspaceDir: dir,
+      round: 1,
+      traceDir: path.join(dir, "trace"),
+      traceSeq: 1,
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+      buildExerciserFn: () => stubExerciser(status),
+    });
+  }
+
+  it("harness 'blocked' OVERRIDES a model {pass, ran} — final blocked AND not a pass (Item F)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await runWithExerciser(recorder(PASS_JSON), "blocked", dir, ctx);
+    expect(out.verdict.exerciseStatus).toBe("blocked");
+    expect(out.verdict.verdict).toBe("fail"); // unverified — can't launder into a pass
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("harness 'ran' OVERRIDES a model that self-reported blocked (Item F)", async () => {
+    const blockedJson =
+      '```json\n{"assertions":[],"scores":{"design":80,"originality":80,"craft":80,"functionality":80},' +
+      '"verdict":"fail","exerciseStatus":"blocked","blocking":["claimed EPERM"],"notes":"n"}\n```';
+    const { ctx, dir } = await makeCtx();
+    const out = await runWithExerciser(recorder(blockedJson), "ran", dir, ctx);
+    expect(out.verdict.exerciseStatus).toBe("ran");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("harness 'none' falls back to the model's self-reported status (Item F)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ran = await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+    expect(ran.verdict.exerciseStatus).toBe("ran");
+    const blockedJson =
+      '```json\n{"assertions":[],"scores":{"design":80,"originality":80,"craft":80,"functionality":80},' +
+      '"verdict":"fail","exerciseStatus":"blocked","blocking":["EPERM"],"notes":"n"}\n```';
+    const blocked = await runWithExerciser(recorder(blockedJson), "none", dir, ctx);
+    expect(blocked.verdict.exerciseStatus).toBe("blocked");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no-parseable-verdict + harness 'blocked' ⇒ verdict carries blocked, not the hardcoded 'ran' (Item F)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await runWithExerciser(recorder("no json here at all"), "blocked", dir, ctx);
+    expect(out.verdict.exerciseStatus).toBe("blocked");
+    expect(out.verdict.verdict).toBe("fail");
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("a blocked exercise can NEVER pass, even if the model claims pass with a high score (H3)", async () => {

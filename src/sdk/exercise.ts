@@ -10,6 +10,56 @@ export interface Exerciser {
   allowedTools: string[];
   /** Mechanism-specific guidance injected into the evaluator's task prompt. */
   guidance: string;
+  /**
+   * The HARNESS's deterministic verdict on whether the exercise actually ran, aggregated from
+   * every `run_command`/`http_request` the evaluator invoked through this exerciser:
+   * "blocked" if any was a sandbox/missing-tool/permission block, "ran" if ≥1 ran and none blocked,
+   * "none" if it never used the tools (e.g. it only used raw Bash, which we don't observe). This
+   * OVERRIDES the model's self-report so a model can't launder a blocked command into a pass.
+   */
+  exerciseStatus(): "blocked" | "ran" | "none";
+}
+
+/**
+ * Spawn/sandbox/permission signatures that indicate a command DID NOT actually execute (case-
+ * insensitive). Deliberately narrow — a passing or normally-failing command can legitimately print
+ * "no such file or directory", a bare "not permitted", or "sandbox", so those are EXCLUDED.
+ */
+const BLOCK_SIGNATURES = [
+  "command not found",
+  "eperm",
+  "operation not permitted",
+  "permission denied",
+  "requires approval",
+] as const;
+
+function hasBlockSignature(stderr: string): boolean {
+  const s = stderr.toLowerCase();
+  return BLOCK_SIGNATURES.some((sig) => s.includes(sig));
+}
+
+/**
+ * Pure: classify ONE command result as a real run vs an environment block, in PRECEDENCE ORDER:
+ *  1. code===0          → ran (it executed; ignore stderr entirely)
+ *  2. timedOut===true   → ran (it executed long enough to be killed — checked BEFORE the -1 rule)
+ *  3. code===127        → blocked (shell could not find the command)
+ *  4. code===-1 (spawn) → blocked IFF stderr matches a spawn-error signature, else ran
+ *  5. code!==0 && stderr matches a block signature → blocked
+ *  6. else              → ran (a command that executed and failed, e.g. exit 1/2, is a real run)
+ */
+export function classifyExerciseExit(r: { code: number; stderr: string; timedOut: boolean }): "blocked" | "ran" {
+  if (r.code === 0) return "ran";
+  if (r.timedOut) return "ran";
+  if (r.code === 127) return "blocked";
+  if (r.code === -1) return hasBlockSignature(r.stderr) ? "blocked" : "ran";
+  return hasBlockSignature(r.stderr) ? "blocked" : "ran";
+}
+
+/** Pure: aggregate per-command classifications — blocked if ANY blocked, ran if ≥1 and none blocked, else none. */
+export function exerciseStatusFromObservations(obs: ("blocked" | "ran")[]): "blocked" | "ran" | "none" {
+  if (obs.some((o) => o === "blocked")) return "blocked";
+  if (obs.length > 0) return "ran";
+  return "none";
 }
 
 function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
@@ -120,6 +170,11 @@ Every UI assertion in the contract must be backed by an XCUITest assertion you r
 export function buildExerciser(config: SparraConfig, artifactDir: string): Exerciser {
   const mech: ExerciseMechanism = config.exercise.mechanism;
 
+  // Harness-owned observation log: one classification per tool invocation. The TEXT returned to the
+  // model is unchanged (additive); this is what makes the harness — not the model's self-report —
+  // authoritative for whether a run_command/http_request exercise actually ran.
+  const observations: ("blocked" | "ran")[] = [];
+
   const runCommand = tool(
     "run_command",
     "Run a shell command against the built artifact and capture exit code, stdout, and stderr. Use this to EXERCISE the artifact and assert on real behavior — do not just read the diff.",
@@ -130,6 +185,7 @@ export function buildExerciser(config: SparraConfig, artifactDir: string): Exerc
     async (args) => {
       const timeout = Math.min(args.timeout_ms ?? 60_000, 600_000);
       const r = await runShell(args.command, artifactDir, timeout);
+      observations.push(classifyExerciseExit(r));
       return block(
         `$ ${args.command}\n[cwd: ${artifactDir}]\n[exit code: ${r.code}${r.timedOut ? " — TIMED OUT" : ""}]\n\n--- stdout ---\n${r.stdout || "(empty)"}\n\n--- stderr ---\n${r.stderr || "(empty)"}`
       );
@@ -148,8 +204,12 @@ export function buildExerciser(config: SparraConfig, artifactDir: string): Exerc
       try {
         const res = await fetch(args.url, { method: args.method ?? "GET", body: args.body });
         const text = (await res.text()).slice(0, 8000);
+        observations.push("ran"); // the request reached a server and returned — a real exercise
         return block(`${args.method ?? "GET"} ${args.url}\n[status: ${res.status}]\n\n${text}`);
       } catch (e) {
+        // A failed fetch (e.g. connection refused) is classified like a spawn error: only a block
+        // signature counts as blocked; an ordinary connection failure is a real (failed) run.
+        observations.push(classifyExerciseExit({ code: -1, stderr: String(e), timedOut: false }));
         return { ...block(`Request failed: ${String(e)}`), isError: true };
       }
     }
@@ -170,5 +230,6 @@ export function buildExerciser(config: SparraConfig, artifactDir: string): Exerc
     mcpServers: { exercise: server },
     allowedTools: ["mcp__exercise__run_command", ...(mech === "web" ? ["mcp__exercise__http_request"] : [])],
     guidance: guidanceByMech[mech],
+    exerciseStatus: () => exerciseStatusFromObservations(observations),
   };
 }

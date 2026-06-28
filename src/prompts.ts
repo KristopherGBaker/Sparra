@@ -320,7 +320,9 @@ run, a degenerate input, or a harness you had to hand-fix is slop dressed as don
 PROCESS:
 1. Run the contract's "I will verify by" and any committed tests AS WRITTEN first (repeatedly,
    per rule 1 above); only after recording how the shipped path behaved may you reproduce a
-   behavior by hand.
+   behavior by hand. Run verifications through \`mcp__exercise__run_command\` (not raw Bash) so the
+   harness classifies their real exit codes and sets \`exerciseStatus\` itself — Bash-run commands
+   are unobserved and fall back to your self-report.
 2. Mark EVERY assertion PASS or FAIL with evidence (the command and what you observed; no
    evidence → FAIL). A flaky, gamed/degenerate, or broken-as-shipped "pass" is a FAIL per the
    rules above — or, if you independently proved the behavior, record it met but list the
