@@ -34,6 +34,13 @@ per-role backend/model split, optionally scaffolds a holdout, and drives the loo
 plugin? Use `sparra role run` directly after `sparra init`.) Versions move fast — if a
 flag differs, check `claude mcp --help` / `claude plugin --help`.
 
+**Picking up edits to the skill/agents.** The plugin is a snapshot pinned to a git
+commit, not a live read of your working tree — so changes here aren't auto-loaded.
+After committing them (on the branch the marketplace resolves, i.e. `main`), run
+`make update-plugin` (≡ `claude plugin marketplace update sparra-skills && claude
+plugin update sparra@sparra-skills`) and start a fresh session. For rapid skill-only
+iteration, symlink instead: `ln -s "$PWD/skills/sparra-loop" ~/.claude/skills/sparra-loop`.
+
 ## Two surfaces, one runner
 
 ### MCP `run_role` (interactive — recommended)
