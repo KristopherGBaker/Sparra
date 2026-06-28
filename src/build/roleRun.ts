@@ -13,7 +13,7 @@ import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
 import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout } from "./holdout.ts";
-import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText } from "./modeText.ts";
+import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance } from "./modeText.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
@@ -131,6 +131,7 @@ async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: stri
     ASSERTION_MIN: String(ctx.config.contract.assertionMin),
     ASSERTION_MAX: String(ctx.config.contract.assertionMax),
     MODE_CLAUSES: contractModeClauses(ctx),
+    SELF_VERIFY: selfVerifyGuidance(ctx),
   });
 }
 
@@ -315,7 +316,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // Guard: Claude-side permission/hooks. For forbid roles, also deny reading the holdout file.
   let guard: Guard =
     spec.guard === "writer"
-      ? scopedWriterGuard(ctx, [workspace], { format: true })
+      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true })
       : spec.guard === "evaluator"
         ? evaluatorGuard(ctx)
         : readOnlyGuard(ctx);

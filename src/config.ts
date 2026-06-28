@@ -192,6 +192,18 @@ export interface SparraConfig {
      * within its sandbox; Claude read with writes still gated — treat as read-only intent.)
      */
     extraReadDirs: string[];
+    /**
+     * Verification commands the GENERATOR may self-run (auto-approved) before finishing, so it
+     * stops "writing blind" — typecheck/test/build. A Bash command is auto-approved only when it
+     * starts with one of these AND contains no command-chaining/redirect/network/mutation/commit
+     * (so `npm test`/`tsc --noEmit` run, but `npm test && rm -rf x`, `curl …`, `git commit` do
+     * not). Auto-approval is GATED to a git worktree/branch boundary (the same wall as Codex
+     * full-access); in-place runs don't get it. Codex confines these to its workspace-write sandbox
+     * (no network); Claude has no OS sandbox, so for Claude these run with the worktree + "never
+     * commit to main" + the disqualifier list as the only guarantees (like the evaluator's
+     * exercise). Set to `[]` to disable generator self-verification.
+     */
+    verifyCommands: string[];
   };
 
   format: {
@@ -331,6 +343,16 @@ export function defaultConfig(): SparraConfig {
       autoRestart: { enabled: false, maxWaitSec: 21600, pollSec: 300, maxRestarts: 20 },
       skills: [],
       extraReadDirs: [],
+      // Default set deliberately EXCLUDES package-runners like `npx` that fetch/install on demand —
+      // they'd open a network/install path on a backend without an OS sandbox (Claude). Use the
+      // project's own scripts (`npm run …`) or locally-installed binaries; add others per project.
+      verifyCommands: [
+        "npm test", "npm run test", "npm run typecheck", "npm run build", "npm run lint", "npm run check",
+        "tsc", "vitest", "pnpm test", "yarn test",
+        "swift build", "swift test", "pytest", "python -m pytest",
+        "cargo build", "cargo test", "cargo check", "go build", "go test", "go vet",
+        "make test", "make build", "make check",
+      ],
     },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {

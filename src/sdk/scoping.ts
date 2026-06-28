@@ -61,6 +61,35 @@ export function denyBash(toolName: string, input: any, denyContains: string[]): 
   return hit ? `Bash blocked: command contains forbidden pattern "${hit}".` : null;
 }
 
+/**
+ * ALLOW-decider: auto-approve a SAFE, self-contained verification command (typecheck/test/build)
+ * so the generator can verify its own work instead of writing blind. Returns an allow-reason when
+ * the Bash command starts with one of `allowPrefixes` AND contains no command-chaining, redirect,
+ * network, mutation, or commit token — otherwise null (defer to the permission mode; not granted).
+ * The disqualifier list, not a sandbox, is the guarantee on a hooks-only backend (Claude); the
+ * caller gates this to a worktree/branch boundary.
+ */
+export function allowVerifyBash(toolName: string, input: any, allowPrefixes: string[], denyExtra: string[] = []): string | null {
+  if (toolName !== "Bash" || allowPrefixes.length === 0) return null;
+  const cmd = String(input?.command ?? "").trim();
+  if (!cmd) return null;
+  // Any ASCII control char (newline, CR, tab, …) disqualifies — a newline is a shell command
+  // separator, so `npm test\ntouch pwned` must NOT slip through the prefix check below.
+  if (/[\x00-\x1f]/.test(cmd)) return null;
+  // Anything that could chain, redirect, reach the network, mutate the tree, install, or commit
+  // disqualifies auto-approval — only a single, self-contained verification command is granted.
+  const disqualify = [
+    "&&", "||", ";", "|", "`", "$(", ">", "<", "rm ", "mv ", "cp ", "tee ", "sed -i", "chmod ", "chown ",
+    "git commit", "git push", "git reset", "git checkout", "git clean", "git rm",
+    "curl", "wget", "nc ", "ssh ", "scp ", "npm install", "npm i ", "npm ci", "npm publish",
+    "yarn add", "pnpm add", "pip install", "sudo ",
+    ...denyExtra,
+  ];
+  if (disqualify.some((b) => b && cmd.includes(b))) return null;
+  const ok = allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "));
+  return ok ? `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}` : null;
+}
+
 /** Deny Bash that mutates the filesystem (for read-only / read-mostly roles). */
 export function denyBashMutation(toolName: string, input: any, extra: string[]): string | null {
   if (toolName !== "Bash") return null;

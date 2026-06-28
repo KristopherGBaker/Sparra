@@ -1,5 +1,6 @@
 import type { HookCallbackMatcher, HookEvent, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import {
+  allowVerifyBash,
   denyAmbientMcp,
   denyAnyWrite,
   denyBash,
@@ -19,6 +20,17 @@ export type HookConfig = Partial<Record<HookEvent, HookCallbackMatcher[]>>;
  * This is our authoritative scope/safety enforcement, independent of mode.
  */
 export function makeDenyHook(deciders: Decider[]): HookConfig {
+  return makeGuardHook(deciders, []);
+}
+
+/**
+ * Like {@link makeDenyHook} but also supports ALLOW-deciders: deny wins first (authoritative
+ * scope/safety), then a non-null allow-reason AUTO-APPROVES the tool (bypassing the permission
+ * mode), else defer to the permission mode. Used to auto-approve a tightly-constrained set of
+ * generator self-verification commands without opening Bash generally. The `allow` path echoes
+ * `updatedInput` (unchanged) per the SDK's permission-allow contract.
+ */
+export function makeGuardHook(denyDeciders: Decider[], allowDeciders: Decider[]): HookConfig {
   return {
     PreToolUse: [
       {
@@ -26,13 +38,24 @@ export function makeDenyHook(deciders: Decider[]): HookConfig {
         hooks: [
           async (input) => {
             const pre = input as PreToolUseHookInput;
-            const reason = firstDeny(pre.tool_name, pre.tool_input as any, deciders);
-            if (reason) {
+            const deny = firstDeny(pre.tool_name, pre.tool_input as any, denyDeciders);
+            if (deny) {
               return {
                 hookSpecificOutput: {
                   hookEventName: "PreToolUse",
                   permissionDecision: "deny",
-                  permissionDecisionReason: reason,
+                  permissionDecisionReason: deny,
+                },
+              };
+            }
+            const allow = firstDeny(pre.tool_name, pre.tool_input as any, allowDeciders);
+            if (allow) {
+              return {
+                hookSpecificOutput: {
+                  hookEventName: "PreToolUse",
+                  permissionDecision: "allow",
+                  permissionDecisionReason: allow,
+                  updatedInput: (pre.tool_input ?? {}) as Record<string, unknown>,
                 },
               };
             }
@@ -57,13 +80,18 @@ export function mergeHooks(...configs: HookConfig[]): HookConfig {
   return out;
 }
 
-/** Writer scoped to writeRoots; blocks out-of-scope writes and dangerous Bash. */
-export function scopedWriterHooks(writeRoots: string[], denyBashContains: string[]): HookConfig {
-  return makeDenyHook([
+/** Writer scoped to writeRoots; blocks out-of-scope writes and dangerous Bash. When
+ *  `verifyCommands` is non-empty, also AUTO-APPROVES those self-contained verification commands
+ *  (typecheck/test/build) so the generator can verify its own work — the caller gates this to a
+ *  worktree/branch boundary. */
+export function scopedWriterHooks(writeRoots: string[], denyBashContains: string[], verifyCommands: string[] = []): HookConfig {
+  const deny: Decider[] = [
     (t) => denyAmbientMcp(t),
     (t, i) => denyWriteOutsideRoots(t, i, writeRoots),
     (t, i) => denyBash(t, i, denyBashContains),
-  ]);
+  ];
+  const allow: Decider[] = verifyCommands.length ? [(t, i) => allowVerifyBash(t, i, verifyCommands, denyBashContains)] : [];
+  return makeGuardHook(deny, allow);
 }
 
 /** Writer permitted to touch only one file (e.g. PLAN.md); blocks Bash mutation. */

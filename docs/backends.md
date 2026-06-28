@@ -106,6 +106,14 @@ The gate lives at the request-construction layer (`src/build/generate.ts` / `rol
 `gateSandbox`), which is the only place that can see git state; the backend cannot. Use
 `git.strategy: worktree` to enable full access.
 
+**Generator self-verify.** Same boundary, same idea for the *writer*: on a worktree/branch the
+generator may auto-run `build.verifyCommands` (typecheck/test/build) so it stops "writing blind".
+**Codex** runs these inside its `workspace-write` sandbox (no network). **Claude** has no OS
+sandbox — the auto-approval is a PreToolUse `allow` for *single, self-contained* verification
+commands only (chaining/redirect/network-install/mutation/commit are disqualified), so for Claude
+the worktree + "never commit to main" + that disqualifier list are the guarantees (the same
+residual as the Claude evaluator's in-process exercise). In-place runs never auto-approve Bash.
+
 ## Adding a backend
 Implement `AgentBackend` (`id`, `capabilities`, `runTask(req) → AgentResult`) in `src/sdk/backends/<id>.ts`, `registerBackend(...)` it, and import it for its side effect in `session.ts`. The engine reads `capabilities` and uses the richest path available, degrading otherwise. Nothing else changes.
 

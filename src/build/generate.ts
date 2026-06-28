@@ -11,7 +11,7 @@ import { info } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, assertNoHoldoutLeak } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
-import { deviationPolicy } from "./modeText.ts";
+import { deviationPolicy, selfVerifyGuidance } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
@@ -65,6 +65,7 @@ export async function generateItem(args: {
     MODE: ctx.store.data.mode,
     DEVIATION: ctx.config.deviation.strictness,
     DEVIATION_POLICY: deviationPolicy(ctx),
+    SELF_VERIFY: selfVerifyGuidance(ctx),
   });
   const map = await readText(ctx.paths.frozenMap);
   const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
@@ -104,7 +105,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
       hasBranch: !!ctx.store.data.build.branch,
       roleLabel: `generator-${item.id}`,
     }),
-    ...scopedWriterGuard(ctx, [workspaceDir], { format: true }),
+    ...scopedWriterGuard(ctx, [workspaceDir], { format: true, verify: true }),
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,

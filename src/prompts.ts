@@ -248,6 +248,7 @@ DEVIATION POLICY ({{MODE}}, strictness = {{DEVIATION}}):
 
 You are being graded by an adversarial evaluator who will RUN your artifact — do not claim
 anything you have not actually verified.
+{{SELF_VERIFY}}
 
 When you finish, end your message with a fenced \`\`\`json block EXACTLY in this shape:
 \`\`\`json

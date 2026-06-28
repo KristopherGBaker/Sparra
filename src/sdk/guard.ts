@@ -51,9 +51,13 @@ export function formatOptions(ctx: Ctx): FormatOptions {
 }
 
 /** Writer scoped to writeRoots (generator, prototyper, reflector output dir).
- *  Pass `{ format: true }` to also run the PostToolUse formatter on written files. */
-export function scopedWriterGuard(ctx: Ctx, writeRoots: string[], opts: { format?: boolean } = {}): Guard {
-  let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains);
+ *  Pass `{ format: true }` to also run the PostToolUse formatter on written files.
+ *  Pass `{ verify: true }` to let the generator auto-run its project's verification commands
+ *  (`build.verifyCommands`) — ENABLED ONLY on a git worktree/branch boundary (the same wall that
+ *  gates Codex full-access), so an in-place run never auto-approves Bash execution. */
+export function scopedWriterGuard(ctx: Ctx, writeRoots: string[], opts: { format?: boolean; verify?: boolean } = {}): Guard {
+  const verifyCommands = opts.verify && ctx.store.data.build.branch ? ctx.config.build.verifyCommands : [];
+  let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands);
   if (opts.format) hooks = mergeHooks(hooks, makeFormatHook(formatOptions(ctx)));
   return { permissionMode: autonomousPermissionMode(ctx), hooks };
 }

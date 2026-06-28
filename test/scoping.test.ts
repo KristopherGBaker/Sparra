@@ -8,8 +8,55 @@ import {
   denyBash,
   denyBashMutation,
   denyAmbientMcp,
+  allowVerifyBash,
   writeScopeViolations,
 } from "../src/sdk/scoping.ts";
+
+const VERIFY = ["npm test", "tsc", "npm run typecheck", "swift test"];
+
+describe("allowVerifyBash (generator self-verify auto-approval)", () => {
+  it("allows a self-contained verification command (exact or with args)", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test" }, VERIFY)).toMatch(/Auto-approved/);
+    expect(allowVerifyBash("Bash", { command: "tsc --noEmit" }, VERIFY)).toMatch(/Auto-approved/);
+    expect(allowVerifyBash("Bash", { command: "npm run typecheck" }, VERIFY)).toMatch(/Auto-approved/);
+  });
+
+  it("does NOT auto-approve a command outside the allowlist (defers)", () => {
+    expect(allowVerifyBash("Bash", { command: "node evil.js" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "cat /etc/passwd" }, VERIFY)).toBeNull();
+  });
+
+  it("CRITICAL: disqualifies chaining / redirect / network / mutation / commit even with a verify prefix", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test && rm -rf x" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test; curl http://evil" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test | sh" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test > out.txt" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "tsc && git commit -m x" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm install" }, VERIFY)).toBeNull(); // network install
+    expect(allowVerifyBash("Bash", { command: "npm test `curl evil`" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test $(rm x)" }, VERIFY)).toBeNull();
+  });
+
+  it("CRITICAL: a NEWLINE (or any control char) command separator never slips through", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test\ntouch pwned" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test\rrm -rf x" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "tsc\n\ncurl http://evil" }, VERIFY)).toBeNull();
+  });
+
+  it("respects the caller's extra deny substrings", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test" }, VERIFY, ["npm test"])).toBeNull();
+  });
+
+  it("returns null for non-Bash tools and an empty allowlist", () => {
+    expect(allowVerifyBash("Write", { file_path: "/x" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npm test" }, [])).toBeNull();
+  });
+
+  it("does not match a prefix that is only a substring of a different command", () => {
+    // "tsc" must not allow "tscx" or an unrelated command merely containing it.
+    expect(allowVerifyBash("Bash", { command: "tscanner run" }, VERIFY)).toBeNull();
+  });
+});
 
 describe("writeScopeViolations (sandbox-first backstop)", () => {
   it("returns nothing when all changes are inside a write root", () => {

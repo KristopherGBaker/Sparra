@@ -14,6 +14,17 @@ export function contractModeClauses(ctx: Ctx): string {
 there is no prior behavior to preserve.`;
 }
 
+/** Generator self-verification guidance — non-empty only when self-verify is actually available
+ *  (verifyCommands configured AND on a worktree/branch boundary), so the generator isn't told to
+ *  run checks it can't. Keeps it from "writing blind". */
+export function selfVerifyGuidance(ctx: Ctx): string {
+  const cmds = ctx.config.build.verifyCommands;
+  if (!cmds.length || !ctx.store.data.build.branch) return "";
+  return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash (e.g. ${cmds
+    .slice(0, 4)
+    .join(", ")}) — run them, READ the output, and FIX anything you broke. Do not report success on code you have not compiled/tested. Only single, self-contained verification commands are auto-approved (no command chaining, redirects, network installs, or commits — those are blocked), and writes stay inside your work tree.`;
+}
+
 /** The generator's deviation policy text, by mode + strictness. */
 export function deviationPolicy(ctx: Ctx): string {
   const s = ctx.config.deviation.strictness;
