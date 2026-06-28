@@ -14,6 +14,7 @@ import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
 import { cmdNew } from "./phases/new.ts";
 import { cmdFinish } from "./phases/finish.ts";
+import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
 import { cmdRoleRun } from "./phases/role.ts";
 
@@ -67,6 +68,7 @@ ${color.bold("Commands")}
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
   finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
+  clean [--yes] [--force]                       prune stale sparra worktrees/branches (dry-run by default)
   role run --kind <r> [--backend b] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
                                                 run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
   eval [dir] [--contract f] [--backend b] [--holdout f] [--out f]
@@ -168,6 +170,9 @@ async function main(): Promise<void> {
         branch: typeof flags.branch === "string" ? flags.branch : undefined,
         new: flags.new === undefined ? undefined : typeof flags.new === "string" ? flags.new : "",
       });
+      break;
+    case "clean":
+      await cmdClean(ctx, { yes: !!flags.yes, force: !!flags.force });
       break;
     case "resume":
       await resume(ctx);

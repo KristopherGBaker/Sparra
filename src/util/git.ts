@@ -187,6 +187,45 @@ export function mergeFfOnly(
   return run(root, ["merge", "--ff-only", source]);
 }
 
+// ── Clean seam (prune stale Sparra worktrees/branches). Read-only listers + a merge check. ──
+
+/**
+ * All registered worktrees of the repo, parsed from `git worktree list --porcelain`:
+ * a `worktree <path>` line starts each record, with an optional `branch refs/heads/<b>`
+ * (absent for a detached HEAD). Returns `[]` when not a git repo or the command fails.
+ */
+export function listWorktrees(root: string): { path: string; branch: string | null }[] {
+  if (!isGitRepo(root)) return [];
+  const r = git(root, ["worktree", "list", "--porcelain"]);
+  if (!r.ok) return [];
+  const out: { path: string; branch: string | null }[] = [];
+  let cur: { path: string; branch: string | null } | null = null;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (cur) out.push(cur);
+      cur = { path: line.slice("worktree ".length).trim(), branch: null };
+    } else if (line.startsWith("branch ") && cur) {
+      cur.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Local branch short-names via `git for-each-ref`. Returns `[]` when not a repo / on failure. */
+export function listBranches(root: string): string[] {
+  if (!isGitRepo(root)) return [];
+  const r = git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+  if (!r.ok) return [];
+  return r.out.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** True iff `branch`'s tip is an ancestor of `base` (merged ⇒ safe to delete with `-d`). */
+export function isBranchMerged(root: string, branch: string, base: string): boolean {
+  if (!isGitRepo(root) || !branch || !base) return false;
+  return git(root, ["merge-base", "--is-ancestor", branch, base]).ok;
+}
+
 /** Remove a git worktree (the build's isolated checkout). */
 export function removeWorktree(root: string, dir: string): { ok: boolean; out: string } {
   return git(root, ["worktree", "remove", dir]);

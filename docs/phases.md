@@ -96,6 +96,27 @@ before any PR/merge** (it refuses loudly and tells you to `git rm --cached` it a
 `.gitignore`) — the cycle is still archived privately, but no land proceeds while the holdout is
 tracked. No code in the land/teardown/archive path reads holdout contents.
 
+## Pruning leftovers — `sparra clean`
+Finished or abandoned runs can leave behind stale Sparra worktrees and branches (`sparra/<topic>`).
+**`sparra clean`** prunes them — and, like `finish`, it **never silently touches anything you care
+about.**
+
+```
+sparra clean [--yes] [--force]
+```
+
+- **Dry run by default.** Without `--yes`, `clean` only **previews**: it lists the candidate
+  worktrees it WOULD remove, the merged branches it WOULD delete, and the unmerged branches it
+  WOULD skip — and touches nothing.
+- **Candidates.** Worktrees whose checkout is **not** the main checkout and whose branch carries the
+  configured `git.branchPrefix`; branches that carry the prefix and are **neither** the default
+  branch **nor** the currently checked-out branch.
+- **`--yes` executes.** It removes the candidate worktrees **first** (a worktree pins its branch),
+  then deletes branches: **merged** branches with `git branch -d` (merged-only). An **unmerged**
+  branch is **skipped** unless you add **`--force`** (`git branch -D`).
+- **Hard invariants:** never removes the main checkout, never deletes the default branch or the
+  current branch, never deletes an unmerged branch without `--force`.
+
 ---
 
 ## The interactive TUI

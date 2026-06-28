@@ -58,6 +58,7 @@ sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (dr
 sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
 sparra status          # where am I / what's next
 sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan
+sparra clean           # prune stale sparra worktrees/branches (dry-run; --yes acts, --force unmerged)
 sparra resume          # continue whatever phase, from .sparra/state.json
 ```
 
