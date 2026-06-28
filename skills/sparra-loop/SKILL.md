@@ -2,11 +2,13 @@
 name: sparra-loop
 description: >-
   Run Sparra's adversarial build loop INSIDE an interactive Claude Code session:
-  drive a contract → generate → cross-model adversarial evaluate (e.g. a Codex
-  evaluator grading Claude's work) → pivot/accept loop using the `run_role` MCP
-  tool (or `sparra role run`), with the holdout wall enforced by the runner. Use
-  when the user wants Sparra-style rigor on tap, a cross-model second opinion on
-  generated work, or to grade an artifact against a contract/holdout.
+  set up the project (`sparra init` + per-role backend/model config), then drive a
+  contract → generate → cross-model adversarial evaluate (e.g. a Codex evaluator
+  grading Claude's work) → pivot/accept loop using the `run_role` MCP tool (or
+  `sparra role run`), with the holdout wall enforced by the runner. Use when the
+  user wants Sparra-style rigor on tap, to configure which model builds vs judges,
+  a cross-model second opinion on generated work, or to grade an artifact against a
+  contract/holdout.
 ---
 
 # sparra-loop — Sparra's loop, interactively
@@ -14,6 +16,32 @@ description: >-
 You are the **conductor**. You drive the loop; the **rigor lives in the runner**
 (`run_role`), not in this playbook. Roles run on a chosen backend (claude/codex/…)
 through Sparra's existing seam, so you can pit models against each other.
+
+## Setup (first run) — init + pick the model split
+The runner reuses the project's `.sparra/` (config, prompts, rubric), so set it up once:
+
+1. **Initialize** if there's no `.sparra/` dir: run `sparra init` (greenfield/existing is
+   auto-detected; add `--docs docs` to keep planning files in a subfolder). This scaffolds
+   `.sparra/config.yaml` + role prompts.
+2. **Pick who builds vs judges** with the user, then edit `.sparra/config.yaml` `roles.*`
+   (each role: `backend` claude|codex, `model`, optional `effort`). The high-value default
+   is **cross-model**: one family builds, another judges. Example:
+   ```yaml
+   roles:
+     generator: { backend: claude, model: opus, effort: high }
+     evaluator: { backend: codex,  model: gpt-5.5, effort: high }
+     reviewer:  { backend: codex,  model: gpt-5.5 }
+   ```
+3. **Verify the chosen backends are usable** before relying on them: Codex needs the
+   `codex` CLI authed (`~/.codex`) and `@openai/codex-sdk` installed in the Sparra repo —
+   if either is missing, say so and fall back to a Claude evaluator (still useful, just
+   same-family). Confirm Claude auth (CC login / `ANTHROPIC_API_KEY`).
+4. **Holdout (optional but recommended):** if the user wants a second, hidden gate, create
+   `.sparra/HOLDOUT.md` with acceptance checks **the generator must not see** — you (the
+   conductor) write it but DON'T keep it in context after; pass it to the evaluator by path.
+
+You can re-run `sparra init` later (it preserves existing config/PLAN), and tweak
+`roles.*` per project anytime — changes are picked up on the next role run.
 
 ## The one rule that matters: the holdout wall
 - **Never read `HOLDOUT.md`** (or `.sparra/frozen/HOLDOUT.frozen.md`). Pass it to the
@@ -47,9 +75,8 @@ through Sparra's existing seam, so you can pit models against each other.
   --brief brief.md --contract contract.md --holdout .sparra/HOLDOUT.md --out v.md`.
 
 ## Backends
-Per-role defaults come from `.sparra/config.yaml` (`roles.*`). Override per call with
-`backend`/`model`. Codex needs the `codex` CLI authed (`~/.codex`) + `@openai/codex-sdk`.
-The killer move is **cross-model**: Claude generates, Codex evaluates (or vice versa).
+Defaults come from `roles.*` (see Setup). Override per call with `backend`/`model` — handy
+to get a one-off second opinion from a different model without editing config.
 
 ## Don't
 - Don't reimplement grading yourself in this session — call the evaluator role (it has

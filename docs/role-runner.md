@@ -63,6 +63,9 @@ Claude generates, Codex evaluates (or vice versa) — the same cross-backend eva
 Sparra supports, now one call away in an interactive session.
 
 ## Honest limits
+- It needs the project's `.sparra/` (config, prompts, rubric) — run `sparra init` once. The
+  **`sparra-loop` skill drives this for you**: it runs init, helps set the per-role
+  backend/model split (cross-model), and can scaffold a holdout, before driving the loop.
 - The runner is a **single-shot role**, not the full loop — it injects the contract,
   conventions (CODEBASE_MAP/Apple), and memory, but not multi-round pivot/feedback state
   (the conductor threads that between calls).
