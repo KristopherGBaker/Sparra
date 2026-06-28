@@ -100,6 +100,17 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    picks up its own context instead of re-reading the workspace — exactly how the build loop
    continues a turn-capped generator. Don't pivot or feed it back as a FAIL.
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
+6. **Reflect (recommended after a run).** Before moving on, capture what the run taught you —
+   the same instinct as `sparra reflect`. Note the gaps/friction/failure modes you hit and turn
+   them into improvements. **Split findings two ways:**
+   - **Project-local** (a loose contract assertion, a weak fixture, a prompt that under-specified
+     "done") → fix this project's contract/brief/`.sparra/prompts` (or run `sparra reflect
+     --apply` for the full project).
+   - **Harness-level** (a Sparra config knob, a guard/holdout gap, a phase/role bug, a backend
+     limit) → these aren't this project's prompts; route them UPSTREAM to the Sparra repo
+     (capture in its backlog/issues) so the harness itself improves. When running Sparra inside
+     another project, keep a short list of harness findings to carry back — don't lose them in a
+     project-only reflect.
 
 ## Two ways to be interactive — pick by scope
 - **Ad-hoc choreography (this skill):** you drive `run_role` calls with the user between
