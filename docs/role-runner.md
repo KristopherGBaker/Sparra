@@ -108,7 +108,11 @@ plan→freeze→build.
   `assertNoHoldoutLeak` **before any backend call** (a leak throws a *sanitized* error —
   no holdout text), and forbid roles are denied tool-reads of the holdout file **and the
   whole `.sparra/` dir** (which also holds the frozen holdout, verdicts, and evaluator
-  traces) on the Claude backend (see residual below).
+  traces) on the Claude backend, **and any holdout-bearing dir is excluded from a forbid
+  role's granted read dirs** (`additionalDirectories`) on every backend — that means a
+  candidate dir is dropped if it contains the `.sparra` machinery, the live `HOLDOUT.md`
+  (which, with a configured `docsDir`, lives under `docsBase` *outside* `.sparra`), or the
+  frozen holdout (see residuals below).
 - **The evaluator may quote holdout** in its evidence/blocking/notes — so the runner
   **redacts** any verbatim holdout line from the verdict before it reaches the conductor
   (the `--out` file and the MCP payload). The conductor never receives holdout text.
@@ -117,6 +121,29 @@ plan→freeze→build.
   role runs read-only — so Codex roles sandbox correctly too (Codex ignores hooks).
 - **Verdict:** evaluator output is parsed shape-aware, scores clamped, the weighted total
   recomputed by us, and it fails below threshold even if the model says "pass".
+
+## Holdout wall — residuals (reduced surface, not a full close)
+The on-disk read surface is **shrunk**, not eliminated. Stated honestly:
+- **Claude forbid roles** are blocked from on-disk holdout reads by the PreToolUse
+  deny-hook (`makeHoldoutReadDecider` — denies `Read`/`Glob`/`Grep`/`Bash` targeting the
+  holdout files or the `.sparra` dir) **and** now have every holdout-bearing dir excluded
+  from their granted read scope (`buildReadDirs(..., { excludeHoldoutScope: true })` drops
+  `ctx.root`/any extra dir that contains the `.sparra` machinery, the live `HOLDOUT.md`
+  — including the `docsBase` case where it sits *outside* `.sparra` — or the frozen holdout).
+  The worktree cwd still holds the full code checkout, so dropping `ctx.root` doesn't blind
+  the role to the source.
+- **A path-less `Grep` on Claude is uncatchable** — a search with no `path` can match
+  holdout content without ever naming `.sparra`, so a path decider fundamentally can't stop
+  it. The **prompt-wall** (`assertNoHoldoutLeak`, before any backend call) **and verdict
+  redaction** are the guarantee here.
+- **Codex ignores hooks**, so for Codex forbid roles the `.sparra` exclusion shrinks the
+  surface (the holdout dir is no longer mounted as an additional read root), but when the
+  run is **in-place** (`workspace === ctx.root`) the holdout under `.sparra` sits inside the
+  role's own cwd — which can't be excluded (it *is* the cwd) and Codex's sandbox allows
+  reading it. Sparra emits a **loud warning** in that case (it does not hard-refuse — that
+  would break legitimate in-place Codex runs); the prompt-wall + verdict redaction remain
+  the guarantee. To fully close it for Codex, keep the holdout outside the workspace, or run
+  forbid roles on Claude.
 
 ## Cross-model is the point
 Per-role backends come from `.sparra/config.yaml` (`roles.*`); override per call with
@@ -137,14 +164,12 @@ Sparra supports, now one call away in an interactive session.
   conventions (CODEBASE_MAP/Apple), and memory, but not multi-round pivot/feedback state
   (the conductor threads that between calls).
 - **Codex forbid roles**: Codex ignores Claude hooks, so the on-disk `.sparra/` read-deny
-  doesn't apply; its sandbox still allows reading mounted dirs. This matches the base
-  build loop's exposure (a Codex generator can read the repo, which contains `.sparra/`).
-  The wall's *guaranteed* property — holdout never enters a forbid role's prompt/context,
-  and never reaches the conductor (prompt-leak check + verdict redaction) — holds for all
-  backends; only the on-disk read-deny is Claude-only. To fully close it for Codex, keep
-  the holdout outside the workspace, or run forbid roles on Claude.
-- A broad `Grep`/`Glob` with no path (scanning the whole workspace, when `.sparra/` lives
-  under it) is a residual the exact-path/dir deny can't catch on the Claude side either;
-  the prompt-wall + redaction remain the primary guarantees.
+  doesn't apply. The `.sparra` read-scope exclusion (above) now drops the holdout dir from
+  its mounted read roots, but an **in-place** run (cwd `=== ctx.root`) leaves the holdout
+  reachable inside the cwd — Sparra **warns loudly** there. The wall's *guaranteed* property
+  — holdout never enters a forbid role's prompt/context, and never reaches the conductor
+  (prompt-leak check + verdict redaction) — holds for all backends. To fully close the
+  on-disk surface for Codex, keep the holdout outside the workspace, or run forbid roles on
+  Claude. (See "Holdout wall — residuals" above.)
 - **Evaluator traces** contain the holdout by design (the evaluator may see it); they
   live in a `role-run-evaluator-*` trace dir. Read **verdicts**, not evaluator traces.

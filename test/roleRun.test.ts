@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,6 +125,49 @@ describe("runRole — safety intent + wiring", () => {
     const gen = recorder();
     await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: gen.fn });
     expect(gen.calls[0]!.hooks?.PreToolUse?.length).toBeGreaterThan(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a forbid role on a separate worktree does NOT get .sparra/ in its read scope; the evaluator does", async () => {
+    const { ctx, dir } = await makeCtx();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rolerun-wt-"));
+
+    const gen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", workspace, runSessionFn: gen.fn });
+    const genDirs = gen.calls[0]!.additionalDirectories ?? [];
+    // ctx.root (which contains .sparra) is dropped — no granted dir contains the holdout machinery.
+    expect(genDirs).not.toContain(dir);
+    expect(genDirs.some((d) => d.includes(".sparra"))).toBe(false);
+
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace, runSessionFn: ev.fn });
+    // The evaluator keeps the full scope (it may see the holdout).
+    expect(ev.calls[0]!.additionalDirectories).toContain(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("warns when a forbid Codex role runs in-place with a reachable holdout (no hard refusal)", async () => {
+    const { ctx, dir } = await makeCtx(); // holdout present; in-place (workspace defaults to ctx.root)
+    let buf = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      return true;
+    });
+    try {
+      const gen = recorder();
+      const r = await runRole({ ctx, roleKind: "generator", brief: "build", backend: "codex", runSessionFn: gen.fn });
+      expect(r.ok).toBe(true); // not blocked — the run proceeds
+      expect(gen.calls).toHaveLength(1);
+      expect(buf).toMatch(/holdout is reachable/i);
+
+      // The same in-place forbid role on Claude does NOT warn (the deny-hook covers it).
+      buf = "";
+      await runRole({ ctx, roleKind: "generator", brief: "build", backend: "claude", runSessionFn: recorder().fn });
+      expect(buf).not.toMatch(/holdout is reachable/i);
+    } finally {
+      spy.mockRestore();
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -18,6 +18,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
+import { warn } from "../util/log.ts";
 
 /**
  * The policy role-runner — the seam that makes Sparra's roles callable from an
@@ -309,6 +310,34 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     guard = { ...guard, hooks: mergeHooks(guard.hooks, makeDenyHook([makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)])) };
   }
 
+  // Forbid roles never get the holdout/.sparra scope granted as readable; the evaluator
+  // (allowed to see holdout) keeps the full scope. This shrinks the off-disk read residual
+  // (esp. on Codex, which ignores the deny-hook above).
+  const readDirs = buildReadDirs(ctx, workspace, { excludeHoldoutScope: !evaluator });
+
+  // Reduced-surface, not closed: if a forbid role's readable scope (its cwd or a granted
+  // dir) still contains a PRESENT holdout AND it runs on a hooks-ignoring backend (Codex),
+  // the on-disk read can't be denied — warn loudly. The prompt-wall + verdict redaction
+  // remain the guarantees; we do NOT hard-refuse (that would break legitimate in-place runs).
+  if (!evaluator && (role.backend ?? "claude") === "codex") {
+    const holdoutFiles = [req.holdoutPath, ctx.paths.holdout, ctx.paths.frozenHoldout]
+      .filter((p): p is string => Boolean(p) && exists(p as string))
+      .map((p) => path.resolve(p));
+    const scopes = [path.resolve(workspace), ...(readDirs ?? []).map((d) => path.resolve(d))];
+    const within = (child: string, parent: string) => {
+      const rel = path.relative(parent, child);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    };
+    const reachable = holdoutFiles.some((f) => scopes.some((s) => within(f, s)));
+    if (reachable) {
+      warn(
+        `role-run-${roleKind}: holdout is reachable on disk for this Codex (hooks-ignoring) role — ` +
+          `the .sparra read-scope exclusion can't cover the cwd-resident holdout, and Codex ignores the deny-hook. ` +
+          `The prompt-wall (assertNoHoldoutLeak) + verdict redaction are the only guarantees here.`
+      );
+    }
+  }
+
   // Unique trace dir so repeated role runs don't overwrite each other. Evaluator traces
   // contain holdout by design (the evaluator is allowed to see it) — they live in a
   // role-run subdir; the conductor reads verdicts, not evaluator traces.
@@ -325,7 +354,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     baseUrl: role.baseUrl,
     apiKey: role.apiKey,
     cwd: workspace,
-    additionalDirectories: buildReadDirs(ctx, workspace),
+    additionalDirectories: readDirs,
     tools: spec.tools,
     skills: skillsForRole(ctx, spec.skillsName),
     // Backend-agnostic safety intent so Codex sandboxes correctly (it ignores Claude hooks):
