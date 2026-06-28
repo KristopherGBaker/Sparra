@@ -151,7 +151,7 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
-  `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `out`). If that
+  `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`). If that
   agent isn't available, spawn a general subagent and instruct it to call the
   `run_role` MCP tool with the same args and these same holdout rules.
 - **Run role-subagents in the BACKGROUND (`run_in_background: true`) by default.** Role
@@ -184,8 +184,11 @@ one caveat: **two WRITER role-runs (generators) must not target the same workspa
 concurrently** — give them separate workspaces or run them in sequence.
 
 ## Backends
-Defaults come from `roles.*` (see Setup). Override per call with `backend`/`model` — handy
-to get a one-off second opinion from a different model without editing config.
+Defaults come from `roles.*` (see Setup). Override per call with `backend`/`model`/`effort`
+(`low|medium|high|xhigh|max`) — handy for a one-off second opinion from a different model, or
+to raise an adversarial pass (e.g. `effort: "xhigh"`) without editing config. Useful when a
+backend is rate-limited: switch the evaluator to `backend:"claude", model:"opus",
+effort:"xhigh"` per call.
 
 ## Don't
 - Don't reimplement grading yourself in this session — call the evaluator role (it has

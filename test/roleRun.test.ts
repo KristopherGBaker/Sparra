@@ -599,6 +599,26 @@ function limiter(limited: Set<string>) {
   return { calls, fn };
 }
 
+describe("runRole — effort override", () => {
+  it("passes a per-call effort override through to the session request (overriding the role's config)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "claude", model: "opus", effort: "high" };
+    const rec = limiter(new Set());
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", effort: "xhigh", runSessionFn: rec.fn });
+    expect(rec.calls[0]!.effort).toBe("xhigh"); // override wins over the role's "high"
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses the role's config effort when no override is given", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "claude", model: "opus", effort: "high" };
+    const rec = limiter(new Set());
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls[0]!.effort).toBe("high");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("runRole — auto-fallback on a provider limit", () => {
   it("falls back to a different-backend fallback when the primary is limited", async () => {
     const { ctx, dir } = await makeCtx(false);

@@ -38,6 +38,7 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     out: typeof flags.out === "string" ? (flags.out as string) : undefined,
     backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,
     model: typeof flags.model === "string" ? (flags.model as string) : undefined,
+    effort: parseEffort(flags.effort),
   };
 
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
@@ -58,6 +59,13 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   if (res.outPath) detail(`wrote: ${res.outPath}`);
   if (res.errors.length) warn(`errors: ${res.errors.join("; ")}`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
+}
+
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** Parse a `--effort` flag into a valid RoleConfig effort, or undefined (use the role's config). */
+function parseEffort(flag: string | boolean | undefined): RoleRunRequest["effort"] {
+  if (typeof flag !== "string") return undefined;
+  return (EFFORTS as readonly string[]).includes(flag) ? (flag as RoleRunRequest["effort"]) : undefined;
 }
 
 /** Map a roleKind to its config key (for the info line). */

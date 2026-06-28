@@ -53,6 +53,10 @@ export async function startRunRoleServer(root: string): Promise<void> {
       holdoutPath: z.string().optional().describe("Holdout file PATH (evaluator-only). Contents are never returned."),
       backend: z.string().optional().describe("Backend override: claude | codex | … (default: the role's config)."),
       model: z.string().optional().describe("Model override."),
+      effort: z
+        .enum(["low", "medium", "high", "xhigh", "max"])
+        .optional()
+        .describe("Reasoning-effort override (default: the role's config). Raise (e.g. xhigh) for a tougher adversarial pass."),
       out: z.string().optional().describe("Where to write the verdict/result on disk."),
       resumeSessionId: z
         .string()
@@ -76,6 +80,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
           holdoutPath: args.holdoutPath,
           backend: args.backend,
           model: args.model,
+          effort: args.effort,
           out: args.out,
           resumeSessionId: args.resumeSessionId,
           resumeBackend: args.resumeBackend,

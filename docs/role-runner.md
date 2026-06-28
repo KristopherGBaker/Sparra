@@ -57,7 +57,10 @@ output). Wire it into Claude Code pointed at your project:
 ```
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
-holdoutPath, backend, model, out })`. The **`sparra-loop` skill** is the driving playbook.
+holdoutPath, backend, model, effort, out })`. `effort` (`low|medium|high|xhigh|max`)
+overrides the role's configured reasoning effort for that one call — handy to raise an
+adversarial pass (e.g. `xhigh`) without editing config. The **`sparra-loop` skill** is the
+driving playbook.
 
 To **iterate a role without re-reading the workspace from scratch** (e.g. feeding the
 generator the evaluator's blocking points for another round), pass
