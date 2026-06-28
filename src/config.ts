@@ -220,6 +220,16 @@ export interface SparraConfig {
     mechanism: ExerciseMechanism;
     /** On existing projects, also run the repo's own test suite; new failures = hard fail. */
     runExistingTests: boolean;
+    /** Sandbox the evaluator's EXERCISE runs under on a backend with a native OS sandbox (Codex).
+     *  "workspace-write" (default) lets the exercise write the scratch that test/build tools need
+     *  (e.g. node_modules/.vite-temp, tsc/test caches) so `npm test`/`tsc` actually run; a
+     *  runner-level source-integrity guard reverts + FAILS any write the evaluator makes to the
+     *  artifact surface, and network stays off — so the evaluator still cannot mutate the code it
+     *  grades or reach the network. "read-only" forces Codex's strict no-write sandbox (the pre-fix
+     *  behavior; exercising tools that need scratch will EPERM). Only relaxed on a worktree/branch
+     *  boundary (the integrity guard needs git to revert); in-place runs stay read-only. The Claude
+     *  evaluator exercises via the in-process runner regardless of this. */
+    sandbox: "read-only" | "workspace-write";
     /** Command Sparra runs to detect/run the existing suite (auto-detected if empty). */
     existingTestCommand: string;
     /** For mechanism: custom — a shell recipe the evaluator may invoke. */
@@ -326,6 +336,7 @@ export function defaultConfig(): SparraConfig {
     exercise: {
       mechanism: "cli",
       runExistingTests: true,
+      sandbox: "workspace-write",
       existingTestCommand: "",
       customRecipe: "",
       web: { startCommand: "", baseUrl: "http://localhost:3000" },

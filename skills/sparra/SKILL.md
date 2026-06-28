@@ -103,6 +103,11 @@ The few that matter most:
   default. Bounded by `maxWaitSec`/`maxRestarts`; checkpoints before sleeping (resume via
   `sparra build`); `sparra status` shows it *paused … resumes ~HH:MM*. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
+- **`exercise.sandbox`** — `workspace-write` (default) | `read-only`. The sandbox a **Codex**
+  evaluator's exercise runs under on a worktree boundary: `workspace-write` lets `npm test`/`tsc`
+  write the scratch they need (network off; a source-integrity guard reverts+fails any
+  artifact-source write). `read-only` is the strict pre-fix behavior. The Claude evaluator
+  exercises via the in-process runner regardless.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold.
 - **`review: { enabled, blockOn }`** — opt-in **code-review gate** (off by default). After

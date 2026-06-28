@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runRole, makeHoldoutReadDecider, type RoleKind } from "../src/build/roleRun.ts";
+import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -186,6 +187,82 @@ describe("runRole — safety intent + wiring", () => {
     const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "codex", runSessionFn: rec.fn });
     expect(rec.calls[0]!.backend).toBe("codex");
     expect(r.backend).toBe("codex");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/** A no-op IntegrityDeps that reports a clean exercise (no artifact mutation). */
+const cleanIntegrityDeps: IntegrityDeps = {
+  listArtifactFiles: () => [],
+  readFile: () => null,
+  writeFile: () => {},
+  removeFile: () => {},
+};
+
+/** An IntegrityDeps that simulates the evaluator mutating one tracked file during the exercise:
+ *  snapshot reads "before"; the post-exercise read returns "after" (≠ before) → reverted + reported. */
+function mutatingIntegrityDeps(rel: string): IntegrityDeps {
+  let reads = 0;
+  return {
+    listArtifactFiles: () => [rel],
+    readFile: () => Buffer.from(reads++ === 0 ? "before" : "after"),
+    writeFile: () => {},
+    removeFile: () => {},
+  };
+}
+
+describe("runRole — exercising evaluator scratch + integrity guard", () => {
+  it("an evaluator on a branch boundary with exercise.sandbox=workspace-write carries exerciseScratch", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x"; // worktree/branch boundary
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(ev.calls[0]!.exerciseScratch).toBe(true);
+    expect(ev.calls[0]!.readOnly).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT carry exerciseScratch with no branch boundary, or when sandbox=read-only, or for non-evaluators", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.sandbox = "workspace-write";
+
+    // No branch boundary → no scratch.
+    const a = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: a.fn, integrityDeps: cleanIntegrityDeps });
+    expect(a.calls[0]!.exerciseScratch).toBeUndefined();
+
+    // Branch boundary but sandbox forced read-only → no scratch.
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "read-only";
+    const b = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: b.fn, integrityDeps: cleanIntegrityDeps });
+    expect(b.calls[0]!.exerciseScratch).toBeUndefined();
+
+    // A non-evaluator read-only role never gets scratch, even on the boundary with workspace-write.
+    ctx.config.exercise.sandbox = "workspace-write";
+    const c = recorder();
+    await runRole({ ctx, roleKind: "reviewer", brief: "review", runSessionFn: c.fn, integrityDeps: cleanIntegrityDeps });
+    expect(c.calls[0]!.exerciseScratch).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an integrity violation (evaluator wrote a file) FORCES the verdict to fail with a blocking line", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ev = recorder(); // returns a PASSING verdict (EVAL_JSON)
+    const r = await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      runSessionFn: ev.fn,
+      integrityDeps: mutatingIntegrityDeps("src/App.ts"),
+    });
+    expect(r.verdict?.verdict).toBe("fail");
+    expect(r.ok).toBe(false);
+    expect(r.verdict?.blocking[0]).toMatch(/Integrity violation/);
+    expect(r.verdict?.blocking[0]).toContain("src/App.ts");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

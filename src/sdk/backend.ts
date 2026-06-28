@@ -100,6 +100,12 @@ export interface AgentRequest {
    * boundary by the caller. A backend without an OS sandbox (Claude) ignores it.
    */
   sandbox?: "workspace-write" | "danger-full-access";
+  /** This read-only role EXERCISES the artifact and needs writable scratch for test/build tools.
+   *  A backend with an OS sandbox (Codex) relaxes from "read-only" to "workspace-write" (network
+   *  off) so e.g. `npm test` can write node_modules/.vite-temp; `readOnly` otherwise still holds
+   *  (no source-mutation tools). A backend without an OS sandbox (Claude) ignores it. The runner
+   *  pairs this with a source-integrity guard that reverts any artifact write. */
+  exerciseScratch?: boolean;
   /** Bash substrings always denied. */
   denyBashContains?: string[];
   /** Optional JSON Schema for structured output (native where supported, else emulated). */

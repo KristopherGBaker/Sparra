@@ -89,6 +89,8 @@ class CodexBackend implements AgentBackend {
         approvalPolicy: "never", // autonomous: the sandbox is the boundary, never prompt
       };
       if (req.model) threadOptions.model = req.model;
+      // The exercising evaluator gets scratch writes (workspace-write) but NEVER network.
+      if (req.readOnly && req.exerciseScratch) threadOptions.networkAccessEnabled = false;
       const effort = mapEffort(req.effort);
       if (effort) threadOptions.modelReasoningEffort = effort;
       if (req.additionalDirectories?.length) threadOptions.additionalDirectories = req.additionalDirectories;
@@ -163,13 +165,17 @@ export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-ac
 /**
  * Map a normalized request's safety intent onto Codex's `ThreadOptions.sandboxMode`.
  * Pure + exported so the decision is unit-testable without spawning the codex CLI.
- *   readOnly → "read-only" ALWAYS (read-only wins over any sandbox knob).
+ *   readOnly → "read-only" ALWAYS (read-only wins over any sandbox knob), EXCEPT the
+ *              exerciseScratch carve-out: a read-only role that EXERCISES the artifact needs
+ *              writable scratch for test/build tools, so it relaxes to "workspace-write" (network
+ *              is forced off in runTask; the runner's source-integrity guard reverts any artifact
+ *              write so the evaluator still can't mutate the code it grades).
  *   otherwise → the requested `sandbox`, defaulting to "workspace-write" when unset.
  * The danger-full-access worktree gate lives at the request-construction layer (which can
  * see git state); this backend has none (hooks:false, approvalPolicy:never) and trusts `req`.
  */
-export function codexSandboxMode(req: Pick<AgentRequest, "readOnly" | "sandbox">): CodexSandboxMode {
-  if (req.readOnly) return "read-only";
+export function codexSandboxMode(req: Pick<AgentRequest, "readOnly" | "sandbox" | "exerciseScratch">): CodexSandboxMode {
+  if (req.readOnly) return req.exerciseScratch ? "workspace-write" : "read-only";
   return req.sandbox ?? "workspace-write";
 }
 

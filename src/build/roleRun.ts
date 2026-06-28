@@ -10,6 +10,7 @@ import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
+import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
 import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout } from "./holdout.ts";
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText } from "./modeText.ts";
@@ -84,6 +85,8 @@ export interface RoleRunRequest {
   effort?: RoleConfig["effort"];
   /** Injectable for tests; defaults to the real backend session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+  /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
+  integrityDeps?: IntegrityDeps;
   traceDir?: string;
   traceSeq?: number;
 }
@@ -281,6 +284,12 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const exerciser = evaluator ? buildExerciser(ctx.config, workspace) : undefined;
   const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "");
 
+  // The exercising evaluator (only) gets writable scratch on a worktree/branch boundary so a Codex
+  // exercise can write node_modules/.vite-temp etc.; the source-integrity guard reverts any artifact
+  // write it makes. Other read-only roles (reviewer, contract-*) never get it.
+  const exerciseScratch = evaluator && ctx.config.exercise.sandbox === "workspace-write" && !!ctx.store.data.build.branch;
+  const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
+
   // Parity context the real roles inject (cheap reads; improves single-shot fidelity).
   const memory = memorySection(await readMemory(ctx.paths));
   const conventions = roleKind === "generator" || roleKind === "reviewer" ? await conventionsBlock(ctx) : "";
@@ -344,6 +353,9 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const traceDir =
     req.traceDir ?? path.join(ctx.paths.traces, `role-run-${roleKind}-${stampFromDate(new Date())}-${randomUUID().slice(0, 8)}`);
 
+  // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
+  // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.
+  const snap = exerciseScratch ? snapshotArtifact(workspace, integrityDeps) : undefined;
   const res = await run({
     role: `role-run-${roleKind}`,
     prompt: task,
@@ -369,7 +381,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
             roleLabel: `role-run-${roleKind}`,
           }),
         }
-      : { readOnly: true }),
+      : { readOnly: true, ...(exerciseScratch ? { exerciseScratch: true } : {}) }),
     ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     ...guard,
     maxTurns: ctx.config.build.maxTurnsPerSession,
@@ -395,6 +407,19 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     // the returned verdict or the `--out` file (the evaluator may cite holdout in
     // evidence/blocking/notes — it's allowed to see it; the conductor is not).
     const verdict = redactVerdict(parseVerdict(ctx, res.resultText), holdoutText);
+    // Source-integrity guard: revert any artifact write the evaluator made during the exercise; if
+    // it mutated the surface, FORCE the verdict to fail (a verdict from an evaluator that edited the
+    // code it grades cannot be trusted).
+    if (snap) {
+      const mutated = enforceArtifactIntegrity(workspace, snap, integrityDeps);
+      if (mutated.length) {
+        verdict.verdict = "fail";
+        verdict.blocking.unshift(
+          `Integrity violation: the evaluator wrote ${mutated.length} artifact file(s) during exercise (reverted): ${mutated.join(", ")}. Verdict cannot be trusted.`
+        );
+        warn(`Integrity violation for role-run-${roleKind}: evaluator wrote ${mutated.length} artifact file(s) (reverted): ${mutated.join(", ")}.`);
+      }
+    }
     result.verdict = verdict;
     result.ok = res.ok && verdict.verdict === "pass";
     if (req.out) {

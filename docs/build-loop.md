@@ -34,6 +34,8 @@ How the evaluator exercises the artifact, set by `exercise.mechanism`:
 
 The evaluator gets an in-process MCP server (`mcp__exercise__run_command`, plus `http_request` for web) so every exercise is structured and logged.
 
+On the **Codex** backend (which has no in-process runner, only its OS sandbox), the exercise runs with **writable scratch** (`exercise.sandbox: workspace-write`, network off) so test/build tools can write the scratch they need — but the **artifact surface is integrity-guarded**: any write the evaluator makes to tracked/new source is reverted and **forces the round to `fail`** (see [backends](backends.md#codex-evaluator-exercising-under-workspace-write-source-integrity-guarded)).
+
 ---
 
 ## Code review (optional)

@@ -1,0 +1,149 @@
+import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { evaluateItem } from "../src/build/evaluate.ts";
+import type { IntegrityDeps } from "../src/build/integrity.ts";
+import { Paths } from "../src/paths.ts";
+import { StateStore } from "../src/state.ts";
+import { defaultConfig } from "../src/config.ts";
+import type { Ctx } from "../src/context.ts";
+import type { WorkItem } from "../src/build/types.ts";
+import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
+
+async function makeCtx(): Promise<{ ctx: Ctx; dir: string }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-eval-"));
+  const paths = new Paths(dir);
+  await paths.ensureScaffold();
+  const store = StateStore.create(paths, "greenfield");
+  const config = defaultConfig();
+  return { ctx: { root: dir, paths, config, store }, dir };
+}
+
+const ITEM: WorkItem = { id: "item-001", title: "t", summary: "", dependsOn: [], rationale: "" };
+
+const PASS_JSON =
+  '```json\n{"assertions":[{"id":1,"pass":true,"evidence":"ok"}],' +
+  '"scores":{"design":90,"originality":90,"craft":90,"functionality":90},"verdict":"pass","blocking":[],"notes":"n"}\n```';
+
+function recorder(resultText = PASS_JSON) {
+  const calls: RunSessionParams[] = [];
+  const fn = async (p: RunSessionParams): Promise<RunResult> => {
+    calls.push(p);
+    return {
+      ok: true,
+      subtype: "success",
+      resultText,
+      sessionId: "e",
+      costUsd: 0,
+      tokens: 5,
+      numTurns: 1,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: [],
+      tracePath: "",
+    };
+  };
+  return { calls, fn };
+}
+
+const cleanIntegrityDeps: IntegrityDeps = {
+  listArtifactFiles: () => [],
+  readFile: () => null,
+  writeFile: () => {},
+  removeFile: () => {},
+};
+
+function mutatingIntegrityDeps(rel: string): IntegrityDeps {
+  let reads = 0;
+  return {
+    listArtifactFiles: () => [rel],
+    readFile: () => Buffer.from(reads++ === 0 ? "before" : "after"),
+    writeFile: () => {},
+    removeFile: () => {},
+  };
+}
+
+async function run(ctx: Ctx, dir: string, rec: ReturnType<typeof recorder>, integrityDeps: IntegrityDeps) {
+  return evaluateItem({
+    ctx,
+    item: ITEM,
+    contractText: "contract",
+    workspaceDir: dir,
+    round: 1,
+    traceDir: path.join(dir, "trace"),
+    traceSeq: 1,
+    runSessionFn: rec.fn,
+    integrityDeps,
+  });
+}
+
+describe("evaluateItem — exercising evaluator scratch + integrity guard", () => {
+  it("carries readOnly + exerciseScratch on a branch boundary with sandbox=workspace-write", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "workspace-write";
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    expect(rec.calls[0]!.readOnly).toBe(true);
+    expect(rec.calls[0]!.exerciseScratch).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT carry exerciseScratch with no branch, or when sandbox=read-only", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.sandbox = "workspace-write";
+
+    const a = recorder();
+    await run(ctx, dir, a, cleanIntegrityDeps); // no branch
+    expect(a.calls[0]!.exerciseScratch).toBeUndefined();
+    expect(a.calls[0]!.readOnly).toBe(true);
+
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "read-only";
+    const b = recorder();
+    await run(ctx, dir, b, cleanIntegrityDeps);
+    expect(b.calls[0]!.exerciseScratch).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an integrity violation FORCES the verdict to fail and records the blocking line in the verdict file", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "workspace-write";
+    const rec = recorder(PASS_JSON); // model says pass…
+    const out = await run(ctx, dir, rec, mutatingIntegrityDeps("src/App.ts"));
+    expect(out.verdict.verdict).toBe("fail"); // …but the guard overrides
+    expect(out.verdict.blocking[0]).toMatch(/Integrity violation/);
+    expect(out.verdict.blocking[0]).toContain("src/App.ts");
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toMatch(/verdict: \*\*fail\*\*/);
+    expect(written).toMatch(/Integrity violation/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("redacts holdout the evaluator quoted from blocking/notes/evidence (no leak to generator feedback)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const secret = "The widget must persist across app restarts reliably";
+    fs.writeFileSync(ctx.paths.holdout, `# HOLDOUT\n\n- ${secret}\n`);
+    const failJson =
+      '```json\n{"assertions":[{"id":1,"pass":false,"evidence":"' +
+      secret +
+      '"}],"scores":{"design":40,"originality":40,"craft":40,"functionality":40},"verdict":"fail",' +
+      '"blocking":["fails: ' +
+      secret +
+      '"],"notes":"because ' +
+      secret +
+      '"}\n```';
+    const rec = recorder(failJson);
+    const out = await run(ctx, dir, rec, cleanIntegrityDeps);
+    expect(out.verdict.blocking[0]).toContain("[redacted: holdout]");
+    expect(out.verdict.blocking.join(" ")).not.toContain(secret);
+    expect(out.verdict.notes).not.toContain(secret);
+    expect(out.verdict.assertions[0]!.evidence).not.toContain(secret);
+    expect(out.raw).not.toContain(secret); // returned raw is redacted too
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).not.toContain(secret); // verdict file (incl. raw <details>) is clean
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

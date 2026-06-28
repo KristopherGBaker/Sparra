@@ -95,5 +95,15 @@ describe("codex backend", () => {
       expect(codexSandboxMode({ sandbox: "workspace-write" })).toBe("workspace-write");
       expect(codexSandboxMode({ sandbox: "danger-full-access" })).toBe("danger-full-access");
     });
+
+    it("the exerciseScratch carve-out relaxes a read-only EXERCISE to workspace-write", () => {
+      // A plain read-only role stays strictly read-only…
+      expect(codexSandboxMode({ readOnly: true })).toBe("read-only");
+      // …but the exercising evaluator needs writable scratch for test/build tools.
+      expect(codexSandboxMode({ readOnly: true, exerciseScratch: true })).toBe("workspace-write");
+      // The carve-out only applies to read-only roles (write roles are unaffected).
+      expect(codexSandboxMode({ exerciseScratch: true })).toBe("workspace-write");
+      expect(codexSandboxMode({ sandbox: "danger-full-access", exerciseScratch: true })).toBe("danger-full-access");
+    });
   });
 });

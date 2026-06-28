@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deepMerge } from "../src/config.ts";
+import { deepMerge, defaultConfig, type SparraConfig } from "../src/config.ts";
 
 describe("deepMerge", () => {
   it("scalar override: {a:1} + {a:2} → {a:2}", () => {
@@ -26,5 +26,19 @@ describe("deepMerge", () => {
     const base = { x: { y: { z: 1, w: 2 } } };
     const over = { x: { y: { z: 9 } } };
     expect(deepMerge(base, over)).toEqual({ x: { y: { z: 9, w: 2 } } });
+  });
+});
+
+describe("exercise.sandbox knob", () => {
+  it("defaults to workspace-write", () => {
+    expect(defaultConfig().exercise.sandbox).toBe("workspace-write");
+  });
+
+  it("a YAML override of exercise.sandbox loads as read-only (deepMerge over defaults)", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { exercise: { sandbox: "read-only" } });
+    expect(merged.exercise.sandbox).toBe("read-only");
+    // Sibling exercise.* knobs survive the partial merge.
+    expect(merged.exercise.mechanism).toBe("cli");
+    expect(merged.exercise.runExistingTests).toBe(true);
   });
 });

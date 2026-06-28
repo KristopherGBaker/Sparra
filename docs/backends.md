@@ -80,7 +80,23 @@ the work tree with no network; `danger-full-access` lifts the sandbox so a Codex
 run native toolchains the default Seatbelt profile blocks — e.g. `xcodebuild` — and so
 generation load can move off Claude's session limits onto Codex's quota. Mapping
 (`src/sdk/backends/codex.ts` `codexSandboxMode`): `readOnly` → `read-only` **always** (read-only
-roles ignore the knob); otherwise the requested sandbox, defaulting to `workspace-write`.
+roles ignore the knob) — **except** the exercising evaluator (see below); otherwise the requested
+sandbox, defaulting to `workspace-write`.
+
+### Codex evaluator: exercising under `workspace-write` (source-integrity-guarded)
+The evaluator is supposed to **exercise** the artifact (run its tests/build), but Codex's
+`read-only` sandbox permits **zero** writes, so `npm test`/`tsc` abort with `EPERM` writing
+in-repo scratch like `node_modules/.vite-temp` — the evaluator silently degrades to code-review
+only. With `exercise.sandbox: workspace-write` (the default) on a **worktree/branch boundary**, the
+Codex evaluator instead exercises under `workspace-write` so that scratch can be written, with
+**network off**. To preserve the rule that the evaluator must not "fix" the code it grades, the
+runner wraps the exercise with a **source-integrity guard** (`src/build/integrity.ts`): it
+snapshots the artifact surface (`git ls-files --cached --others --exclude-standard` — tracked +
+new non-ignored files, excluding gitignored scratch) before the run and, after it, **reverts** any
+modified/deleted/injected artifact file and **forces the verdict to `fail`** with a blocking line
+naming the mutated files. Set `exercise.sandbox: read-only` to keep the strict pre-fix sandbox
+(scratch-needing tools will `EPERM`). The **Claude** evaluator exercises via an in-process runner
+and is unaffected.
 
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when
