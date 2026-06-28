@@ -51,6 +51,31 @@ output). Wire it into Claude Code pointed at your project:
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
 holdoutPath, backend, model, out })`. The **`sparra-loop` skill** is the driving playbook.
 
+#### Subagent delegation (the conductor's pattern)
+The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
+plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead
+of calling it from the main session. The subagent invokes the role, reads the
+**already-redacted** result, and returns **only a short, decision-relevant summary** —
+the evaluator's verdict (pass/fail + blocking points) or a one-paragraph
+generator/reviewer digest. The raw diff and full verdict never enter the main thread,
+which keeps it lean over a long loop and stacks context isolation on top of the holdout
+wall. This moves only *where the tool call and its result live* (subagent vs. main
+session) — the model work is unchanged, and the **role's backend stays configurable**:
+a Claude subagent can still launch a Codex role via `--backend codex`/`backend`.
+
+- **MCP reachability:** a subagent **inherits the parent session's MCP tools by
+  default**, so it can call `mcp__sparra-run__run_role`. A custom agent that sets
+  `tools:` must list `mcp__sparra-run__run_role` (or the wildcard `mcp__sparra-run`).
+- **CLI fallback:** when the MCP tool isn't reachable (headless / interactive-auth
+  edge cases), the subagent runs `sparra role run …` / `sparra eval …` via Bash.
+- **Holdout discipline carries over:** the subagent never reads `HOLDOUT.md` (passes it
+  by path), reads the redacted verdict (not raw output or `role-run-evaluator-*`
+  traces), and returns no holdout text — so the conductor still never receives holdout.
+- **Parallelism:** independent role-runs can run as concurrent subagents (e.g. evaluate
+  item A while generating item B). Read-only roles parallelize freely; the caveat is
+  that **two writer (generator) role-runs must not target the same workspace
+  concurrently**.
+
 ### `sparra role run` (CLI — scriptable / headless)
 The same runner for scripts and CI:
 
