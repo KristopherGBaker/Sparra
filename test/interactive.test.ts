@@ -7,6 +7,7 @@ import { pauseDir, parseSteps, writeCommitPause, writeItemPause } from "../src/b
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
+import { appendLearning as realAppendLearning } from "../src/memory.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
 import type { GenerateOutput } from "../src/build/generate.ts";
@@ -55,6 +56,18 @@ function setDecision(ctx: Ctx, decision: string, reason = "", feedback?: string)
   if (feedback != null) fs.writeFileSync(path.join(dir, "feedback.md"), feedback);
 }
 const status = (ctx: Ctx) => ctx.store.data.build.items["item-001"]!.status;
+
+/** Simulate a real process restart: drop the in-memory store and reload state purely off disk,
+ *  so a "resume" can only see what was actually persisted (proves disk-durable exactly-once). */
+async function reload(ctx: Ctx): Promise<Ctx> {
+  const store = await StateStore.load(ctx.paths);
+  return { ...ctx, store: store! };
+}
+/** Count `passed`-kind learnings for item-001 in the real memory.md. */
+function passedLineCount(ctx: Ctx): number {
+  if (!fs.existsSync(ctx.paths.memory)) return 0;
+  return fs.readFileSync(ctx.paths.memory, "utf8").split("\n").filter((l) => /item-001 · PASSED/.test(l)).length;
+}
 
 describe("cmdBuild --step=round — pause after evaluate", () => {
   it("pauses after the round, writing a steering folder; the item stays mid-flight", async () => {
@@ -466,6 +479,217 @@ describe("cmdBuild --step=item — pause between items", () => {
     expect(genCalls).toEqual(["item-001", "item-002"]); // item-001 still not re-contracted/re-run
     expect(ctx.store.data.build.items["item-002"]!.status).toBe("passed");
     expect(status(ctx)).toBe("failed"); // item-001 stays failed (terminal)
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — accept durability (crash-window)", () => {
+  it("autonomous accept: a crash after status=passed finishes the side effects exactly once on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    const passedLearnings: string[] = [];
+    let reconcileCalls = 0;
+    let throwOnce = true;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async (_c, a) => { commitCalls.push(a.item.id); return { ok: true, commits: 1 }; },
+      // Simulate a kill DURING reconcile, which runs AFTER the item is marked passed.
+      reconcilePlan: async () => {
+        reconcileCalls++;
+        if (throwOnce) { throwOnce = false; throw new Error("boom: killed mid-reconcile"); }
+      },
+      appendLearning: async (_p, e) => { if (e.kind === "passed") passedLearnings.push(e.detail); },
+    };
+
+    // Run 1: throws inside reconcile — but the item is already passed, ledger still incomplete.
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/);
+    const onDisk = JSON.parse(fs.readFileSync(ctx.paths.state, "utf8"));
+    expect(onDisk.build.items["item-001"].status).toBe("passed"); // passed on disk…
+    expect(onDisk.build.items["item-001"].acceptance?.reconciled).toBeFalsy(); // …but not finished
+    expect(commitCalls).toHaveLength(0);
+    expect(passedLearnings).toHaveLength(0); // nothing committed or remembered yet
+
+    // Run 2: resume with a non-throwing reconcile — recovery completes the remaining effects.
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(status(ctx)).toBe("passed");
+    expect(commitCalls).toEqual(["item-001"]); // committed EXACTLY once across both runs
+    expect(passedLearnings).toHaveLength(1); // "passed" memory EXACTLY once
+    expect(reconcileCalls).toBe(2); // the failed attempt re-ran, but the flag stops a double-apply
+    expect(ctx.store.data.build.items["item-001"]!.acceptance)
+      .toMatchObject({ reconciled: true, committed: true, memoryAppended: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("interactive accept: a crash after status=passed finishes the side effects exactly once on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    const passedLearnings: string[] = [];
+    let reconcileCalls = 0;
+    let throwOnce = true;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true), // passing → default round decision "accept"
+      commitItem: async (_c, a) => { commitCalls.push(a.item.id); return { ok: true, commits: 1 }; },
+      reconcilePlan: async () => {
+        reconcileCalls++;
+        if (throwOnce) { throwOnce = false; throw new Error("boom: killed mid-reconcile"); }
+      },
+      appendLearning: async (_p, e) => { if (e.kind === "passed") passedLearnings.push(e.detail); },
+    };
+
+    // Run 1: pause after the round (no accept yet, so reconcile hasn't run).
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["round"] }, deps);
+    expect(ctx.store.data.build.paused?.kind).toBe("round");
+    expect(reconcileCalls).toBe(0);
+
+    // Run 2: resume with the default "accept" → acceptItem marks passed, then reconcile throws.
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/);
+    const onDisk = JSON.parse(fs.readFileSync(ctx.paths.state, "utf8"));
+    expect(onDisk.build.items["item-001"].status).toBe("passed");
+    expect(onDisk.build.items["item-001"].acceptance?.reconciled).toBeFalsy();
+    expect(commitCalls).toHaveLength(0);
+    expect(passedLearnings).toHaveLength(0);
+
+    // Run 3: resume again — top-of-loop recovery finishes the acceptance exactly once.
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(status(ctx)).toBe("passed");
+    expect(commitCalls).toEqual(["item-001"]);
+    expect(passedLearnings).toHaveLength(1);
+    expect(reconcileCalls).toBe(2);
+    expect(ctx.store.data.build.items["item-001"]!.acceptance)
+      .toMatchObject({ reconciled: true, committed: true, memoryAppended: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // ── Post-effect / pre-flag window: the side effect HAPPENS, then we crash BEFORE its durable
+  // flag saves. Flags alone can't guarantee exactly-once across this window, so the side effects
+  // themselves must be idempotent. These cover the COMMIT and MEMORY windows on BOTH accept paths,
+  // resuming from a store reloaded purely off disk (a real restart). ──
+
+  it("autonomous accept: a crash after the COMMIT side-effect (pre-flag) makes no second commit on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    let realCommits = 0;
+    let committedOnce = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      // Models the real commitItem's natural idempotency: once committed there's nothing left to
+      // stage, so a second call no-ops. First call commits, then we crash before the flag saves.
+      commitItem: async (_c, a) => {
+        commitCalls.push(a.item.id);
+        if (committedOnce) return { ok: false, commits: 0 };
+        committedOnce = true;
+        realCommits++;
+        throw new Error("boom: killed after commit, before flag save");
+      },
+    };
+
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/);
+    const onDisk = JSON.parse(fs.readFileSync(ctx.paths.state, "utf8"));
+    expect(onDisk.build.items["item-001"].status).toBe("passed");
+    expect(onDisk.build.items["item-001"].acceptance?.committed).toBeFalsy(); // commit flag was lost
+
+    const ctx2 = await reload(ctx); // real restart — resume sees only what hit disk
+    await cmdBuild(ctx2, { workspaceOverride: dir }, deps);
+    expect(ctx2.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(commitCalls).toEqual(["item-001", "item-001"]); // commitItem re-invoked on resume…
+    expect(realCommits).toBe(1); // …but the second call no-opped → net exactly one commit
+    expect(ctx2.store.data.build.items["item-001"]!.acceptance)
+      .toMatchObject({ reconciled: true, committed: true, memoryAppended: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("autonomous accept: a crash after the MEMORY side-effect (pre-flag) appends no duplicate on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    let memThrows = true;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async () => ({ ok: true, commits: 1 }),
+      // The passed line is actually written to memory.md, THEN we crash before the flag saves.
+      appendLearning: async (paths, e) => {
+        await realAppendLearning(paths, e);
+        if (e.kind === "passed" && memThrows) { memThrows = false; throw new Error("boom: killed after memory write, before flag save"); }
+      },
+    };
+
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/);
+    expect(passedLineCount(ctx)).toBe(1); // the write landed
+    const onDisk = JSON.parse(fs.readFileSync(ctx.paths.state, "utf8"));
+    expect(onDisk.build.items["item-001"].acceptance?.memoryAppended).toBeFalsy(); // flag was lost
+
+    const ctx2 = await reload(ctx);
+    await cmdBuild(ctx2, { workspaceOverride: dir }, deps);
+    expect(ctx2.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(passedLineCount(ctx2)).toBe(1); // dedup held across the lost flag — exactly one passed line
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("interactive accept: a crash after the COMMIT side-effect (pre-flag) makes no second commit on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    const commitCalls: string[] = [];
+    let realCommits = 0;
+    let committedOnce = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true), // passing → default round decision "accept"
+      commitItem: async (_c, a) => {
+        commitCalls.push(a.item.id);
+        if (committedOnce) return { ok: false, commits: 0 };
+        committedOnce = true;
+        realCommits++;
+        throw new Error("boom: killed after commit, before flag save");
+      },
+    };
+
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["round"] }, deps); // pause @ round
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/); // accept → commit crash
+    const onDisk = JSON.parse(fs.readFileSync(ctx.paths.state, "utf8"));
+    expect(onDisk.build.items["item-001"].acceptance?.committed).toBeFalsy();
+
+    const ctx2 = await reload(ctx);
+    await cmdBuild(ctx2, { workspaceOverride: dir }, deps);
+    expect(ctx2.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(commitCalls).toEqual(["item-001", "item-001"]);
+    expect(realCommits).toBe(1); // net exactly one commit
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("interactive accept: a crash after the MEMORY side-effect (pre-flag) appends no duplicate on resume", async () => {
+    const { ctx, dir } = await makeCommitCtx();
+    let memThrows = true;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      commitItem: async () => ({ ok: true, commits: 1 }),
+      appendLearning: async (paths, e) => {
+        await realAppendLearning(paths, e);
+        if (e.kind === "passed" && memThrows) { memThrows = false; throw new Error("boom: killed after memory write, before flag save"); }
+      },
+    };
+
+    await cmdBuild(ctx, { workspaceOverride: dir, step: ["round"] }, deps); // pause @ round
+    await expect(cmdBuild(ctx, { workspaceOverride: dir }, deps)).rejects.toThrow(/boom/); // accept → memory crash
+    expect(passedLineCount(ctx)).toBe(1);
+
+    const ctx2 = await reload(ctx);
+    await cmdBuild(ctx2, { workspaceOverride: dir }, deps);
+    expect(ctx2.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(passedLineCount(ctx2)).toBe(1); // exactly one passed line across the crash/resume
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -34,7 +34,7 @@ import {
   type Decision,
 } from "../build/interactive.ts";
 import type { LimitHit } from "../sdk/backend.ts";
-import { appendLearning, readMemory } from "../memory.ts";
+import { appendLearning, readMemory, hasLearning } from "../memory.ts";
 import { promptDrift } from "../prompts.ts";
 import type { WorkItem } from "../build/types.ts";
 import type { RoleConfig } from "../config.ts";
@@ -262,43 +262,119 @@ export async function cmdBuild(
     return true;
   };
 
-  // Accept an item on a human decision (--step mode): mark passed, reconcile, optionally
-  // commit, record an (optional) override reason. Mirrors the autonomous accept minus the
-  // review gate — the human IS the gate here. Returns "commit-paused" when the commit gate
-  // deferred the commit to the human (the caller must break), else "done".
+  // The "passed" memory line for an autonomously-accepted item, reconstructable from durable
+  // state alone — so a resume that finishes a crashed/deferred acceptance records the same
+  // learning the inline accept would have (a commit-gate / crash defers the memory step to a
+  // later run where the round verdict is no longer in scope). `overrideReason` is durable, so
+  // a human override keeps its wording across a resume too.
+  const passedDetail = (st: ItemState): string =>
+    st.overrideReason
+      ? `human-accepted round ${st.round} OVERRIDING evaluator (score ${st.lastScore ?? 0}): ${st.overrideReason}`
+      : `accepted in round ${st.round} (score ${st.lastScore ?? 0}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`;
+
+  // True once every acceptance side effect has been resolved for a passed item.
+  const acceptanceComplete = (a: NonNullable<ItemState["acceptance"]>): boolean =>
+    !!a.reconciled && !!a.committed && !!a.memoryAppended;
+
+  // ── Idempotent acceptance finisher. The SINGLE path both accept routes funnel through, so a
+  // process kill anywhere between "mark passed" and the reconcile/commit/memory side effects can
+  // neither LOSE nor DOUBLE them. Each step is guarded by its durable sub-state flag and
+  // persisted the instant the flag flips, so a resume re-drives only the unfinished steps.
+  //   "done"   → all side effects resolved
+  //   "paused" → parked at the commit gate (caller sets pausedRun + breaks; resume finishes it) ──
+  const finishAcceptance = async (
+    st: ItemState,
+    item: WorkItem,
+    deviations: Deviation[],
+    opts: { overrideReason?: string; memoryDetail?: string } = {}
+  ): Promise<"done" | "paused"> => {
+    // Mark passed + open the acceptance ledger ATOMICALLY: a crash anywhere after this save is
+    // recoverable (status="passed" with an incomplete ledger drives the top-of-loop resume).
+    if (st.status !== "passed" || !st.acceptance) {
+      st.status = "passed";
+      st.acceptance ??= {};
+      // Persist the deviations BEFORE opening acceptance: crash-recovery at the top of the loop
+      // re-drives the finisher with `st.lastDeviations`, so without this a recovered accept would
+      // reconcile/commit with LOST deviation context. (On a re-entry — status already passed with
+      // a ledger — this block is skipped, so the stored deviations are never clobbered.)
+      st.lastDeviations = deviations;
+      if (opts.overrideReason) st.overrideReason = opts.overrideReason;
+      await ctx.store.save();
+    }
+    const acc = st.acceptance!;
+
+    // 1) reconcile (exactly once).
+    if (!acc.reconciled) {
+      await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
+      acc.reconciled = true;
+      await ctx.store.save();
+    }
+
+    // 2) commit — resolved exactly once (committed | human-skipped | N/A).
+    if (!acc.committed) {
+      const autoCommit = ctx.config.git.autoCommit && !!b.build.branch;
+      const gate = steps.has("commit") && autoCommit;
+      const parked = b.build.paused?.itemId === item.id && b.build.paused.kind === "commit";
+      if (gate && !parked) {
+        // Item A's commit gate: accepted (passed) but defer the commit to the human. Stash the
+        // deviations so the resume can build the commit; leave `committed` unset (not resolved).
+        st.lastDeviations = deviations;
+        await writeCommitPause(ctx, { runId, itemId: item.id, itemTitle: item.title, planText: commitPlanText(), holdoutText: await readHoldout(ctx) });
+        b.build.paused = { kind: "commit", itemId: item.id, round: st.round };
+        await ctx.store.save();
+        return "paused";
+      }
+      // Resolve: gate off → commit (when autoCommit); gate on → honour the human's commit/skip.
+      const decision = parked ? await readCommitDecision(ctx, runId, item.id) : "commit";
+      if (decision === "commit" && autoCommit) {
+        const cr = await d.commitItem(ctx, { item, deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
+        detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
+      } else if (parked) {
+        detail(`${item.id}: commit skipped by human (item stays passed).`);
+      }
+      if (parked) b.build.paused = undefined;
+      // Flag-AFTER-effect (deliberate): `committed` is saved only once commitItem has returned.
+      // Setting it BEFORE the commit would risk LOSING the commit on a crash (worse than a re-run).
+      // The cost is that a kill in the post-commit / pre-save window resumes here and re-invokes
+      // commitItem — but that is a NO-OP: the change was committed on the pre-crash attempt, so the
+      // working tree is clean and commitItem finds nothing to stage (returns `{ commits: 0 }`). The
+      // NET effect across the crash is therefore exactly one commit object, never two.
+      acc.committed = true;
+      await ctx.store.save();
+    }
+
+    // 3) memory (exactly once). The flag alone can't guarantee this: a crash AFTER the append but
+    // BEFORE the flag saves would re-append on resume (appendLearning is append-only). So dedup on
+    // the durable artifact — skip if a `passed` line for this item already exists — which holds
+    // even when the flag-save was lost.
+    if (!acc.memoryAppended) {
+      if (!(await hasLearning(ctx.paths, item.id, "passed"))) {
+        await d.appendLearning(ctx.paths, { item: item.id, kind: "passed", detail: opts.memoryDetail ?? passedDetail(st), at: stamp() });
+      }
+      acc.memoryAppended = true;
+      await ctx.store.save();
+    }
+    return "done";
+  };
+
+  // Accept an item on a human decision (--step mode): drive the idempotent finisher (reconcile →
+  // commit → memory). Mirrors the autonomous accept minus the review gate — the human IS the gate
+  // here. Returns "commit-paused" when the commit gate deferred the commit (the caller must break).
   const acceptItem = async (
     st: ItemState,
     item: WorkItem,
     deviations: Deviation[],
     overrideReason?: string
   ): Promise<"done" | "commit-paused"> => {
-    st.status = "passed";
-    if (overrideReason) st.overrideReason = overrideReason;
-    await ctx.store.save();
-    await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
-    await d.appendLearning(ctx.paths, {
-      item: item.id,
-      kind: "passed",
-      detail: overrideReason
-        ? `human-accepted round ${st.round} OVERRIDING evaluator (score ${st.lastScore ?? 0}): ${overrideReason}`
-        : `human-accepted round ${st.round} (score ${st.lastScore ?? 0}).`,
-      at: stamp(),
-    });
-    // ── Interactive: COMMIT gate — the item is accepted (passed); defer the commit to the human. ──
-    if (steps.has("commit") && ctx.config.git.autoCommit && b.build.branch) {
-      st.lastDeviations = deviations; // stash for the deferred commit on resume
-      await writeCommitPause(ctx, { runId, itemId: item.id, itemTitle: item.title, planText: commitPlanText(), holdoutText: await readHoldout(ctx) });
-      b.build.paused = { kind: "commit", itemId: item.id, round: st.round };
-      await ctx.store.save();
-      ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
+    const memoryDetail = overrideReason
+      ? `human-accepted round ${st.round} OVERRIDING evaluator (score ${st.lastScore ?? 0}): ${overrideReason}`
+      : `human-accepted round ${st.round} (score ${st.lastScore ?? 0}).`;
+    const res = await finishAcceptance(st, item, deviations, { overrideReason, memoryDetail });
+    ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
+    if (res === "paused") {
       info(`${item.id}: paused before commit — review ${pauseDirRel(ctx, runId, item.id)}/pause.md, then \`sparra build\`.`);
       return "commit-paused";
     }
-    if (ctx.config.git.autoCommit && b.build.branch) {
-      const cr = await d.commitItem(ctx, { item, deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
-      detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
-    }
-    ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
     return "done";
   };
 
@@ -347,19 +423,15 @@ export async function cmdBuild(
     if (st.costUsd == null) st.costUsd = 0;
     if (st.tokensUsed == null) st.tokensUsed = 0;
 
-    // ── Interactive: resume a COMMIT pause. Detected BEFORE the passed/abandoned/budget skip
-    // below, because the item is already `passed` — skipping it would never run the deferred
-    // commit. The commit was withheld at accept time; honour the human's commit/skip here. ──
-    if (b.build.paused?.itemId === item.id && b.build.paused.kind === "commit") {
-      const decision = await readCommitDecision(ctx, runId, item.id);
-      if (decision === "commit" && ctx.config.git.autoCommit && b.build.branch) {
-        const cr = await d.commitItem(ctx, { item, deviations: (st.lastDeviations ?? []) as Deviation[], runId, workspaceDir, traceDir, traceSeq: nextSeq() });
-        detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
-      } else {
-        detail(`${item.id}: commit skipped by human (item stays passed).`);
-      }
-      b.build.paused = undefined;
-      await ctx.store.save();
+    // ── Crash-recovery + commit-gate resume. Detected BEFORE the passed/abandoned/budget skip
+    // below, because the item is already `passed` — skipping it would drop any acceptance side
+    // effect that never ran. A passed item with an INCOMPLETE acceptance ledger (a kill between
+    // "mark passed" and reconcile/commit/memory, OR a deferred commit gate) finishes the
+    // remaining effects here via the idempotent finisher; each runs exactly once. (A legacy
+    // passed item predating the ledger has no `acceptance` and is treated as already-finished.) ──
+    if (st.status === "passed" && st.acceptance && !acceptanceComplete(st.acceptance)) {
+      const res = await finishAcceptance(st, item, (st.lastDeviations ?? []) as Deviation[], { memoryDetail: passedDetail(st) });
+      if (res === "paused") { pausedRun = true; break; } // still waiting on the commit gate
       // The item is already passed — fall through to the item gate, then the passed-skip.
       if (await maybeItemGate(item, st)) { pausedRun = true; break; }
     }
@@ -648,39 +720,18 @@ export async function cmdBuild(
         }
 
         if (!review || review.blocking.length === 0) {
-          st.status = "passed";
-          await ctx.store.save();
-          await d.reconcilePlan(ctx, item, gen.deviations, traceDir, nextSeq());
-          // ── Interactive: COMMIT gate — accept now (passed), defer the commit to the human. ──
-          if (steps.has("commit") && ctx.config.git.autoCommit && b.build.branch) {
-            st.lastDeviations = gen.deviations; // stash for the deferred commit on resume
-            await d.appendLearning(ctx.paths, {
-              item: item.id,
-              kind: "passed",
-              detail: `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`,
-              at: stamp(),
-            });
-            await writeCommitPause(ctx, { runId, itemId: item.id, itemTitle: item.title, planText: commitPlanText(), holdoutText: await readHoldout(ctx) });
-            b.build.paused = { kind: "commit", itemId: item.id, round: st.round };
-            await ctx.store.save();
-            ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
+          // Drive the idempotent finisher: mark passed → reconcile → commit (only onto the
+          // Sparra branch, never your main; opt-in) → memory. The durable ledger makes a kill
+          // anywhere in here lose nothing and double nothing — a resume completes the rest.
+          const memoryDetail = `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`;
+          const res = await finishAcceptance(st, item, gen.deviations, { memoryDetail });
+          ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
+          if (res === "paused") {
+            // ── Interactive: COMMIT gate — accepted (passed); the commit is deferred to the human. ──
             info(`${item.id}: paused before commit — review ${pauseDirRel(ctx, runId, item.id)}/pause.md, then \`sparra build\`.`);
             pausedRun = true;
             break;
           }
-          // Conventional commit of the accepted item — only onto the Sparra-created
-          // branch/worktree (never your main branch), and only when opted in.
-          if (ctx.config.git.autoCommit && b.build.branch) {
-            const cr = await d.commitItem(ctx, { item, deviations: gen.deviations, runId, workspaceDir, traceDir, traceSeq: nextSeq() });
-            detail(cr.commits ? `committed ${item.id} (${cr.commits} commit${cr.commits > 1 ? "s" : ""}) → ${b.build.branch}` : `commit skipped (${item.id})`);
-          }
-          await d.appendLearning(ctx.paths, {
-            item: item.id,
-            kind: "passed",
-            detail: `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`,
-            at: stamp(),
-          });
-          ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
           break;
         }
 

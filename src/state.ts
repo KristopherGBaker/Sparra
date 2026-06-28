@@ -41,6 +41,15 @@ export interface ItemState {
   contractAcked?: boolean;
   /** Reason recorded when a human ACCEPTED a round the evaluator failed (audit trail). */
   overrideReason?: string;
+
+  /** Durability bookkeeping for acceptance — each side effect runs exactly once across a
+   *  crash/resume. Once `status` is "passed" this ledger drives `finishAcceptance`: a missing
+   *  flag means that side effect still has to run; a kill between any two effects resumes
+   *  mid-finish and re-drives only the unfinished ones. `committed` marks the commit STEP
+   *  *resolved* — actually committed, human-skipped (commit gate), or N/A (autoCommit off / no
+   *  branch) — so it never repeats and is never silently dropped. (A legacy passed item from
+   *  before this field existed has no `acceptance` and is treated as already-finished.) */
+  acceptance?: { reconciled?: boolean; committed?: boolean; memoryAppended?: boolean };
 }
 
 export interface SparraState {

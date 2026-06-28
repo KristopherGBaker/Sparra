@@ -19,6 +19,8 @@
    - **`agent`** (default) — the cheap **`committer`** role reads the diff and proposes **one or more atomic Conventional Commits**, split by logical change (a refactor, the feature, a docs tweak become separate commits). The harness *executes* the plan (the model never runs git), appends a `Sparra-Item: <id>` trailer to each, and sweeps anything the plan misses into a final commit so nothing is lost. On any failure it falls back to `template`. The committer is read-only, confined to the workspace, and never sees the holdout. Configure its model/backend via `roles.committer` (defaults to a cheap model — e.g. Haiku).
    - **`template`** — one deterministic commit per item from the item title/summary (`feat: <item> … Sparra-Item: <id>`), no model call.
 
+   **Durable acceptance (crash-safe & idempotent).** Acceptance runs three side effects in order — **reconcile → commit → memory** — through a single finisher guarded by a durable ledger on the item (`acceptance: { reconciled, committed, memoryAppended }`). The item is marked `passed` and the ledger opened in **one atomic save**, and each flag is persisted the instant its step completes. So a process kill *anywhere* between "mark passed" and the side effects loses nothing and doubles nothing: on the next `sparra build`, a `passed` item with an incomplete ledger is detected at the top of the item loop (before the passed-skip) and the finisher re-drives **only the unfinished steps** — `commitItem` runs at most once, the `passed` memory line is appended at most once. `committed` records the commit *step* as resolved whether it actually committed, was human-skipped at the `commit` gate, or was N/A (autoCommit off / no Sparra branch), so it neither repeats nor is silently dropped. Both accept paths — the autonomous pass and the interactive `accept` (`--step`) — funnel through this one finisher; a `commit`-gate pause is just the finisher parking at the commit step and resuming there. `--fresh` clears the ledger with the rest of the per-item state.
+
 ---
 
 ## Exercisers
@@ -97,7 +99,7 @@ At a checkpoint the build writes a steering folder under **`.sparra/interactive/
 - **`commit`** — when `git.autoCommit` is on (and the build is on a Sparra branch), pauses *after* an item is accepted (it's already marked **passed**) but *before* the commit lands. `pause.md` lists the file set to be committed (holdout excluded); set `decision.json` to **`commit`** (the default — commit onto the Sparra branch) or **`skip`** (leave the change uncommitted; the item still counts as passed). With `autoCommit` off / no branch, this gate is inert and commit behavior is unchanged.
 - **`item`** — pauses *after* an item reaches a terminal status (passed / failed / abandoned / budget-exceeded) and *before* the next item starts (never after the final item). Set `decision.json` to **`continue`** (move to the next item — the default) or **`stop`** (end the run cleanly; a later `sparra build` resumes from the *next* item).
 
-Interactive mode is **remembered** so a plain `sparra build` resumes a pause — to leave it, start a new run with `sparra build --fresh` (or `sparra new`), which clears the mode and any pause. Only one item is paused at a time; a `--step` build refuses a `--only` that would skip the paused item (resume it first). As with the autonomous accept, a human `accept` marks the item passed *before* the reconcile/commit step, so a process kill in that sub-second window can skip those side effects on resume (same durability as the normal loop).
+Interactive mode is **remembered** so a plain `sparra build` resumes a pause — to leave it, start a new run with `sparra build --fresh` (or `sparra new`), which clears the mode and any pause. Only one item is paused at a time; a `--step` build refuses a `--only` that would skip the paused item (resume it first). A human `accept` marks the item passed *before* the reconcile/commit/memory side effects, and goes through the **same durable acceptance finisher as the autonomous loop**, so a process kill anywhere in that window loses nothing and double-applies nothing — see [durable acceptance](#durable-acceptance--resume) below.
 
 The conductor in the `/sparra-loop` skill drives this for you. (Inline TUI prompts are a planned follow-up; today's steps are `contract`, `round`, `commit`, and `item`.)
 
@@ -106,6 +108,29 @@ A `PostToolUse` hook formats/lints each file the generator writes **before** the
 
 ## Cross-run memory
 `.sparra/memory.md` is a durable, append-only log of short learnings (what was tried, and whether it passed / failed / pivoted / ran out of budget). Every autonomous role reads it at the start of each item so prior failures inform new work; `sparra reflect` appends to it. It's capped — oldest entries collapse into a one-line summary so it never grows unbounded.
+
+## Durable acceptance / resume
+Accepting an item runs three side effects — **reconcile** PLAN.md, **commit**, append the `passed`
+**memory** learning — and Sparra guarantees each happens **exactly once**, even if the process is
+killed mid-acceptance. Both accept paths (the autonomous pass and an interactive `accept`) funnel
+through a single idempotent finisher backed by a durable ledger on the item state
+(`acceptance: { reconciled, committed, memoryAppended }`):
+
+- The item is marked **`passed`** and its deviations persisted **before** any side effect runs, so a
+  resume always has the deviation context the reconcile/commit need.
+- Each step flips its ledger flag and persists it **immediately** after the step resolves; on resume
+  a passed item with an incomplete ledger re-drives only the *unfinished* steps at the top of the
+  item loop, before the passed-skip — nothing is lost.
+- A flag-save can itself be lost (crash *after* a side effect, *before* its flag persists), so the
+  side effects are also **idempotent**: `commitItem` finds nothing left to stage and no-ops on a
+  re-run; the `passed` memory append is **deduped** against memory.md by item id (skipped if already
+  present); reconcile rewrites PLAN.md to reflect reality rather than appending. The flag prevents the
+  normal double-run; idempotency closes the lost-flag window — together they make acceptance
+  exactly-once.
+
+The `committed` flag marks the commit **step** resolved — actually committed, human-skipped (commit
+gate), or N/A (`autoCommit` off / no branch) — so it neither repeats nor is silently dropped.
+`--fresh` clears the ledger along with the rest of the run state.
 
 ## Calibration (matching your taste)
 Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparra/calibration/slop/` (avoid this). With `rubric.useCalibration` on, the evaluator reads them before scoring originality/craft.

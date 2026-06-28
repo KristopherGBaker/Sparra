@@ -132,6 +132,21 @@ export async function appendLearning(paths: Paths, l: Learning, caps: MemoryCaps
   }
 }
 
+/**
+ * True when memory.md already holds a learning of `kind` for `item`. The acceptance finisher
+ * uses this as an idempotency guard: `appendLearning` is append-only (not idempotent), so a
+ * crash AFTER the write but BEFORE its durable flag saves would otherwise re-append a duplicate
+ * on resume. Checking the file (not the flag) makes the memory step exactly-once even when the
+ * flag-save is lost. Reads the live entries (post-summary-collapse), so a recent passed line is
+ * always seen.
+ */
+export async function hasLearning(paths: Paths, item: string, kind: LearningKind): Promise<boolean> {
+  const text = await readText(paths.memory);
+  if (!text) return false;
+  const needle = `${item} · ${kind.toUpperCase()}:`;
+  return splitMemory(text).entries.some((ln) => ln.includes(needle));
+}
+
 /** Read memory.md back as injectable text (most-recent-first cap by chars). Returns "" if empty. */
 export async function readMemory(paths: Paths, caps: MemoryCaps = DEFAULT_CAPS): Promise<string> {
   const text = await readText(paths.memory);
