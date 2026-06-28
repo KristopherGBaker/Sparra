@@ -6,7 +6,7 @@ import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { readHoldout, assertNoHoldoutLeak } from "./holdout.ts";
+import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./holdout.ts";
 import { contractModeClauses } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 
@@ -88,7 +88,8 @@ export async function negotiateContract(
       effort: genRole.effort,
       cwd: ctx.root,
       tools: ["Read", "Glob", "Grep"],
-      ...readOnlyGuard(ctx),
+      // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
+      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
       maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,
@@ -107,7 +108,8 @@ export async function negotiateContract(
       effort: evalRole.effort,
       cwd: ctx.root,
       tools: ["Read", "Glob", "Grep"],
-      ...readOnlyGuard(ctx),
+      // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
+      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
       maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,

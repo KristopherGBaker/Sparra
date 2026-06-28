@@ -128,7 +128,7 @@ describe("generateItem — build read scope (extraReadDirs)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("includes the repo root plus extras when building on a separate worktree", async () => {
+  it("DROPS the holdout-bearing repo root but keeps clean extras on a separate worktree (no holdout leak)", async () => {
     const { ctx, dir } = await ctxFor("cli");
     ctx.config.build.extraReadDirs = ["/opt/models"];
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-wt-"));
@@ -137,8 +137,10 @@ describe("generateItem — build read scope (extraReadDirs)", () => {
       ctx, item, contractText: "c", workspaceDir: wt, traceDir: wt, traceSeq: 1,
       runSessionFn: fakeRun((p) => (dirs = p.additionalDirectories)),
     });
-    expect(dirs).toContain(dir); // repo root
-    expect(dirs).toContain("/opt/models"); // extra
+    // The repo root holds .sparra/HOLDOUT.md — the generator (a forbid role) must NOT get it as a
+    // readable dir. A clean extra dir is still granted.
+    expect(dirs).not.toContain(dir);
+    expect(dirs).toContain("/opt/models");
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(wt, { recursive: true, force: true });
   });

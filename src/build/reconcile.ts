@@ -3,6 +3,7 @@ import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import { plannerWriteScope } from "../sdk/permissions.ts";
+import { makeHoldoutReadDecider } from "./holdout.ts";
 import { appendText, writeText } from "../util/io.ts";
 import { detail, info } from "../util/log.ts";
 import type { Deviation } from "./generate.ts";
@@ -73,7 +74,9 @@ ${deviations.map((d) => `- [${d.scope}] ${d.summary} — ${d.rationale}`).join("
     cwd: ctx.root,
     tools: ["Read", "Edit", "Write"],
     permissionMode: "default",
-    canUseTool: plannerWriteScope(ctx.paths.plan, ctx.config.permission.denyBashContains),
+    // Forbid role in the repo root: it edits PLAN.md (read by the builder), so deny on-disk holdout
+    // reads — a read here could otherwise be laundered into PLAN.md and reach the generator.
+    canUseTool: plannerWriteScope(ctx.paths.plan, ctx.config.permission.denyBashContains, makeHoldoutReadDecider(ctx, ctx.root)),
     maxTurns: 20,
     traceDir,
     traceSeq,

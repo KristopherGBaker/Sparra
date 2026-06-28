@@ -1,6 +1,7 @@
 import type { Ctx } from "../context.ts";
 import { runSession } from "../sdk/session.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
+import { makeHoldoutReadDecider } from "./holdout.ts";
 import { extractJson } from "../util/extract.ts";
 import { readJson, readText, writeJson, exists } from "../util/io.ts";
 import { info, warn } from "../util/log.ts";
@@ -67,7 +68,8 @@ Order matters: earlier items should not depend on later ones.`;
     effort: role.effort,
     cwd: ctx.root,
     tools: ["Read", "Glob", "Grep"],
-    ...readOnlyGuard(ctx),
+    // Forbid role in the repo root (which holds .sparra/HOLDOUT.md): deny on-disk holdout reads.
+    ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, ctx.root)] }),
     maxTurns: 20,
     traceDir,
     traceSeq: 1,

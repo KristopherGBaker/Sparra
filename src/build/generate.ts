@@ -9,7 +9,7 @@ import { extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
 import { info } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { readHoldout, assertNoHoldoutLeak } from "./holdout.ts";
+import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy, selfVerifyGuidance } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
@@ -81,8 +81,11 @@ ${contractText}
 ---
 ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${conventions}${memory}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n` : ""}`;
 
-  // Isolation wall: the builder must never see the evaluator's holdout checks.
+  // Isolation wall: the builder must never see the evaluator's holdout checks — not in its prompt
+  // (assertNoHoldoutLeak) NOR off disk. The read-scope drops any holdout-bearing dir and the
+  // deny-hook blocks a Read/Bash of the holdout/.sparra, matching the interactive role-runner.
   assertNoHoldoutLeak("generator", task, await readHoldout(ctx));
+  const genReadDirs = buildReadDirs(ctx, workspaceDir, { excludeHoldoutScope: true });
 
   info(`Generating ${item.id} with ${role.model}${args.fresh ? " (fresh restart)" : args.resumeSessionId ? " (resumed)" : ""}…`);
   const res = await run({
@@ -95,7 +98,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     baseUrl: role.baseUrl,
     apiKey: role.apiKey,
     cwd: workspaceDir,
-    additionalDirectories: buildReadDirs(ctx, workspaceDir),
+    additionalDirectories: genReadDirs,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
     skills: skillsForRole(ctx, "generator"),
     // Native-sandbox intent (Codex honors it; Claude ignores it). danger-full-access is
@@ -105,7 +108,12 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
       hasBranch: !!ctx.store.data.build.branch,
       roleLabel: `generator-${item.id}`,
     }),
-    ...scopedWriterGuard(ctx, [workspaceDir], { format: true, verify: true }),
+    ...scopedWriterGuard(ctx, [workspaceDir], {
+      format: true,
+      verify: true,
+      readScopes: [workspaceDir, ...(genReadDirs ?? [])],
+      extraDeny: [makeHoldoutReadDecider(ctx, workspaceDir)],
+    }),
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,

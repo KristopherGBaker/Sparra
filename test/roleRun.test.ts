@@ -327,6 +327,39 @@ describe("runRole — holdout never reaches the conductor", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("blocks PATHLESS and ancestor Glob/Grep over a holdout-bearing cwd (cwd=root roles)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const deny = makeHoldoutReadDecider(ctx, dir); // workspace = repo root, which holds .sparra/HOLDOUT.md
+    // Pathless search → searches the cwd (the holdout-bearing root) → its content reaches the holdout.
+    expect(deny("Grep", { pattern: "byte-identical" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/*.md" })).toBeTruthy();
+    // Explicit search root that IS / CONTAINS the holdout scope.
+    expect(deny("Grep", { path: ".", pattern: "x" })).toBeTruthy(); // "." → root, contains .sparra
+    expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/HOLDOUT.md" })).toBeTruthy(); // pattern names the holdout
+    // A search rooted at a NON-holdout subdir is fine.
+    expect(deny("Grep", { path: "src", pattern: "x" })).toBeNull();
+    expect(deny("Glob", { path: "src", pattern: "*.ts" })).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the holdout Bash deny resists glob/case evasion (a forbid role keeps Bash)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const deny = makeHoldoutReadDecider(ctx, dir);
+    // Shell-glob expansion that never spells out ".sparra"/"HOLDOUT" literally (the evasion an
+    // adversarial evaluator found): a dot-prefixed glob can expand into the hidden .sparra dir.
+    expect(deny("Bash", { command: "cat .[a-z]*/H*" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat .s*/*OUT*" })).toBeTruthy();
+    expect(deny("Bash", { command: "cd .sp* && cat *.md" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat .*/HOLD*" })).toBeTruthy();
+    expect(deny("Bash", { command: "head -5 holdout.md" })).toBeTruthy(); // case-insensitive
+    // Ordinary verify/build commands (no hidden-glob, no holdout/.sparra token) still pass through.
+    expect(deny("Bash", { command: "npm test" })).toBeNull();
+    expect(deny("Bash", { command: "ls src/*.ts" })).toBeNull();
+    expect(deny("Bash", { command: "git diff --stat" })).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("repeated role runs get distinct trace dirs (no overwrite)", async () => {
     const { ctx, dir } = await makeCtx();
     const rec = recorder();

@@ -28,10 +28,16 @@ export function resolvePermissionMode(preset: PermissionPreset): PermissionMode 
  * (e.g. PLAN.md). Used by the interactive planner and the no-question planner
  * sub-runs (log-finding, reconcile) in 'default' mode, where canUseTool is the gate.
  */
-export function plannerWriteScope(allowedFile: string, denyBashContains: string[]): CanUseTool {
+export function plannerWriteScope(
+  allowedFile: string,
+  denyBashContains: string[],
+  extraDeny?: (toolName: string, input: unknown) => string | null
+): CanUseTool {
   return async (toolName, input) => {
     const reason =
-      denyWriteNotFile(toolName, input, allowedFile) ?? denyBashMutation(toolName, input, denyBashContains);
+      extraDeny?.(toolName, input) ??
+      denyWriteNotFile(toolName, input, allowedFile) ??
+      denyBashMutation(toolName, input, denyBashContains);
     if (reason) return { behavior: "deny", message: reason };
     return { behavior: "allow", updatedInput: input };
   };

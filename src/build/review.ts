@@ -7,6 +7,8 @@ import { skillsForRole } from "../sdk/skills.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { readText, writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
+import { buildReadDirs } from "./readscope.ts";
+import { makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import type { WorkItem } from "./types.ts";
 
@@ -82,6 +84,7 @@ ${contractText}
 ${conventions}Review for substance per your instructions and emit the JSON findings block. Clean code → empty findings.`;
 
   info(`Code-reviewing ${item.id} (round ${round}) with ${role.model}…`);
+  const reviewReadDirs = buildReadDirs(ctx, workspaceDir, { excludeHoldoutScope: true });
   const res = await run({
     role: `reviewer-${item.id}-r${round}`,
     prompt: task,
@@ -90,10 +93,15 @@ ${conventions}Review for substance per your instructions and emit the JSON findi
     model: role.model,
     effort: role.effort,
     cwd: workspaceDir,
-    additionalDirectories: workspaceDir !== ctx.root ? [ctx.root] : undefined,
+    // Forbid role: drop holdout-bearing dirs from the read scope (NOT a raw [ctx.root], which
+    // would expose .sparra/HOLDOUT.md when building on a worktree) and deny on-disk holdout reads.
+    additionalDirectories: reviewReadDirs,
     tools: ["Read", "Glob", "Grep", "Bash"],
     skills: skillsForRole(ctx, "reviewer"),
-    ...readOnlyGuard(ctx),
+    ...readOnlyGuard(ctx, {
+      readScopes: [workspaceDir, ...(reviewReadDirs ?? [])],
+      extraDeny: [makeHoldoutReadDecider(ctx, workspaceDir)],
+    }),
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir: args.traceDir,

@@ -12,7 +12,11 @@ import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
-import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout } from "./holdout.ts";
+import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout, makeHoldoutReadDecider } from "./holdout.ts";
+
+// Re-exported for the interactive runner's existing importers (and tests) — the implementation
+// now lives in holdout.ts so the autonomous build-loop forbid roles share the exact same wall.
+export { makeHoldoutReadDecider };
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance } from "./modeText.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -182,46 +186,6 @@ async function resolveHoldout(req: RoleRunRequest): Promise<string> {
     return (await readText(req.holdoutPath)) ?? "";
   }
   return readHoldout(req.ctx);
-}
-
-/** A PreToolUse decider that denies a forbid role from reading the holdout file(s) off disk —
- *  closing the gap that the prompt-leak check alone can't (Read/Bash could `cat HOLDOUT.md`).
- *  (Claude backend only; Codex ignores hooks — see the runner doc for that residual.) */
-export function makeHoldoutReadDecider(
-  ctx: Ctx,
-  workspace: string,
-  explicitPath?: string
-): (tool: string, input: unknown) => string | null {
-  // Protect the holdout file(s) AND the whole .sparra/ machinery dir — which also
-  // holds the frozen holdout, evaluator verdicts, and evaluator traces (all
-  // holdout-derived). A forbid role never legitimately needs to read .sparra.
-  const sparraDir = path.resolve(ctx.paths.dir);
-  const protectedFiles = new Set(
-    [ctx.paths.holdout, ctx.paths.frozenHoldout, explicitPath].filter(Boolean).map((p) => path.resolve(p as string))
-  );
-  const basenames = new Set([...protectedFiles].map((p) => path.basename(p)));
-  const resolve = (p: string) => (path.isAbsolute(p) ? path.resolve(p) : path.resolve(workspace, p));
-  const within = (child: string, parent: string) => {
-    const rel = path.relative(parent, child);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  };
-  const blockedTarget = (t: string) => {
-    const abs = resolve(t);
-    return protectedFiles.has(abs) || within(abs, sparraDir);
-  };
-  const DENY = "Holdout/.sparra is evaluator-only and not readable by this role.";
-  return (tool, input) => {
-    const i = input as { file_path?: string; path?: string; command?: string } | undefined;
-    if (tool === "Read" || tool === "Glob" || tool === "Grep") {
-      const target = i?.file_path ?? i?.path;
-      if (target && blockedTarget(target)) return DENY;
-    }
-    if (tool === "Bash") {
-      const cmd = i?.command ?? "";
-      if (cmd.includes(".sparra") || cmd.includes("HOLDOUT") || [...basenames].some((b) => cmd.includes(b))) return DENY;
-    }
-    return null;
-  };
 }
 
 /** Strip holdout quotes from a verdict's conductor-facing strings (the evaluator may
