@@ -64,6 +64,8 @@ ${color.bold("Commands")}
   new ["<title>"]                               start a fresh plan→build cycle (archives the finished one)
   role run --kind <r> [--backend b] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
                                                 run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
+  eval [dir] [--contract f] [--backend b] [--holdout f] [--out f]
+                                                grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator)
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 
@@ -138,6 +140,14 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
       break;
+    case "eval": {
+      // alias: `sparra eval [dir] [--contract f] [--holdout f] [--backend b] [--out f]`
+      // — a standalone evaluator on a WIP tree (defaults the brief).
+      const evalFlags: Record<string, string | boolean> = { ...flags, kind: "evaluator" };
+      if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
+      await cmdRoleRun(ctx, evalFlags);
+      break;
+    }
     case "resume":
       await resume(ctx);
       break;

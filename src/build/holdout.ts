@@ -19,6 +19,15 @@ export function holdoutSection(text: string): string {
   return `\nHOLDOUT ACCEPTANCE CHECKS — the builder NEVER saw these; they guard against overfitting to the contract. Exercise each against the artifact and treat ANY holdout failure as BLOCKING (it fails the item regardless of rubric score):\n---\n${text.trim()}\n---\n`;
 }
 
+/** Redact any verbatim holdout line from conductor/human-facing text — used for
+ *  role-run verdicts and interactive pause notes so the holdout the evaluator may
+ *  quote never reaches the human/generator. */
+export function redactHoldout(text: string, holdoutText: string): string {
+  let out = text;
+  for (const line of holdoutLines(holdoutText)) out = out.split(line).join("[redacted: holdout]");
+  return out;
+}
+
 /** Substantive holdout lines (strip markdown markers; ignore short/structural lines). */
 export function holdoutLines(text: string): string[] {
   return text

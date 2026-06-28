@@ -20,7 +20,8 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   }
   const briefText = typeof flags["brief-text"] === "string" ? (flags["brief-text"] as string) : undefined;
   const briefPath = typeof flags.brief === "string" ? (flags.brief as string) : undefined;
-  if (!briefText && !briefPath) {
+  // The evaluator can grade a WIP tree with a default brief; other roles need one.
+  if (!briefText && !briefPath && kind !== "evaluator") {
     err("provide a brief: --brief <file> or --brief-text \"…\"");
     process.exitCode = 1;
     return;

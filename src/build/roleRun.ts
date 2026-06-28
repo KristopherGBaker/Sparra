@@ -10,7 +10,7 @@ import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { randomUUID } from "node:crypto";
-import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines } from "./holdout.ts";
+import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout } from "./holdout.ts";
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText } from "./modeText.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -189,25 +189,16 @@ export function makeHoldoutReadDecider(
   };
 }
 
-/** Redact any verbatim holdout line from conductor-facing text (verdict evidence/
- *  blocking/notes) — the evaluator may quote holdout, and that must not reach the
- *  conductor via `--out` or the MCP payload. */
-function redactHoldout(text: string, lines: string[]): string {
-  let out = text;
-  for (const line of lines) out = out.split(line).join("[redacted: holdout]");
-  return out;
-}
-
-/** Strip holdout quotes from a verdict's conductor-facing strings. */
+/** Strip holdout quotes from a verdict's conductor-facing strings (the evaluator may
+ *  quote holdout; that must not reach the conductor via `--out` or the MCP payload). */
 function redactVerdict(v: Verdict, holdoutText: string): Verdict {
-  const lines = holdoutLines(holdoutText);
-  if (!lines.length) return v;
+  if (!holdoutLines(holdoutText).length) return v;
   return {
     ...v,
-    blocking: v.blocking.map((b) => redactHoldout(b, lines)),
-    notes: redactHoldout(v.notes, lines),
+    blocking: v.blocking.map((b) => redactHoldout(b, holdoutText)),
+    notes: redactHoldout(v.notes, holdoutText),
     // Rebuild each assertion to the exact schema (no spread) so no stray field survives.
-    assertions: v.assertions.map((a) => ({ id: a.id, pass: a.pass, evidence: redactHoldout(a.evidence, lines) })),
+    assertions: v.assertions.map((a) => ({ id: a.id, pass: a.pass, evidence: redactHoldout(a.evidence, holdoutText) })),
   };
 }
 
@@ -273,8 +264,12 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const workspace = req.workspace ?? ctx.root;
   const run = req.runSessionFn ?? runSession;
 
-  const brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
-  if (!brief.trim()) throw new Error("runRole requires a non-empty brief (brief or briefPath).");
+  let brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
+  if (!brief.trim()) {
+    // The standalone WIP-eval case: grading an existing tree needs no bespoke brief.
+    if (isEvaluator(roleKind)) brief = `Evaluate the artifact in ${workspace} against the contract.`;
+    else throw new Error(`runRole(${roleKind}) requires a non-empty brief (brief or briefPath).`);
+  }
   const contract = req.contract ?? (req.contractPath ? (await readText(req.contractPath)) ?? "" : "");
 
   // The runner — not the conductor — is the only context that reads holdout.

@@ -128,6 +128,15 @@ describe("runRole — safety intent + wiring", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("the evaluator runs with a default brief (standalone WIP eval), but other roles require one", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", runSessionFn: ev.fn }); // no brief
+    expect(ev.calls[0]!.prompt).toContain("Evaluate the artifact in");
+    await expect(runRole({ ctx, roleKind: "generator", runSessionFn: recorder().fn })).rejects.toThrow(/brief/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("the backend is overridable (cross-model: e.g. a Codex evaluator)", async () => {
     const { ctx, dir } = await makeCtx();
     const rec = recorder();

@@ -35,11 +35,15 @@ export async function negotiateContract(
 ): Promise<ContractResult> {
   const file = ctx.paths.contractFile(item.id);
 
-  // Resume: if a contract was already agreed, reuse it.
+  // Resume: if a contract was already agreed, reuse it. A human may have edited it
+  // (interactive contract steering), so leak-check the reused text here — fail clearly
+  // now rather than later when the generator's own guard catches it.
   const prior = await readText(file);
   if (prior && prior.includes(SECTION)) {
     info(`Contract for ${item.id} already agreed — reusing.`);
-    return { text: prior.split(SECTION)[1]!.trim(), agreed: true, tracesUsed: 0 };
+    const reused = prior.split(SECTION)[1]!.trim();
+    assertNoHoldoutLeak("contract (reused/edited)", reused, await readHoldout(ctx));
+    return { text: reused, agreed: true, tracesUsed: 0 };
   }
 
   const genRole = ctx.config.roles.contractGenerator;
