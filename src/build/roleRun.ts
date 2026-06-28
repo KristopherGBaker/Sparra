@@ -219,6 +219,7 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
       scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
       weightedTotal: 0,
       verdict: "fail",
+      exerciseStatus: "ran", // a missing verdict is a real failure, not a block
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -228,7 +229,9 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
     parsed.scores[c] = Math.max(0, Math.min(100, isFinite(v) ? v : 0));
   }
   const weighted = computeWeighted(ctx, parsed.scores);
-  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass";
+  // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), regardless of
+  // what the model claimed or the score, so an unverified item is never silently accepted.
+  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass" && parsed.exerciseStatus !== "blocked";
   // Normalize to the EXACT schema — the evaluator's JSON is untrusted model output, so
   // drop any extra properties (e.g. a smuggled `holdoutQuote`) that would otherwise ride
   // through to conductor-facing artifacts.
@@ -244,6 +247,7 @@ function parseVerdict(ctx: Ctx, resultText: string): Verdict {
     scores: parsed.scores,
     weightedTotal: weighted,
     verdict: meets ? "pass" : "fail",
+    exerciseStatus: parsed.exerciseStatus === "blocked" ? "blocked" : "ran",
     blocking: (Array.isArray(parsed.blocking) ? parsed.blocking : []).map((b) => String(b)),
     notes: String(parsed.notes ?? ""),
   };

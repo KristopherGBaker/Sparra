@@ -265,6 +265,19 @@ describe("runRole — exercising evaluator scratch + integrity guard", () => {
     expect(r.verdict?.blocking[0]).toContain("src/App.ts");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("a blocked exercise can NEVER pass via parseVerdict, even if the model claims pass + high score", async () => {
+    const { ctx, dir } = await makeCtx();
+    const blockedButPass =
+      '```json\n{"assertions":[],"scores":{"design":95,"originality":95,"craft":95,"functionality":95},' +
+      '"weightedTotal":95,"verdict":"pass","exerciseStatus":"blocked","blocking":["never ran"],"notes":"n"}\n```';
+    const ev = recorder(blockedButPass);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.exerciseStatus).toBe("blocked");
+    expect(r.verdict?.verdict).toBe("fail"); // inconclusive → never accepted
+    expect(r.ok).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("runRole — holdout never reaches the conductor", () => {

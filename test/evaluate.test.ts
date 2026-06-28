@@ -146,4 +146,37 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     expect(written).not.toContain(secret); // verdict file (incl. raw <details>) is clean
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("carries exerciseStatus:blocked from the evaluator JSON, and defaults junk/absent to ran", async () => {
+    const blockedJson =
+      '```json\n{"assertions":[],"scores":{"design":80,"originality":80,"craft":80,"functionality":80},' +
+      '"verdict":"fail","exerciseStatus":"blocked","blocking":["EPERM — could not run tests"],"notes":"n"}\n```';
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(blockedJson), cleanIntegrityDeps);
+    expect(out.verdict.exerciseStatus).toBe("blocked");
+    expect(out.verdict.scores.design).toBe(80); // score preserved (H5), not zeroed
+
+    // Absent → "ran"; a garbage value → "ran" (only the exact string "blocked" blocks). (H4)
+    const junkJson =
+      '```json\n{"assertions":[],"scores":{"design":40,"originality":40,"craft":40,"functionality":40},' +
+      '"verdict":"fail","exerciseStatus":"weird","blocking":[],"notes":""}\n```';
+    const junk = await run(ctx, dir, recorder(junkJson), cleanIntegrityDeps);
+    expect(junk.verdict.exerciseStatus).toBe("ran");
+    const plain = await run(ctx, dir, recorder(PASS_JSON), cleanIntegrityDeps);
+    expect(plain.verdict.exerciseStatus).toBe("ran");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a blocked exercise can NEVER pass, even if the model claims pass with a high score (H3)", async () => {
+    // Contradictory verdict: model says pass + 90s but admits the exercise was blocked.
+    const blockedButPass =
+      '```json\n{"assertions":[{"id":1,"pass":true,"evidence":"asserted"}],' +
+      '"scores":{"design":90,"originality":90,"craft":90,"functionality":90},"weightedTotal":90,' +
+      '"verdict":"pass","exerciseStatus":"blocked","blocking":["EPERM — never ran the suite"],"notes":"n"}\n```';
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(blockedButPass), cleanIntegrityDeps);
+    expect(out.verdict.exerciseStatus).toBe("blocked");
+    expect(out.verdict.verdict).toBe("fail"); // never accepted — unverified
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

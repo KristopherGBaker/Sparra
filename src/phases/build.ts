@@ -530,6 +530,9 @@ export async function cmdBuild(
     st.status = "building";
     let feedback: string | undefined;
     let fresh = false;
+    // Whether the most recent round's exercise was BLOCKED (inconclusive) rather than a real fail —
+    // used so the terminal message doesn't call an unverifiable item a behavioral failure.
+    let lastBlocked = false;
     // Resume only a generator session from the SAME backend as the role we're about to run —
     // a session id isn't portable, so a fallback to another provider must start fresh.
     const resumeFor = (key: string): string | undefined =>
@@ -678,9 +681,10 @@ export async function cmdBuild(
         st.lastEvaluatedRound = st.round;
         st.lastDeviations = gen.deviations;
         const passing = ev.verdict.verdict === "pass";
+        const roundBlocked = ev.verdict.exerciseStatus === "blocked";
         const defaultFeedback = passing
           ? ""
-          : `Address these blocking issues from the evaluator:\n${ev.verdict.blocking.map((x) => `- ${x}`).join("\n")}\nFailed assertions: ${ev.verdict.assertions.filter((a) => !a.pass).map((a) => `#${a.id}`).join(", ") || "(see verdict)"}`;
+          : `${roundBlocked ? "NOTE: the exercise was BLOCKED (inconclusive — it could not run; environment, not the artifact), so this is not a behavioral failure. Make the artifact exercisable, or accept/abandon as appropriate.\n\n" : ""}Address these blocking issues from the evaluator:\n${ev.verdict.blocking.map((x) => `- ${x}`).join("\n")}\nFailed assertions: ${ev.verdict.assertions.filter((a) => !a.pass).map((a) => `#${a.id}`).join(", ") || "(see verdict)"}`;
         await writeRoundPause(ctx, {
           runId,
           itemId: item.id,
@@ -753,6 +757,29 @@ export async function cmdBuild(
         continue;
       }
 
+      // A BLOCKED exercise is inconclusive (environment, not the artifact): don't pivot, don't
+      // advance the fail streak, keep the score — just surface it and steer toward exercisability.
+      const blocked = ev.verdict.exerciseStatus === "blocked";
+      lastBlocked = blocked;
+      if (blocked) {
+        warn(`${item.id}: exercise BLOCKED in round ${st.round} — could not verify (environment, not the artifact); not a behavioral fail, not pivoting.`);
+        await d.appendLearning(ctx.paths, {
+          item: item.id,
+          kind: "note",
+          detail: `round ${st.round}: exercise BLOCKED (inconclusive) — ${(ev.verdict.blocking.slice(0, 2).join("; ") || ev.verdict.notes).slice(0, 200)}`,
+          at: stamp(),
+        });
+        await ctx.store.save();
+        if (overBudget(st)) {
+          await haltOnBudget("evaluate");
+          break;
+        }
+        if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        feedback = `The exercise could NOT run (blocked): ${(ev.verdict.blocking.slice(0, 3).join("; ") || ev.verdict.notes).slice(0, 300)}. This is NOT a behavioral failure — ensure the artifact is exercisable (its tests/build can actually run) so it can be verified.`;
+        fresh = false;
+        continue;
+      }
+
       const decision = updateStreaksAndDecide(st, ev.verdict, ctx.config);
       st.criterionFailStreak = decision.streaks;
       await ctx.store.save();
@@ -789,13 +816,24 @@ export async function cmdBuild(
     const finalStatus = st.status as ItemState["status"];
     if (finalStatus !== "passed" && finalStatus !== "budget_exceeded") {
       st.status = "failed";
-      warn(`${item.id} did not pass within ${ctx.config.build.maxRoundsPerItem} rounds (best score ${st.lastScore ?? 0}).`);
-      await d.appendLearning(ctx.paths, {
-        item: item.id,
-        kind: "failed",
-        detail: `did not pass in ${ctx.config.build.maxRoundsPerItem} rounds; best score ${st.lastScore ?? 0}, ${st.pivots} pivot(s), $${(st.costUsd ?? 0).toFixed(3)} spent.`,
-        at: stamp(),
-      });
+      if (lastBlocked) {
+        // Inconclusive, not a behavioral failure: the exercise never ran, so we couldn't verify.
+        warn(`${item.id} is INCONCLUSIVE — the exercise was BLOCKED (could not run; environment, not the artifact) and it was never verified within ${ctx.config.build.maxRoundsPerItem} rounds. Needs human attention; not a behavioral failure.`);
+        await d.appendLearning(ctx.paths, {
+          item: item.id,
+          kind: "note",
+          detail: `INCONCLUSIVE after ${ctx.config.build.maxRoundsPerItem} rounds — exercise BLOCKED (never ran); not verified, not a behavioral failure. $${(st.costUsd ?? 0).toFixed(3)} spent.`,
+          at: stamp(),
+        });
+      } else {
+        warn(`${item.id} did not pass within ${ctx.config.build.maxRoundsPerItem} rounds (best score ${st.lastScore ?? 0}).`);
+        await d.appendLearning(ctx.paths, {
+          item: item.id,
+          kind: "failed",
+          detail: `did not pass in ${ctx.config.build.maxRoundsPerItem} rounds; best score ${st.lastScore ?? 0}, ${st.pivots} pivot(s), $${(st.costUsd ?? 0).toFixed(3)} spent.`,
+          at: stamp(),
+        });
+      }
     }
     await ctx.store.save();
 

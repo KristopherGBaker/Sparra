@@ -14,6 +14,12 @@ export interface PivotDecision {
  * signal a pivot (discard & restart the item from scratch rather than patching).
  */
 export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config: SparraConfig): PivotDecision {
+  // A BLOCKED exercise is inconclusive (environment, not the artifact) — it must not move the
+  // GAN-pivot machinery at all: don't advance any streak, never pivot. Keeps correct work from
+  // being discarded just because the exercise couldn't run.
+  if (verdict.exerciseStatus === "blocked") {
+    return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
+  }
   const streaks = { ...item.criterionFailStreak };
   let pivot = false;
   let criterion: string | undefined;

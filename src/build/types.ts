@@ -19,6 +19,11 @@ export interface Verdict {
   scores: { design: number; originality: number; craft: number; functionality: number };
   weightedTotal: number;
   verdict: "pass" | "fail";
+  /** Did the EXERCISE actually run? "ran" (default/absent) = a real behavioral grade. "blocked" =
+   *  the exercise could not run due to the ENVIRONMENT (sandbox/EPERM/missing tool/simulator), NOT
+   *  the artifact — an INCONCLUSIVE result: the build loop must not count it as a behavioral fail
+   *  or GAN-pivot on it. */
+  exerciseStatus?: "ran" | "blocked";
   blocking: string[];
   notes: string;
 }

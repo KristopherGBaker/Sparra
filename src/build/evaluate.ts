@@ -130,6 +130,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
       scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
       weightedTotal: 0,
       verdict: "fail",
+      exerciseStatus: "ran", // a missing verdict is a real failure, not a block
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -142,11 +143,15 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     const weighted = computeWeighted(ctx, parsed.scores);
     const modelSaidPass = parsed.verdict === "pass";
     const meetsThreshold = weighted >= ctx.config.rubric.passThreshold;
+    // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), so an
+    // unverified item is never silently accepted regardless of the model's verdict or score.
+    const isBlocked = parsed.exerciseStatus === "blocked";
     verdict = {
       assertions: Array.isArray(parsed.assertions) ? parsed.assertions : [],
       scores: parsed.scores,
       weightedTotal: weighted,
-      verdict: modelSaidPass && meetsThreshold ? "pass" : "fail",
+      verdict: modelSaidPass && meetsThreshold && !isBlocked ? "pass" : "fail",
+      exerciseStatus: isBlocked ? "blocked" : "ran",
       blocking: Array.isArray(parsed.blocking) ? parsed.blocking : [],
       notes: parsed.notes ?? "",
     };

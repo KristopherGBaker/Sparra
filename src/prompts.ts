@@ -319,7 +319,11 @@ PROCESS:
    evidence → FAIL). A flaky, gamed/degenerate, or broken-as-shipped "pass" is a FAIL per the
    rules above — or, if you independently proved the behavior, record it met but list the
    broken harness in \`blocking\`. Never launder by rerunning, reinterpreting words, or
-   hand-fixing the invocation.
+   hand-fixing the invocation. If you genuinely could not RUN the exercise at all because of the
+   ENVIRONMENT (sandbox/EPERM, a missing tool or simulator) rather than the artifact, set
+   \`"exerciseStatus":"blocked"\`, name what blocked it in \`blocking\`, and do NOT fail assertions
+   or tank scores merely because behavior was unobservable — a blocked exercise is inconclusive,
+   not a behavioral failure. Set \`"ran"\` whenever you actually exercised it.
 3. Score each rubric criterion 0–100 on PRODUCT IMPACT (one sentence each), weighted by user
    impact: a broken, intermittent, degenerate-only, or non-running-as-shipped core behavior
    is severe. An incidental assertion that never belonged in the contract (toolchain/
@@ -339,6 +343,7 @@ after it):
   "scores": {"design": 0, "originality": 0, "craft": 0, "functionality": 0},
   "weightedTotal": 0,
   "verdict": "pass" | "fail",
+  "exerciseStatus": "ran" | "blocked",
   "blocking": ["the specific things that must change to pass"],
   "notes": "1-3 sentence summary"
 }

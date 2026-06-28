@@ -96,4 +96,18 @@ describe("updateStreaksAndDecide", () => {
     expect(result.pivot).toBe(false);
     expect(result.streaks.design).toBe(0); // reset because score >= threshold
   });
+
+  it("a BLOCKED exercise never pivots and never advances a streak — even repeated N+1 times", () => {
+    const cfg = defaultConfig(); // N = 3
+    const blocked: Verdict = { ...makeVerdict({ design: 0, originality: 0, craft: 0, functionality: 0 }), exerciseStatus: "blocked" };
+
+    // Feed it more than N consecutive blocked rounds with 0 scores — must never pivot or count.
+    let item = makeItem({ design: 5 }); // even with a pre-existing streak
+    for (let i = 0; i < cfg.pivot.N + 1; i++) {
+      const result = updateStreaksAndDecide(item, blocked, cfg);
+      expect(result.pivot).toBe(false);
+      expect(result.streaks.design).toBe(5); // unchanged — blocked doesn't move streaks
+      item = makeItem(result.streaks);
+    }
+  });
 });
