@@ -80,6 +80,23 @@ Limits are tracked per **backend** (a plan window is account-wide across that pr
 
 Two stop conditions keep it sane (the loop must never run forever): each wait is bounded by `maxWaitSec`, and the whole run gives up after `maxRestarts` wait cycles — stopping **cleanly** (phase stays `build`, the item is left mid-flight, nothing marked failed). State is checkpointed to disk *before* each sleep, so a process kill mid-wait loses nothing: re-run `sparra build` to resume. `sparra status` shows a paused build as *paused on a provider limit — resumes ~HH:MM* rather than looking hung.
 
+## Interactive / human-in-the-loop (`sparra build --step`)
+The loop is autonomous by default. Pass **`--step=contract,round`** (either or both) to insert **human checkpoints** — using the same checkpoint-and-exit + resume-from-disk model as the provider-limit pause, *not* blocking prompts. With no `--step` the build is byte-for-byte the autonomous loop (every interactive branch is skipped).
+
+At a checkpoint the build writes a steering folder under **`.sparra/interactive/<run>/<item>/`**, records the pause in state (`build.paused`), and exits; you edit the files and re-run `sparra build` to continue (`--step` is remembered across the resume).
+
+- **`contract`** — pauses right after the "done" contract is negotiated, before any generation. Review/edit the contract file (the text under the `AGREED CONTRACT` marker); resume builds against your edits. A holdout leak in the edited contract is rejected on resume.
+- **`round`** — pauses after each evaluator verdict, before the accept/pivot decision. `pause.md` is a **holdout-redacted** verdict summary; set `decision.json` to one of:
+  - **`continue`** — patch & re-evaluate; edit `feedback.md` to steer the next round (the default).
+  - **`pivot`** — discard this approach and rebuild from scratch (bumps the pivot count).
+  - **`accept`** — accept the item now. Overriding a **failed** verdict requires a `reason` (recorded to `memory.md` as an audit trail); accepting a pass needs none.
+  - **`abandon`** — give up on the item.
+  `feedback.md` is leak-checked before it reaches the generator, so holdout can't slip in via your edits.
+
+Interactive mode is **remembered** so a plain `sparra build` resumes a pause — to leave it, start a new run with `sparra build --fresh` (or `sparra new`), which clears the mode and any pause. Only one item is paused at a time; a `--step` build refuses a `--only` that would skip the paused item (resume it first). As with the autonomous accept, a human `accept` marks the item passed *before* the reconcile/commit step, so a process kill in that sub-second window can skip those side effects on resume (same durability as the normal loop).
+
+The conductor in the `/sparra-loop` skill drives this for you. (Commit/item approval gates and inline TUI prompts are planned follow-ups; today's steps are `contract` and `round`.)
+
 ## Format on write
 A `PostToolUse` hook formats/lints each file the generator writes **before** the evaluator exercises it, so trivial formatting never costs an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint`). Missing formatter → no-op + warning, never a failure. Configure via `format` (see [configuration](configuration.md)).
 

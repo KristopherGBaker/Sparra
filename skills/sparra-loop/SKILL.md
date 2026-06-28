@@ -67,6 +67,29 @@ You can re-run `sparra init` later (it preserves existing config/PLAN), and twea
    fresh approach after repeated failures on the same point.
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
 
+## Two ways to be interactive — pick by scope
+- **Ad-hoc choreography (this skill):** you drive `run_role` calls with the user between
+  them — for a standalone eval, a one-off contract/generate/evaluate, or a quick
+  cross-model second opinion. Use this for everything that ISN'T a full multi-item build.
+- **The full engine, with human gates:** when the user wants Sparra's real loop
+  (decompose, deps, budget, pivots, review, reconcile, commit, resume) but with steering,
+  use **`sparra build --step=contract,round`** — don't re-implement the loop here.
+
+### Standalone eval on a WIP tree
+`sparra eval [dir] --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md]`
+— grade whatever the user has been building, no full process. (Alias for `role run --kind evaluator`.)
+
+### Driving `sparra build --step` (checkpoint-and-resume)
+The build pauses at each checkpoint by writing a steering folder and exiting; you help the
+user act on it, then re-run `sparra build` to continue. At each pause:
+- `--step=contract` → review/edit the proposed contract file, then resume.
+- `--step=round` → read `.sparra/interactive/<run>/<item>/pause.md` (a holdout-redacted
+  verdict summary), then set `decision.json` to **continue** (edit `feedback.md` to steer),
+  **pivot** (rebuild fresh), **accept** (overriding a FAIL needs a `reason` — it's recorded
+  to memory), or **abandon**. Then `sparra build` resumes.
+Never read the holdout to write feedback — the summary is already redacted; pasting holdout
+into `feedback.md` is rejected on resume.
+
 ## How to invoke a role
 - **Preferred (interactive): the MCP tool** `run_role` from the `sparra-run` server
   (holdout enforced server-side; never returns holdout). Args: `roleKind`, `brief`|

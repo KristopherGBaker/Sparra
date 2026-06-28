@@ -29,6 +29,18 @@ export interface ItemState {
   /** Backend the stored generatorSessionId belongs to — a session id isn't portable across
    *  providers, so on a fallback to another backend we must start fresh, not resume. */
   generatorBackend?: string;
+
+  // ── Interactive (`sparra build --step`) — unused in autonomous builds ──
+  /** Round whose verdict a `--step=round` pause is waiting on (so resume applies the
+   *  human's decision instead of re-evaluating). */
+  lastEvaluatedRound?: number;
+  /** Deviations from the paused round's generation, so a resumed human "accept" can
+   *  still reconcile the plan + build the commit message. */
+  lastDeviations?: { summary: string; rationale: string; scope: "in-scope" | "out-of-scope" }[];
+  /** The contract checkpoint has been acknowledged for this item (don't re-pause). */
+  contractAcked?: boolean;
+  /** Reason recorded when a human ACCEPTED a round the evaluator failed (audit trail). */
+  overrideReason?: string;
 }
 
 export interface SparraState {
@@ -62,6 +74,11 @@ export interface SparraState {
     /** Hash of the frozen plan the current items were decomposed from — lets `build`
      *  warn when the plan changed but the run wasn't re-decomposed (`--fresh` / `new`). */
     lastBuiltPlanHash?: string;
+    /** Interactive checkpoints enabled this run (`sparra build --step=contract,round`).
+     *  Persisted so a resume (`sparra build`) keeps the same human-in-the-loop mode. */
+    step?: ("contract" | "round")[];
+    /** An active checkpoint the build is paused at, awaiting the human (then resume). */
+    paused?: { kind: "contract" | "round"; itemId: string; round: number };
   };
   /** Last SDK session id per role, for resume/fork. */
   sessions: Record<string, string>;

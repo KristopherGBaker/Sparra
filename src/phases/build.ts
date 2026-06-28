@@ -19,6 +19,8 @@ import { updateStreaksAndDecide } from "../build/pivot.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
+import { assertNoHoldoutLeak, readHoldout } from "../build/holdout.ts";
+import { writeContractPause, writeRoundPause, readRoundDecision, pauseDirRel, type Step, type Decision } from "../build/interactive.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { appendLearning, readMemory } from "../memory.ts";
 import { promptDrift } from "../prompts.ts";
@@ -105,7 +107,7 @@ function freshItemState(): ItemState {
 
 export async function cmdBuild(
   ctx: Ctx,
-  opts: { fresh?: boolean; only?: string; workspaceOverride?: string; quiet?: boolean } = {},
+  opts: { fresh?: boolean; only?: string; workspaceOverride?: string; quiet?: boolean; step?: Step[] } = {},
   depOverrides: Partial<BuildDeps> = {}
 ): Promise<{ passed: number; failed: number; budgetExceeded: number; total: number; runId: string }> {
   const d: BuildDeps = { ...defaultDeps, ...depOverrides };
@@ -141,6 +143,9 @@ export async function cmdBuild(
     b.build.traceSeq = 0;
     b.build.items = {};
     b.build.workspaceDir = undefined;
+    // A fresh run must not inherit a prior run's interactive mode or a stale pause.
+    b.build.step = undefined;
+    b.build.paused = undefined;
   }
   const runId = b.build.runId!;
   const traceDir = ctx.paths.traceDir(runId);
@@ -183,6 +188,16 @@ export async function cmdBuild(
   }
   const items = opts.only ? allItems.filter((i) => i.id === opts.only) : allItems;
 
+  // A single interactive pause is in flight at a time. Refuse a `--only` that would skip it
+  // (which would orphan or overwrite the pause); resume the paused item first, or start fresh.
+  if (b.build.paused && opts.only && opts.only !== b.build.paused.itemId) {
+    warn(
+      `Item ${b.build.paused.itemId} is paused at an interactive checkpoint — resume it first ` +
+        `(\`sparra build\` without --only) or restart with \`sparra build --fresh\`.`
+    );
+    return { passed: 0, failed: 0, budgetExceeded: 0, total: 0, runId };
+  }
+
   const nextSeq = () => {
     b.build.traceSeq = (b.build.traceSeq ?? 0) + 1;
     return b.build.traceSeq;
@@ -202,6 +217,38 @@ export async function cmdBuild(
   const limitedUntil = new Map<string, number>(Object.entries(b.build.limitedRoles ?? {}));
   const persistLimits = () => {
     b.build.limitedRoles = Object.fromEntries(limitedUntil);
+  };
+
+  // Interactive checkpoints (`sparra build --step=contract,round`). Empty set = fully
+  // autonomous: every interactive branch below is skipped, so behavior is unchanged.
+  const steps = new Set<Step>(opts.step ?? b.build.step ?? []);
+  if (opts.step) {
+    b.build.step = [...steps];
+    await ctx.store.save();
+  }
+  let pausedRun = false;
+
+  // Accept an item on a human decision (--step mode): mark passed, reconcile, optionally
+  // commit, record an (optional) override reason. Mirrors the autonomous accept minus the
+  // review gate — the human IS the gate here.
+  const acceptItem = async (st: ItemState, item: WorkItem, deviations: Deviation[], overrideReason?: string): Promise<void> => {
+    st.status = "passed";
+    if (overrideReason) st.overrideReason = overrideReason;
+    await ctx.store.save();
+    await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
+    if (ctx.config.git.autoCommit && b.build.branch) {
+      const cr = d.commitWork(workspaceDir, commitMessage(item, deviations, runId));
+      detail(cr.ok ? `committed ${item.id} → ${b.build.branch}` : `commit skipped (${item.id}): ${cr.out.split("\n")[0]}`);
+    }
+    await d.appendLearning(ctx.paths, {
+      item: item.id,
+      kind: "passed",
+      detail: overrideReason
+        ? `human-accepted round ${st.round} OVERRIDING evaluator (score ${st.lastScore ?? 0}): ${overrideReason}`
+        : `human-accepted round ${st.round} (score ${st.lastScore ?? 0}).`,
+      at: stamp(),
+    });
+    ok(`${item.id} accepted by human${overrideReason ? " (override)" : ""} in round ${st.round}.`);
   };
 
   // Called after every generator/evaluator session. On a provider rate/usage limit it either
@@ -298,6 +345,23 @@ export async function cmdBuild(
     // negotiateContract advanced the global seq via its own writes; bump our counter past it.
     b.build.traceSeq = (b.build.traceSeq ?? 0) + contract.tracesUsed;
 
+    // ── Interactive: CONTRACT checkpoint ──
+    if (b.build.paused?.itemId === item.id && b.build.paused.kind === "contract") {
+      // Resuming a contract pause: negotiateContract re-read (and leak-checked) the
+      // possibly human-edited contract above. Acknowledge and proceed to generation.
+      st.contractAcked = true;
+      b.build.paused = undefined;
+      await ctx.store.save();
+      info(`${item.id}: contract acknowledged — building.`);
+    } else if (steps.has("contract") && !st.contractAcked) {
+      await writeContractPause(ctx, { runId, itemId: item.id, itemTitle: item.title, contractFile: ctx.paths.contractFile(item.id) });
+      b.build.paused = { kind: "contract", itemId: item.id, round: st.round };
+      await ctx.store.save();
+      info(`${item.id}: paused at the contract — review ${pauseDirRel(ctx, runId, item.id)}/pause.md, then \`sparra build\`.`);
+      pausedRun = true;
+      break;
+    }
+
     // 2) Generate ↔ evaluate loop with GAN pivots, bounded by the per-item budget.
     st.status = "building";
     let feedback: string | undefined;
@@ -306,6 +370,56 @@ export async function cmdBuild(
     // a session id isn't portable, so a fallback to another provider must start fresh.
     const resumeFor = (key: string): string | undefined =>
       !fresh && st.generatorBackend === key ? st.generatorSessionId : undefined;
+
+    // ── Interactive: apply a pending ROUND decision (resume) ──
+    if (b.build.paused?.itemId === item.id && b.build.paused.kind === "round") {
+      const res = await readRoundDecision(ctx, runId, item.id);
+      const wasFail = (st.lastScore ?? 0) < ctx.config.rubric.passThreshold;
+      if (res.decision === "accept" && wasFail && !res.reason.trim()) {
+        // Overriding a FAILED round requires a recorded reason — stay paused until provided.
+        warn(`${item.id}: accept overrides a FAILED round — add a "reason" to ${pauseDirRel(ctx, runId, item.id)}/decision.json, then \`sparra build\`.`);
+        pausedRun = true;
+        break;
+      }
+      b.build.paused = undefined;
+      if (res.decision === "abandon") {
+        st.status = "abandoned";
+        await d.appendLearning(ctx.paths, { item: item.id, kind: "note", detail: `human-abandoned round ${st.round} (score ${st.lastScore ?? 0}).`, at: stamp() });
+        await ctx.store.save();
+        warn(`${item.id}: abandoned by human.`);
+        continue;
+      }
+      if (res.decision === "accept") {
+        // An override reason is persisted to memory.md, which is injected into future
+        // generators — so leak-check it too (not just feedback.md).
+        if (wasFail) {
+          try {
+            assertNoHoldoutLeak("accept reason", res.reason, await readHoldout(ctx));
+          } catch {
+            throw new Error(`${item.id}: your accept reason contains holdout content — remove it (holdout is evaluator-only).`);
+          }
+        }
+        await acceptItem(st, item, (st.lastDeviations ?? []) as Deviation[], wasFail ? res.reason.trim() : undefined);
+        continue;
+      }
+      // continue / pivot → steer the next generation round (leak-check human-edited feedback first)
+      try {
+        assertNoHoldoutLeak("interactive feedback", res.feedback, await readHoldout(ctx));
+      } catch {
+        throw new Error(`${item.id}: your feedback.md contains holdout content — remove it (holdout is evaluator-only).`);
+      }
+      if (res.decision === "pivot") {
+        st.pivots += 1;
+        st.criterionFailStreak = {};
+        fresh = true;
+        feedback = res.feedback || "GAN PIVOT: discard the previous approach and rebuild from scratch with a fundamentally different design.";
+        warn(`${item.id}: human pivot → rebuilding from scratch (pivot #${st.pivots}).`);
+      } else {
+        fresh = false;
+        feedback = res.feedback;
+        detail(`${item.id}: human continue → patching for round ${st.round + 1}.`);
+      }
+    }
 
     while (st.round < ctx.config.build.maxRoundsPerItem) {
       if (overBudget(st)) {
@@ -391,6 +505,31 @@ export async function cmdBuild(
       if (el === "retry") continue;
 
       st.lastScore = ev.verdict.weightedTotal;
+
+      // ── Interactive: ROUND checkpoint — defer accept/pivot/continue to the human ──
+      if (steps.has("round")) {
+        st.lastEvaluatedRound = st.round;
+        st.lastDeviations = gen.deviations;
+        const passing = ev.verdict.verdict === "pass";
+        const defaultFeedback = passing
+          ? ""
+          : `Address these blocking issues from the evaluator:\n${ev.verdict.blocking.map((x) => `- ${x}`).join("\n")}\nFailed assertions: ${ev.verdict.assertions.filter((a) => !a.pass).map((a) => `#${a.id}`).join(", ") || "(see verdict)"}`;
+        await writeRoundPause(ctx, {
+          runId,
+          itemId: item.id,
+          itemTitle: item.title,
+          round: st.round,
+          verdict: ev.verdict,
+          holdoutText: await readHoldout(ctx),
+          defaultDecision: (passing ? "accept" : "continue") as Decision,
+          defaultFeedback,
+        });
+        b.build.paused = { kind: "round", itemId: item.id, round: st.round };
+        await ctx.store.save();
+        info(`${item.id}: paused after round ${st.round} (${ev.verdict.verdict}) — decide in ${pauseDirRel(ctx, runId, item.id)}/decision.json, then \`sparra build\`.`);
+        pausedRun = true;
+        break;
+      }
 
       if (ev.verdict.verdict === "pass") {
         // Optional independent code-review gate on the (behaviorally passing) change.
@@ -480,7 +619,7 @@ export async function cmdBuild(
       }
       void dev;
     }
-    if (stopRun) break; // halted on a provider limit — leave this item mid-flight (resumable)
+    if (stopRun || pausedRun) break; // provider limit OR interactive checkpoint — resumable
 
     // `haltOnBudget`/pass mutate st.status through a closure, which defeats TS's
     // flow narrowing here — read it back through the declared union.
@@ -504,12 +643,37 @@ export async function cmdBuild(
   const failed = states.filter((s) => s.status === "failed").length;
   const budgetHalted = states.filter((s) => s.status === "budget_exceeded").length;
 
+  // Paused at an interactive checkpoint (`--step`): stay in phase "build" — NOT done — and tell
+  // the human what to edit. Resume with `sparra build` once they've recorded a decision.
+  if (pausedRun) {
+    await ctx.store.save();
+    banner("BUILD PAUSED — waiting for you");
+    info(
+      `Paused at an interactive checkpoint. Review/edit the steering folder under ` +
+        `${path.relative(ctx.root, path.join(ctx.paths.dir, "interactive", runId))}, then re-run \`sparra build\` to continue.`
+    );
+    return { passed, failed, budgetExceeded: budgetHalted, total: items.length, runId };
+  }
+
   // Paused on a provider limit (auto-restart exhausted): stay in phase "build" — NOT done — so
   // the work is resumable. State (including the mid-flight item and limit windows) is on disk.
   if (stopRun) {
     await ctx.store.save();
     banner("BUILD PAUSED — provider limit");
     warn(`Paused after ${restarts} auto-restart wait(s) (maxRestarts ${ar.maxRestarts}). State is saved; re-run \`sparra build\` to resume from where it stopped.`);
+    return { passed, failed, budgetExceeded: budgetHalted, total: items.length, runId };
+  }
+
+  // An interactive pause set by a PRIOR run can survive if this run didn't touch that item
+  // (e.g. `--only <other>`). Don't mark the build done — that would orphan the pause; stay in
+  // phase "build" so a plain `sparra build` resumes the paused item.
+  if (b.build.paused) {
+    await ctx.store.save();
+    banner("BUILD — paused item remains");
+    warn(
+      `Item ${b.build.paused.itemId} is still paused at an interactive checkpoint (not part of this run). ` +
+        `Run \`sparra build\` (no --only) to resume it, or \`sparra build --fresh\` to start over.`
+    );
     return { passed, failed, budgetExceeded: budgetHalted, total: items.length, runId };
   }
 

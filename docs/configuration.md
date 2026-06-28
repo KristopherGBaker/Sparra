@@ -115,6 +115,8 @@ your-project/
    ├─ workitems/       # decomposition (items.json)
    ├─ contracts/       # negotiated "done" contracts
    ├─ verdicts/        # evaluator scores + assertion pass/fail with evidence
+   ├─ interactive/<run>/<item>/  # human-in-the-loop steering folders (`build --step`):
+   │                   #   pause.md (redacted), decision.json, feedback.md — see build-loop.md
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)
    ├─ prompts/         # editable role system prompts (reflect diffs these); seeded from the
    │                   #   built-in defaults at init — can go stale as Sparra improves. Compare/

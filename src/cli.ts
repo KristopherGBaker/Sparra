@@ -8,6 +8,7 @@ import { cmdPlan } from "./phases/plan.ts";
 import { cmdSnapshot, cmdFreeze } from "./phases/freeze.ts";
 import { cmdPrototype, cmdLogFinding } from "./phases/prototype.ts";
 import { cmdBuild } from "./phases/build.ts";
+import { parseSteps } from "./build/interactive.ts";
 import { cmdReflect } from "./phases/reflect.ts";
 import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
@@ -56,7 +57,8 @@ ${color.bold("Commands")}
   log-finding <FINDINGS.md>                     fold prototype findings back into PLAN.md
   snapshot                                      checkpoint PLAN.md (+ CODEBASE_MAP.md)
   freeze                                        FREEZE GATE: lock the plan as build input (your decision)
-  build [--fresh] [--only <item-id>]            Phase C: autonomous generator/evaluator loop (resumable)
+  build [--fresh] [--only <item-id>] [--step contract,round]
+                                                Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
   prompts [status|sync] [--role <r>] [--dry-run] compare/sync .sparra/prompts with the built-in defaults
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
@@ -116,7 +118,7 @@ async function main(): Promise<void> {
       await cmdFreeze(ctx);
       break;
     case "build":
-      await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined });
+      await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined, step: flags.step != null ? parseSteps(flags.step) : undefined });
       break;
     case "reflect":
       await cmdReflect(ctx, { apply: !!flags.apply, run: flags.run as string | undefined });

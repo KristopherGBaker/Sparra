@@ -64,6 +64,11 @@ Flags: `--kind` (generator | contract-generator | contract-evaluator | evaluator
 reviewer), `--backend`, `--model`, `--brief <file>` | `--brief-text "…"`, `--contract
 <file>`, `--holdout <file>`, `--workspace <dir>`, `--out <file>`.
 
+**Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
+[--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md]` (alias for `role run --kind
+evaluator`, with the brief defaulted) — to grade whatever you've been building, no full
+plan→freeze→build.
+
 ## What the runner enforces (the holdout wall)
 - **Only the evaluator** ever sees holdout contents — they're injected into its prompt
   by the runner. Every other ("forbid") role's brief is checked with
