@@ -10,6 +10,30 @@ It reuses Sparra's existing `runSession`/`AgentBackend` seam, guards, exerciser,
 verdict logic. The policy (which backend/guard/tools a role gets, and the **holdout
 wall**) lives in `src/build/roleRun.ts` — above the backend, below the conductor.
 
+## Install (for general use in Claude Code)
+One-time, from the Sparra repo:
+```bash
+npm install
+npm link                       # puts `sparra` + `sparra-run-mcp` on PATH
+npm i @openai/codex-sdk        # only if you want a Codex backend (also: `codex` CLI authed at ~/.codex)
+```
+Register the MCP tool (user scope → available in every project; the server uses its
+working directory as the project root, so launch `claude` from the project):
+```bash
+claude mcp add sparra-run --scope user -- sparra-run-mcp
+# or pin a root per project:  claude mcp add sparra-run --scope project -- sparra-run-mcp --root "$PWD"
+```
+Install the driving skill (ships in Sparra's plugin marketplace):
+```bash
+claude plugin marketplace add /path/to/Sparra
+claude plugin install sparra@sparra-skills        # gives you /sparra-loop
+# (or, without the plugin: ln -s /path/to/Sparra/skills/sparra-loop ~/.claude/skills/sparra-loop)
+```
+Then, in any project, invoke **`/sparra-loop`** — it runs `sparra init`, helps set the
+per-role backend/model split, optionally scaffolds a holdout, and drives the loop. (No
+plugin? Use `sparra role run` directly after `sparra init`.) Versions move fast — if a
+flag differs, check `claude mcp --help` / `claude plugin --help`.
+
 ## Two surfaces, one runner
 
 ### MCP `run_role` (interactive — recommended)
