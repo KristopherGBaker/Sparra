@@ -116,8 +116,11 @@ time. Keep meaning unambiguous, drop everything else.
 PROPORTIONALITY & RELEVANCE — assertions are a definition of DONE for a human, not a
 compliance audit. Hold yourself to these:
 - Assert on the plan's success criteria and OBSERVABLE PRODUCT BEHAVIOR (what the user
-  experiences). The bar is "does it work and meet the plan", not "is every internal
-  detail pinned".
+  experiences) — NET EFFECTS and INVARIANTS, not internal invocation counts. The bar is
+  "does it work and meet the plan", not "is every internal detail pinned". E.g. assert "no
+  duplicate commit object / no duplicate memory line" (a checkable end-state), NEVER
+  "commitItem is called at most once" (an unobservable internal count that a crash-safe
+  retry legitimately breaks).
 - Do NOT gate "done" on incidental implementation or toolchain trivia — build-setting
   forensics, code-signing internals, file byte sizes, idempotency hashes, log-string
   greps — UNLESS the plan explicitly calls for them. They cost evaluator effort and
@@ -174,8 +177,10 @@ Critique the contract on:
 - **Proportionality (reject OVER-specification)**: the contract is a definition of done,
   not a compliance audit. REJECT assertions that gate "done" on incidental implementation
   or toolchain trivia — build-setting forensics, code-signing internals, byte sizes,
-  idempotency hashes, log-string greps — unless the plan explicitly requires them. Demand
-  they be CUT or rewritten as observable product-behavior checks. Scale the assertion
+  idempotency hashes, log-string greps, or INTERNAL INVOCATION COUNTS ("X is called once")
+  — unless the plan explicitly requires them. Demand they be CUT or rewritten as observable
+  NET-EFFECT/invariant checks (e.g. "no duplicate commit/memory line", not "commitItem
+  called at most once" — an unobservable count a crash-safe retry legitimately breaks). Scale the assertion
   count to the item's real surface area; a scaffold/stub needs only a handful. Don't push
   for more or harsher assertions for their own sake.
 - **Defeat degenerate / no-op satisfaction (reject UNDER-specification)**: when core behavior
