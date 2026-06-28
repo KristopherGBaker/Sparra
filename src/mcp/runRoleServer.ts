@@ -97,6 +97,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               tokens: r.tokens,
               costUsd: r.costUsd,
               limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
+              hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
             }
           : {
               roleKind: r.roleKind,
@@ -109,6 +110,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
               tokens: r.tokens,
               costUsd: r.costUsd,
               limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
+              hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
               noProgress: r.noProgress, // writer changed no files → blocked reads/brief, NOT a behavioral fail
             };
         return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };

@@ -85,6 +85,13 @@ holdout) and defers to the permission mode. As a backstop, a **writer that finis
 changing any file** is flagged `noProgress: true` on the result and the MCP payload — like
 `limitHit`, the conductor treats it as "investigate the brief/permissions", not a behavioral FAIL.
 
+**Turn-cap stops.** If a role stops at the per-session turn cap (`build.maxTurnsPerSession`) with
+work unfinished, the result and MCP payload carry `hitMaxTurns: true` (suppressed under a limit,
+which is the real reason in that case). It is **not** a failure — the conductor should **resume the
+same session** by re-calling `run_role` with `resumeSessionId` + `resumeBackend` set to this
+result's `sessionId`/`backend`, mirroring how the build loop continues a turn-capped generator
+across rounds rather than re-reading the workspace or pivoting.
+
 #### Subagent delegation (the conductor's pattern)
 The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
 plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead

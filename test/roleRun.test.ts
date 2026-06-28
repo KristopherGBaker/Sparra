@@ -539,3 +539,56 @@ describe("runRole — writer no-progress fast-fail (Item B)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("runRole — turn-cap (hitMaxTurns) surfacing (Item A)", () => {
+  /** A fake session that stopped at the turn cap (optionally also limited). */
+  function turnCapped(opts: { limitHit?: boolean } = {}) {
+    const fn = async (p: RunSessionParams): Promise<RunResult> => ({
+      ok: false,
+      subtype: "error_max_turns",
+      resultText: "partial work…",
+      sessionId: "sess-cap",
+      costUsd: 0,
+      tokens: 9,
+      numTurns: 60,
+      hitMaxTurns: true,
+      hitBudget: false,
+      errors: ["error_max_turns"],
+      tracePath: "",
+      ...(opts.limitHit ? { limitHit: { kind: "usage" as const, raw: "limited" } } : {}),
+    });
+    return fn;
+  }
+
+  it("surfaces hitMaxTurns + the resumable sessionId/backend when a writer hits the turn cap", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: turnCapped(),
+      changedFilesFn: () => [path.join(dir, "src/a.ts")], // it wrote something before the cap
+    });
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.sessionId).toBe("sess-cap"); // the id the conductor resumes with
+    expect(r.backend).toBe("claude");
+    expect(r.noProgress).toBeUndefined(); // a turn-cap is "unfinished", not "blocked brief"
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("suppresses hitMaxTurns under a provider limit (the limit is the real reason)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "claude", model: "opus" }; // no fallback → surfaces the limit
+    const r = await runRole({ ctx, roleKind: "generator", brief: "Build it.", runSessionFn: turnCapped({ limitHit: true }) });
+    expect(r.limitHit).toBeDefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT set hitMaxTurns for a normal completed run", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "Build it.", runSessionFn: recorder().fn, changedFilesFn: () => [path.join(dir, "x.ts")] });
+    expect(r.hitMaxTurns).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

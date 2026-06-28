@@ -85,6 +85,12 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    wrong." Don't feed it back as a behavioral FAIL; check the brief is actionable and the
    workspace readable, then re-run (a writer can always read its workspace, so a real
    no-progress almost always means the brief had nothing to do).
+   **Turn cap ≠ fail — RESUME:** if a summary carries `hitMaxTurns: true`, the role stopped
+   at the per-session turn cap with work unfinished (a partial artifact), not a failure.
+   Re-call `run_role` for the SAME role with `resumeSessionId` + `resumeBackend` set to that
+   result's `sessionId`/`backend` (and a short "continue where you left off" brief) so it
+   picks up its own context instead of re-reading the workspace — exactly how the build loop
+   continues a turn-capped generator. Don't pivot or feed it back as a FAIL.
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
 
 ## Two ways to be interactive — pick by scope

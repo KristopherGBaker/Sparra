@@ -128,6 +128,12 @@ export interface RoleRunResult {
    *  as "investigate the brief/permissions", NOT a behavioral FAIL to feed back to the generator.
    *  Never set when `limitHit` is (a limited run legitimately did nothing). */
   noProgress?: boolean;
+  /** Set when the run stopped at the per-session turn cap (`build.maxTurnsPerSession`) with work
+   *  unfinished — NOT a behavioral failure. The conductor should RESUME the same session
+   *  (`resumeSessionId` + `resumeBackend` = this result's `sessionId`/`backend`) to continue where
+   *  it left off, exactly as the build loop does, rather than re-reading the workspace or treating
+   *  it as a FAIL. */
+  hitMaxTurns?: boolean;
 }
 
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
@@ -479,13 +485,18 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     tokens: res.tokens,
     errors: res.errors,
     limitHit: res.limitHit,
+    // A turn-cap stop is "unfinished", not "wrong" — surface it so the conductor resumes the
+    // session (like the build loop) instead of failing. Suppress under a limit (the cap wasn't
+    // the real reason the run stopped).
+    hitMaxTurns: res.hitMaxTurns && !res.limitHit ? true : undefined,
   };
 
   // No-progress fast-fail: a writer that changed NO file (no new/edited path appeared) didn't
   // build anything — almost always permission starvation or a blocked brief, not a real "the work
-  // is wrong" outcome. Surface it distinctly (but never over a real limit, where doing nothing is
-  // expected). The conductor treats this like `limitHit`: investigate, don't feed back as a FAIL.
-  if (isWriter && writerBefore && !res.limitHit) {
+  // is wrong" outcome. Surface it distinctly, but never over a real limit OR a turn-cap (where
+  // doing nothing yet is expected and the right move is resume, not "investigate the brief"). The
+  // conductor treats this like `limitHit`: investigate, don't feed back as a FAIL.
+  if (isWriter && writerBefore && !res.limitHit && !res.hitMaxTurns) {
     const after = listChanges(workspace);
     const progressed = after.some((p) => !writerBefore.has(p));
     if (!progressed) {
