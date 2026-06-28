@@ -26,15 +26,27 @@ export function autonomousPermissionMode(ctx: Ctx): PermissionMode {
   return ctx.store.data.autoSupported ? "auto" : "acceptEdits";
 }
 
-/** Probe 'auto' availability once and cache it in state. No-op if already known or not needed. */
-export async function ensureAutoProbed(ctx: Ctx): Promise<void> {
+/**
+ * Probe 'auto' availability once and cache it in state. No-op if already known or not needed.
+ *
+ * `probe` defaults to the real live SDK probe (`probeAutoSupported`); inject a fake in tests
+ * to stay offline. `persist` defaults to `true` (write the result to `state.json` via
+ * `store.save()` — the build phase relies on this caching); pass `persist: false` to set
+ * `autoSupported` IN MEMORY only, so a synthesized greenfield store never litters `.sparra/`.
+ */
+export async function ensureAutoProbed(
+  ctx: Ctx,
+  opts: { probe?: (cwd: string) => Promise<boolean>; persist?: boolean } = {}
+): Promise<void> {
   const wantsAuto = ["auto", "safe-auto", "default", "bypass"].includes(ctx.config.permission.mode);
   if (!wantsAuto) return;
   if (typeof ctx.store.data.autoSupported === "boolean") return;
+  const probe = opts.probe ?? probeAutoSupported;
+  const persist = opts.persist ?? true;
   detail("probing whether 'auto' permission mode is available on your plan…");
-  const ok = await probeAutoSupported(ctx.root);
+  const ok = await probe(ctx.root);
   ctx.store.data.autoSupported = ok;
-  await ctx.store.save();
+  if (persist) await ctx.store.save();
   detail(ok ? "auto permission mode available → using it." : "auto not available → falling back to acceptEdits + deny-hook.");
 }
 
