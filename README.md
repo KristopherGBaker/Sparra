@@ -41,8 +41,6 @@ sparra new "next"    # done? start the next feature — archives this cycle, fre
 
 No build step — the bins run the TypeScript directly via `tsx`, so edits/`git pull` take effect immediately. (`npm link` symlinks back to this repo; keep it where it is. Undo: `npm rm -g sparra`.)
 
-There are runnable examples to watch: [`examples/cli-greenfield/`](examples/cli-greenfield/) (a tiny Node CLI), [`examples/ios-greenfield/`](examples/ios-greenfield/) (a SwiftUI tip calculator) and [`examples/ios-notes/`](examples/ios-notes/) (a SwiftData notes app). The iOS ones need Xcode + `xcodebuildmcp` + `xcodegen` (see [docs/ios.md](docs/ios.md)).
-
 ### More commands
 
 Beyond the phase flow above, the CLI exposes (run `sparra help` for the full signatures):

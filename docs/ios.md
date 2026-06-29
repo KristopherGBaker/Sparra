@@ -58,7 +58,3 @@ roles:
   decomposer: { backend: claude, model: opus }   # keep planning on Claude
   evaluator:  { backend: claude, model: opus, effort: high }
 ```
-
-## Examples
-- [`examples/ios-greenfield/`](../examples/ios-greenfield/) — **TipJar**, a SwiftUI tip calculator (pure computation + UI, screenshot-graded).
-- [`examples/ios-notes/`](../examples/ios-notes/) — **Jotter**, a SwiftData notes app (CRUD + persistence + a relaunch check); ships a cross-backend config.
