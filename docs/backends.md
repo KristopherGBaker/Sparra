@@ -18,7 +18,7 @@ Two backends ship today:
 The Codex SDK is **optional**: install only if you use it — `npm i @openai/codex-sdk` plus the `codex` CLI on PATH (auth comes from `~/.codex`). Absent, the backend no-ops with a clear message; the rest of the harness runs fine.
 
 ## Per-role backend
-Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, baseUrl?, apiKey?, skills? }` (backend defaults to `claude`; `baseUrl` targets a local/OpenAI-compatible endpoint — see [local models](#local-models-lm-studio--ollama)):
+Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, baseUrl?, apiKey?, skills? }` (backend defaults to `claude`; `baseUrl` targets an OpenAI-compatible endpoint (OpenRouter or local) — see [OpenAI-compatible endpoints](#openai-compatible-endpoints-openrouter-lm-studio-ollama)):
 
 ```yaml
 roles:
@@ -27,13 +27,16 @@ roles:
   decomposer: { backend: claude, model: opus }                 # planning act — keep on Claude
 ```
 
-## Local models (LM Studio / Ollama)
-Point a **`codex`** role at a local OpenAI-compatible server with `baseUrl` (+ optional `apiKey`). Codex still drives the agentic loop and tools; only the model is local — so the work stays on your machine:
+## OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama)
+Point a **`codex`** role at any OpenAI-compatible Chat Completions endpoint with `baseUrl` (+ `apiKey`). Codex still drives the agentic loop and tools; only the **model** is swapped out — so you can route a role through a hosted aggregator like **OpenRouter** (any model it exposes) or keep everything on-device with a **local** server (LM Studio, Ollama):
 ```yaml
 roles:
-  generator: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # LM Studio
+  # Hosted aggregator (cloud) — a real key, any model OpenRouter fronts:
+  generator: { backend: codex, model: qwen/qwen-2.5-coder-32b-instruct, baseUrl: https://openrouter.ai/api/v1, apiKey: sk-or-... }
+  # Local (on your machine) — the work never leaves the host; the key is a dummy:
+  evaluator: { backend: codex, model: qwen3.5-9b, baseUrl: http://localhost:1234/v1 }  # Ollama: http://localhost:11434/v1
 ```
-The Codex CLI also has native local support (`--oss --local-provider lmstudio|ollama`); the SDK path above is the harness's equivalent. Caveat: small local models are far weaker than frontier cloud models at agentic tool-calling — expect more rounds/pivots on hard items.
+`apiKey` defaults to a dummy (`"lm-studio"`) when only `baseUrl` is set, which suits local servers that ignore it; a **hosted** endpoint needs a real key. **Treat that key as a secret** — a target project's `.sparra/config.yaml` is committed, so prefer keeping a real key out of version control. The Codex CLI also has native local support (`--oss --local-provider lmstudio|ollama`); the SDK path above is the harness's equivalent. Caveat: weaker models (small local ones especially) lag frontier cloud models at agentic tool-calling — expect more rounds/pivots on hard items.
 
 ### Hybrid: local for some items, cloud for others
 Set a second generator, `roles.generatorLocal`, and the build routes **per work item**: items the decomposer tags `gen: "local"` (trivially-simple or privacy-sensitive — pure scaffolding, a tiny config/struct) build locally; everything else uses the main `generator`. The decomposer only proposes the tag when `generatorLocal` is set, and you can edit the tag in `.sparra/workitems/items.json` before building. Falls back to `generator` (with a warning) if an item is tagged local but no `generatorLocal` is configured.

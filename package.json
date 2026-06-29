@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "description": "A long-running autonomous build harness on the Claude Agent SDK: plan collaboratively, optionally prototype, then hand off to an adversarial generator/evaluator build loop. Works on greenfield and existing codebases.",
   "type": "module",
+  "license": "MIT",
+  "author": "Kristopher Baker <hello@krisbaker.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KristopherGBaker/Sparra.git"
+  },
+  "homepage": "https://github.com/KristopherGBaker/Sparra#readme",
+  "bugs": {
+    "url": "https://github.com/KristopherGBaker/Sparra/issues"
+  },
   "bin": {
     "sparra": "./bin/sparra.mjs",
     "sparra-tui": "./bin/sparra-tui.mjs",

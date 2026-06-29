@@ -70,7 +70,7 @@ See **[docs/role-runner.md](docs/role-runner.md)** for install, the MCP wiring, 
 
 - **Plan → freeze → build.** A relentless, human-led planning interview co-edits `PLAN.md`; nothing advances to building until *you* run `freeze`. → [docs/phases.md](docs/phases.md)
 - **Adversarial build loop.** Each work item gets a negotiated, proportionate "done" contract (a handful of checkable assertions, not a wishlist), is implemented by a generator, then **exercised for real** by an adversarial evaluator that grades it with evidence (and won't pass a flaky artifact, one that only "passes" via a degenerate/gamed input, or one whose own shipped tests crash as delivered). Stuck items **GAN-pivot**: discard and restart from scratch. An optional **code-review gate** adds a second lens on the diff (security, dead code, conventions) before acceptance. → [docs/build-loop.md](docs/build-loop.md)
-- **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** (Claude *or* Codex, incl. **local models** via LM Studio/Ollama) and can even have one family **build** while another **judges**, or route **per work item** (local for trivial/sensitive items, cloud for the hard ones). Roles can be handed **agent skills** (SKILL.md), loaded natively on Claude and inlined on Codex. → [docs/backends.md](docs/backends.md)
+- **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** (Claude *or* Codex, the latter also fronting any **OpenAI-compatible endpoint**: OpenRouter, or local LM Studio/Ollama) and can even have one family **build** while another **judges**, or route **per work item** (local for trivial/sensitive items, cloud for the hard ones). Roles can be handed **agent skills** (SKILL.md), loaded natively on Claude and inlined on Codex. → [docs/backends.md](docs/backends.md)
 - **Pluggable exerciser.** CLI, web, or **iOS/macOS**: for Apple apps the multimodal evaluator builds, launches the Simulator, drives the UI, and *reads screenshots* to verify UI changes. → [docs/ios.md](docs/ios.md)
 - **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to (a *reduced* on-disk surface: scope-exclusion + prompt-wall + verdict redaction, not an airtight box; see [docs/role-runner.md](docs/role-runner.md)). Accepted items can be **auto-committed** as agent-authored, atomic conventional commits (a cheap `committer` model splits the diff; harness executes) onto the Sparra branch, **never your main**. With `git.provisionDeps`, dependencies are auto-provisioned into the build worktree so verify/eval run there. → [docs/build-loop.md](docs/build-loop.md)
 - **Survives provider limits (unattended).** Opt-in **auto-restart**: when a model hits a rate/usage window, the loop switches to a configured **cross-provider fallback model** or **waits the window out**, then retries the same round, bounded by hard wait/restart caps and resumable from disk. → [docs/build-loop.md](docs/build-loop.md#auto-restart--model-fallback-on-provider-limits)
@@ -122,7 +122,11 @@ Beyond the phase flow above, the CLI exposes (run `sparra help` for the full sig
 ## Requirements
 
 - **Node 20+**, and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
-- For the **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI (optional; only if you use it).
+- For the **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI (optional; only if you use it). A Codex role can also front any **OpenAI-compatible endpoint** (OpenRouter, or local LM Studio/Ollama) via `baseUrl`/`apiKey`. → [docs/backends.md](docs/backends.md#openai-compatible-endpoints-openrouter-lm-studio-ollama)
 - For **iOS/macOS** builds: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`.
 
 > SDK signatures are verified against the installed packages' own `.d.ts`, not training data. Claude Agent SDK pinned at `@anthropic-ai/claude-agent-sdk@0.3.186`.
+
+## License
+
+[MIT](LICENSE) © Kristopher Baker
