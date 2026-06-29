@@ -37,14 +37,14 @@ describe("iosGuidance", () => {
   it("for a macOS app, drives XCUITest + xcresult/screencapture and AVOIDS the simulator path", () => {
     const cfg = defaultConfig();
     cfg.exercise.mechanism = "ios";
-    cfg.exercise.ios = { cli: "xcodebuildmcp", scheme: "KionTriage", simulator: "", platform: "macos" };
+    cfg.exercise.ios = { cli: "xcodebuildmcp", scheme: "DemoApp", simulator: "", platform: "macos" };
     const g = iosGuidance(cfg);
     expect(g).toMatch(/macOS app/);
     expect(g).toMatch(/XCUITest/); // the deterministic UI spine
     expect(g).toMatch(/macos test/); // run the UI-test target
     expect(g).toMatch(/xcresulttool/); // extract screenshots from the .xcresult
     expect(g).toMatch(/screencapture/); // live visual sanity
-    expect(g).toMatch(/KionTriage/);
+    expect(g).toMatch(/DemoApp/);
     expect(g).not.toMatch(/simctl/); // simulator tooling does NOT apply to macOS
     expect(g).not.toMatch(/letterbox/i); // simulator-only concern
   });

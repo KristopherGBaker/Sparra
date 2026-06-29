@@ -105,14 +105,14 @@ describe("generateItem — Apple conventions injection", () => {
 describe("generateItem — build read scope (extraReadDirs)", () => {
   it("adds absolute, ~, and repo-relative extra dirs to additionalDirectories", async () => {
     const { ctx, dir } = await ctxFor("cli");
-    ctx.config.build.extraReadDirs = ["/opt/models", "~/cache/kion", "models"];
+    ctx.config.build.extraReadDirs = ["/opt/models", "~/cache/assets", "models"];
     let dirs: string[] | undefined;
     await generateItem({
       ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
       runSessionFn: fakeRun((p) => (dirs = p.additionalDirectories)),
     });
     expect(dirs).toContain("/opt/models");
-    expect(dirs).toContain(path.join(os.homedir(), "cache/kion"));
+    expect(dirs).toContain(path.join(os.homedir(), "cache/assets"));
     expect(dirs).toContain(path.resolve(dir, "models"));
     fs.rmSync(dir, { recursive: true, force: true });
   });
