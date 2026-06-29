@@ -2,6 +2,8 @@
 
 `sparra build` runs a long-horizon loop against the frozen plan. Per work item:
 
+> Prefer to stay in the loop? The same contract → generate → exercise → pivot/accept cycle can be driven by hand from a Claude Code session via the [role-runner](role-runner.md) (the `/sparra-loop` skill). This page describes the autonomous version; the mechanics below apply to both.
+
 1. **Decompose** — the plan is split into coarse work items (count scales to plan size; a one-screen app is ~1 item, not a dozen). Decomposition is a *planning* act and runs on its own [`decomposer` role](backends.md). It never makes a standalone "scaffold" or "verify it" item — setup folds into the first feature item, and verification is the loop's job. When a [local generator is configured](backends.md#hybrid-local-for-some-items-cloud-for-others) (`roles.generatorLocal`), the decomposer may tag trivially-simple items `gen: "local"` so they build on the local model; you can edit the tags in `items.json` before building.
 
 2. **Contract negotiation** — *before any code*, the generator proposes a "done" contract (*"I'll build X, verify by Y"*) with a **handful of concrete, individually-checkable assertions** (default 6–20, **scaled down** for small items — no padding). A separate **adversarial** evaluator critiques it and they iterate until both agree; the whole negotiation is saved to `.sparra/contracts/<id>.contract.md`.

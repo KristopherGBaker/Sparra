@@ -1,6 +1,8 @@
 # Phases
 
-Sparra's flow mirrors how real software gets built: plan together → optionally de-risk → hand off to an autonomous loop once you're satisfied. Each phase is a CLI command; everything reads from and writes to disk, so any phase is resumable.
+Sparra's flow mirrors how real software gets built: plan together → optionally de-risk → build once you're satisfied. Each phase is a CLI command; everything reads from and writes to disk, so any phase is resumable.
+
+The **build** step runs two ways: hand it off to the autonomous loop (`sparra build`, this page), or drive it yourself from a Claude Code session via the [role-runner](role-runner.md) (the `/sparra-loop` skill), the same adversarial rigor with your hand on the wheel. The plan/freeze/reflect phases below are shared by both.
 
 ```
 init → [orient] → plan ⇄ prototype → freeze → build → reflect

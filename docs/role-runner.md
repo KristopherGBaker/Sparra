@@ -1,10 +1,14 @@
-# The role-runner — Sparra's roles in interactive Claude Code
+# The role-runner: Sparra's roles in interactive Claude Code
 
-Sparra's build loop is autonomous. The **role-runner** exposes its individual roles
-(generator, evaluator, contract-generator/evaluator, reviewer) as a callable seam, so
-you can drive Sparra's *adversarial, cross-model* rigor from inside an interactive
-Claude Code session — without reimplementing the engine. (Design + the Claude⇄Codex
-planning session that produced it: [explorations/sparra-in-claude-code.md](explorations/sparra-in-claude-code.md).)
+Driving Sparra **interactively from a Claude Code session** is a first-class way to use
+it. Instead of handing off to the autonomous `sparra build` loop, *you* run the same
+adversarial, cross-model rigor one step at a time: **contract → generate → cross-model
+evaluate → pivot/accept**, steering between every step, with the holdout wall enforced
+for you. The **role-runner** is the seam that makes this possible, exposing Sparra's
+individual roles (generator, evaluator, contract-generator/evaluator, reviewer) as
+callable units so you drive the loop without reimplementing the engine. (Design + the
+Claude⇄Codex planning session that produced it:
+[explorations/sparra-in-claude-code.md](explorations/sparra-in-claude-code.md).)
 
 It reuses Sparra's existing `runSession`/`AgentBackend` seam, guards, exerciser, and
 verdict logic. The policy (which backend/guard/tools a role gets, and the **holdout
