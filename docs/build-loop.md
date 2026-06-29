@@ -111,15 +111,6 @@ Interactive mode is **remembered** so a plain `sparra build` resumes a pause —
 
 The conductor in the `/sparra-loop` skill drives this for you. Today's steps are `contract`, `round`, `commit`, and `item`.
 
-### Inline prompts in the TUI
-The plain CLI keeps the checkpoint-and-exit model above (edit files in `.sparra/interactive/…`, re-run `sparra build`). The Ink TUI (`sparra-tui`) instead surfaces a pause **inline**, so you never leave the app:
-
-- Press **`B`** (shift-b) to start a **stepped build** (`sparra build --step=contract,round,commit,item`). Plain **`b`** is unchanged — fully autonomous.
-- When the build pauses, the TUI reads the same holdout-redacted `pause.md`, shows it, and offers the **decision menu** for that pause kind (↑/↓ to choose, Enter to select). For a `round` pause it then collects optional **feedback** (continue/pivot) or a **reason** (accept) in a text field.
-- On submit it writes `decision.json` (+ `feedback.md`) exactly like a hand edit, then resumes with a plain `sparra build` (interactive mode is remembered in state). The TUI never reads the holdout, and the feedback it writes is still leak-checked at resume time — the redaction/leak wall stays in `build.ts`/`interactive.ts`.
-
-A `contract` pause's inline option is just **`resume`** (you edit the contract file in your own editor, as the summary notes). If a decision write fails it's logged rather than crashing the app.
-
 ## Format on write
 A `PostToolUse` hook formats/lints each file the generator writes **before** the evaluator exercises it, so trivial formatting never costs an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint`). Missing formatter → no-op + warning, never a failure. Configure via `format` (see [configuration](configuration.md)).
 

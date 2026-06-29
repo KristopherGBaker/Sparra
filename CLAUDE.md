@@ -12,7 +12,7 @@ Sparra is a long-running **autonomous build harness**: collaborative `plan` → 
 npm run typecheck     # tsc --noEmit — run after every change
 npm test              # vitest run (15 test files); keep green
 npm run sparra -- …   # run the CLI locally via tsx (or `node bin/sparra.mjs …`)
-npm link              # put `sparra`/`sparra-tui` on PATH (once)
+npm link              # put `sparra` on PATH (once)
 ```
 
 No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.ts` imports use explicit extensions). **Always run `npm run typecheck && npm test` before committing.**

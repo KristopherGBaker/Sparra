@@ -1,5 +1,7 @@
 # Sparra
 
+[![CI](https://github.com/KristopherGBaker/Sparra/actions/workflows/ci.yml/badge.svg)](https://github.com/KristopherGBaker/Sparra/actions/workflows/ci.yml)
+
 A long-running **adversarial build harness**. It builds software one work item at a time: each item is negotiated into a checkable "done" contract, implemented by a generator, then graded by an adversarial evaluator that *actually runs the artifact*, with **cross-model judging** (Claude builds while Codex judges, or vice versa) and an optional **holdout wall** the builder can't overfit to. It works on **new and existing codebases**, over pluggable agent backends (**Claude and Codex** today).
 
 **Two ways to drive it:**
@@ -34,7 +36,7 @@ The end-to-end lifecycle (the interactive loop drives the **build** step by hand
 ```bash
 # 1. From the Sparra repo, once: install + put the CLI/MCP server on PATH
 npm install                       # installs the Claude Agent SDK + deps
-npm link                          # put `sparra` / `sparra-tui` / `sparra-run-mcp` on your PATH
+npm link                          # put `sparra` / `sparra-run-mcp` on your PATH
 npm i @openai/codex-sdk           # optional: only if you want a Codex backend (also: `codex` CLI authed at ~/.codex)
 # auth: set ANTHROPIC_API_KEY, or be logged in via Claude Code
 
@@ -84,7 +86,7 @@ Prefer to hand off and let it run unattended? The same engine runs as a sequence
 ```bash
 cd your-project/                  # new or existing; Sparra detects which
 sparra orient        # existing projects only → CODEBASE_MAP.md
-sparra plan          # the collaborative interview (or use the TUI: `sparra-tui`)
+sparra plan          # the collaborative interview
 sparra freeze        # YOUR call; locks the plan as build input
 sparra build         # the autonomous generator/evaluator loop
 sparra reflect       # propose prompt improvements from the run's traces
@@ -106,13 +108,12 @@ Beyond the phase flow above, the CLI exposes (run `sparra help` for the full sig
 - `clean [--yes] [--force]`: prune stale Sparra worktrees/branches (dry-run by default).
 - `resume`: continue whatever phase you're in, from disk.
 - `role run …` / `eval …`: the interactive/cross-model role seam (see the quick start above).
-- `sparra-tui`: a terminal UI over the same phases.
 
 ## Docs
 
 | | |
 |---|---|
-| [Phases](docs/phases.md) | orient → plan ⇄ prototype → freeze → build → reflect; the TUI; greenfield vs brownfield |
+| [Phases](docs/phases.md) | orient → plan ⇄ prototype → freeze → build → reflect; greenfield vs brownfield |
 | [The build loop](docs/build-loop.md) | contract negotiation, exercising, GAN pivots, holdout wall, sandbox-first safety, budgets, memory |
 | [Agent backends](docs/backends.md) | the `AgentBackend` seam, Claude + Codex, per-role + cross-backend evaluation |
 | [Role-runner](docs/role-runner.md) | run Sparra's roles (cross-model adversarial eval, holdout wall) from an interactive Claude Code session via `sparra role run` + the MCP `run_role` tool |

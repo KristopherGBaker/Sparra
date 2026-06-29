@@ -193,13 +193,14 @@ export async function readItemDecision(ctx: Ctx, runId: string, itemId: string):
   return "continue";
 }
 
-// ── Pure decision plumbing (used by the Ink TUI to drive a pause without a text editor) ──
-// These mirror the file contract the resume path in build.ts reads (decision.json + feedback.md),
-// so a TUI-recorded decision round-trips through readRoundDecision / readCommitDecision /
-// readItemDecision exactly like a hand-edited one. The TUI never reads holdout; feedback it writes
-// here is still leak-checked by build.ts on resume (this layer doesn't bypass that wall).
+// ── Pure decision plumbing (drive a pause programmatically, without a text editor) ──
+// A front-end or conductor (e.g. the /sparra-loop skill) can record a decision here instead of
+// hand-editing the steering files. These mirror the file contract the resume path in build.ts reads
+// (decision.json + feedback.md), so a programmatically-recorded decision round-trips through
+// readRoundDecision / readCommitDecision / readItemDecision exactly like a hand-edited one. Feedback
+// written here is still leak-checked by build.ts on resume (this layer doesn't bypass that wall).
 
-/** The pause kinds and the decisions each one accepts (the menu the TUI offers + the validation
+/** The pause kinds and the decisions each one accepts (the menu a driver offers + the validation
  *  wall for `applyDecision`). `contract` is a no-op `resume` — the human edits the contract file
  *  in their editor; resuming just acknowledges it. */
 export const PAUSE_DECISIONS: Record<Step, readonly string[]> = {
@@ -210,7 +211,7 @@ export const PAUSE_DECISIONS: Record<Step, readonly string[]> = {
 };
 
 /** A `Paths`-based pause dir (the `Ctx`-based `pauseDir` is unchanged for the build orchestration;
- *  the TUI only has `Paths` in hand). */
+ *  a programmatic driver may only have `Paths` in hand). */
 function pauseDirOf(paths: Paths, runId: string, itemId: string): string {
   return path.join(paths.dir, "interactive", runId, itemId);
 }
@@ -220,8 +221,8 @@ export function activePause(state: SparraState | null | undefined): { kind: Step
   return state?.build.paused ?? null;
 }
 
-/** The already-redacted, human-facing pause summary (`pause.md`) for display in the TUI. Returns
- *  "" if the pause folder/file is missing. The TUI shows this verbatim — it is holdout-redacted at
+/** The already-redacted, human-facing pause summary (`pause.md`) for display by a driver. Returns
+ *  "" if the pause folder/file is missing. Shown verbatim — it is holdout-redacted at
  *  write time, so no holdout reaches it. */
 export async function readPauseSummary(paths: Paths, runId: string, itemId: string): Promise<string> {
   return (await readText(path.join(pauseDirOf(paths, runId, itemId), "pause.md"))) ?? "";

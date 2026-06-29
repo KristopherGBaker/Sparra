@@ -15,7 +15,7 @@ import type {
  * interface.
  */
 
-/** Structured event stream surfaced to non-console front-ends (e.g. the Ink TUI). */
+/** Structured event stream surfaced to non-console front-ends. */
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text"; text: string }

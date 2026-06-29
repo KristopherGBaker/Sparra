@@ -31,8 +31,8 @@ export interface PlanTurnResult {
 }
 
 /**
- * One planner turn, decoupled from stdin/stdout so both the CLI REPL and the
- * Ink TUI can drive the SAME interview (resume-based, so it survives restarts).
+ * One planner turn, decoupled from stdin/stdout so the CLI REPL (or any other
+ * front-end) can drive the SAME interview (resume-based, so it survives restarts).
  * Persists the planning session id + turn count to state on success.
  */
 export async function planTurn(args: {

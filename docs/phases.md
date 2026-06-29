@@ -122,17 +122,6 @@ sparra clean [--yes] [--force]
 
 ---
 
-## The interactive TUI
-Prefer a live dashboard? `sparra-tui` (or `npm run tui`) is an Ink app with three panes (`Tab` / `d`·`p`·`l`):
-
-- **Dashboard** — phase, per-item status/score/pivots/cost, and a live tail of the active agent's trace.
-- **Plan** — the planning interview in-process (`/snapshot` · `/freeze` · `/exit`); same resumable session as `sparra plan`.
-- **Logs** — actions by key: `o`rient · `s`napshot · `f`reeze · `b`uild · `r`eflect (`k` cancels).
-
-It's a thin front-end over the same filesystem state and phase functions — identical to the CLI and equally resumable.
-
----
-
 ## Greenfield vs. brownfield
 
 | | **Greenfield** | **Existing codebase** |

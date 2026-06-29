@@ -21,7 +21,7 @@ export interface ItemState {
   /** Consecutive rounds each rubric criterion stayed below the pivot threshold. */
   criterionFailStreak: Record<string, number>;
   lastScore?: number;
-  /** Cumulative USD spent on this item across all rounds (feeds the budget guard + TUI). */
+  /** Cumulative USD spent on this item across all rounds (feeds the budget guard). */
   costUsd?: number;
   /** Cumulative tokens spent on this item across all rounds (feeds the token budget guard). */
   tokensUsed?: number;

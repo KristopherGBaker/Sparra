@@ -34,7 +34,7 @@ before doing anything non-trivial — don't reconstruct behavior from memory:
 SPARRA_REPO="$(dirname "$(dirname "$(readlink "$(command -v sparra)")")")"  # repo root via the linked bin
 ls "$SPARRA_REPO/docs"   # phases.md build-loop.md backends.md configuration.md ios.md
 ```
-- `docs/phases.md` — the workflow (orient→plan⇄prototype→freeze→build→reflect), TUI, greenfield vs brownfield
+- `docs/phases.md` — the workflow (orient→plan⇄prototype→freeze→build→reflect), greenfield vs brownfield
 - `docs/build-loop.md` — contract negotiation, exercising, GAN pivots, holdout wall, sandbox-first, budgets, memory
 - `docs/backends.md` — the `AgentBackend` seam, Claude + Codex, per-role + cross-backend evaluation
 - `docs/configuration.md` — every knob, the `.sparra/` layout, resuming
@@ -49,7 +49,7 @@ The commands, in order. Nothing advances toward building except the human-run `f
 ```bash
 sparra init            # detect greenfield vs existing; scaffold .sparra/
 sparra orient          # existing projects only → CODEBASE_MAP.md
-sparra plan            # collaborative interview → PLAN.md  (or: sparra-tui)
+sparra plan            # collaborative interview → PLAN.md
 sparra prototype "…"   # optional throwaway spike → FINDINGS.md
 sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOUT) as build input
 sparra build           # the autonomous generator↔evaluator loop

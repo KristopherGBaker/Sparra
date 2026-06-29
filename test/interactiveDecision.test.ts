@@ -17,8 +17,8 @@ import {
   PAUSE_DECISIONS,
 } from "../src/build/interactive.ts";
 
-// Pure decision-plumbing tests for the inline TUI prompt (Ink rendering is verified by
-// inspection, not here). Uses a temp `.sparra`, injects nothing live.
+// Pure decision-plumbing tests for the programmatic pause API (round-trips with the
+// resume readers). Uses a temp `.sparra`, injects nothing live.
 
 async function makeCtx(): Promise<{ ctx: Ctx; dir: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-decision-"));
