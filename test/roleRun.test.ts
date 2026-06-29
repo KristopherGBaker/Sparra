@@ -348,6 +348,89 @@ describe("runRole — exerciseScratch on a REAL linked worktree (Item E)", () =>
   });
 });
 
+/** A provisionWorkspaceDeps spy: records each call, performs no real copy. */
+function provisionSpy() {
+  const calls: Array<{ root: string; workspace: string; cfg: { enabled: boolean; dirs: string[] } }> = [];
+  const fn = ((root: string, workspace: string, cfg: { enabled: boolean; dirs: string[] }) => {
+    calls.push({ root, workspace, cfg });
+    return { copied: [], skipped: [], failed: [] };
+  }) as unknown as typeof import("../src/util/provision.ts").provisionWorkspaceDeps;
+  return { calls, fn };
+}
+
+describe("runRole — dep provisioning into a linked worktree (Item D on the eval path)", () => {
+  it("provisions node_modules into a REAL linked-worktree workspace (root → worktree, cfg passed)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    const spy = provisionSpy();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: worktree, runSessionFn: recorder().fn, provisionFn: spy.fn });
+    expect(spy.calls).toHaveLength(1);
+    expect(spy.calls[0]!.root).toBe(ctx.root);
+    expect(spy.calls[0]!.workspace).toBe(worktree);
+    expect(spy.calls[0]!.cfg).toEqual(ctx.config.git.provisionDeps);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("provisions for a GENERATOR on a worktree too (its verify commands need deps)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const { repo, worktree } = makeRepoWithWorktree();
+    const spy = provisionSpy();
+    await runRole({ ctx, roleKind: "generator", brief: "build", workspace: worktree, runSessionFn: recorder().fn, provisionFn: spy.fn });
+    expect(spy.calls).toHaveLength(1);
+    expect(spy.calls[0]!.workspace).toBe(worktree);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("does NOT provision for an in-place run (workspace === ctx.root — git is never spawned)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const spy = provisionSpy();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: recorder().fn, provisionFn: spy.fn });
+    expect(spy.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT provision when the workspace is a MAIN worktree (not a linked checkout)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    const spy = provisionSpy();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: repo, runSessionFn: recorder().fn, provisionFn: spy.fn });
+    expect(spy.calls).toHaveLength(0); // main worktree ⇒ isLinkedWorktree false ⇒ no provisioning
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("respects config: provisionDeps.enabled=false ⇒ no provisioning even on a linked worktree", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.git.provisionDeps.enabled = false;
+    const { repo, worktree } = makeRepoWithWorktree();
+    const spy = provisionSpy();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: worktree, runSessionFn: recorder().fn, provisionFn: spy.fn });
+    expect(spy.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("provisioning composes with Item E: the same worktree eval ALSO gets exerciseScratch", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const spy = provisionSpy();
+    const ev = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: worktree, runSessionFn: ev.fn, provisionFn: spy.fn, integrityDeps: cleanIntegrityDeps });
+    expect(spy.calls).toHaveLength(1); // deps provisioned…
+    expect(ev.calls[0]!.exerciseScratch).toBe(true); // …and scratch granted, both off the one worktree probe
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+});
+
 describe("runRole — holdout never reaches the conductor", () => {
   it("redacts holdout the evaluator quoted from the verdict + the --out file", async () => {
     const { ctx, dir } = await makeCtx();

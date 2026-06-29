@@ -24,6 +24,7 @@ import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { changedFiles, isLinkedWorktree } from "../util/git.ts";
+import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { warn } from "../util/log.ts";
 
@@ -98,6 +99,9 @@ export interface RoleRunRequest {
   resumeBackend?: string;
   /** Injectable for tests; defaults to the real backend session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+  /** Injectable for tests; defaults to the real COW dep provisioner. Lets a test assert the
+   *  worktree-workspace gets node_modules provisioned without a real `cp`. */
+  provisionFn?: typeof provisionWorkspaceDeps;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
   integrityDeps?: IntegrityDeps;
   /** Injectable for tests; lists the workspace's changed/untracked files (abs paths) — used to
@@ -281,6 +285,21 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const workspace = req.workspace ?? ctx.root;
   const run = req.runSessionFn ?? runSession;
 
+  // A LINKED-WORKTREE workspace gets BOTH dep provisioning (here) and exercise scratch (Item E,
+  // below). Probe `isLinkedWorktree` ONCE and reuse — but only when the workspace differs from the
+  // ctx root, so the common in-place case (workspace === ctx.root) never spawns git.
+  const onLinkedWorktree = workspace !== ctx.root && isLinkedWorktree(workspace);
+
+  // Provision dep dirs (node_modules) into the worktree so the evaluator's exercise and the
+  // generator's verify commands run there without a slow network `npm install`. The full build loop
+  // already provisions its build worktree (phases/build.ts); the standalone eval/run_role path never
+  // did, so a `sparra eval <worktree>` paid a full install. COW-cheap + idempotent (skips dirs
+  // already present); worktree-gated so an arbitrary --workspace dir is never clobbered.
+  const provision = req.provisionFn ?? provisionWorkspaceDeps;
+  if (onLinkedWorktree && ctx.config.git.provisionDeps.enabled) {
+    provision(ctx.root, workspace, ctx.config.git.provisionDeps);
+  }
+
   // Optional session resume (e.g. iterating the generator) — only honored when the attempt's
   // backend matches the prior session's; a session id isn't portable across backends (so a
   // fallback to a different backend below naturally starts fresh).
@@ -310,13 +329,12 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
   // build branch OR a linked git worktree) so a Codex exercise can write node_modules/.vite-temp etc.;
   // the source-integrity guard reverts any artifact write it makes. Other read-only roles (reviewer,
-  // contract-*) never get it. `isLinkedWorktree(workspace)` is computed LAZILY (thunk) — only after the
-  // cheaper evaluator/sandbox/branch checks pass — so a non-evaluator role-run never spawns git.
+  // contract-*) never get it. `onLinkedWorktree` was probed once above (git-free for in-place runs).
   const exerciseScratch = exerciseScratchEnabled({
     evaluator,
     sandbox: ctx.config.exercise.sandbox,
     hasBranch: !!ctx.store.data.build.branch,
-    isWorktree: () => isLinkedWorktree(workspace),
+    isWorktree: onLinkedWorktree,
   });
   const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
 
