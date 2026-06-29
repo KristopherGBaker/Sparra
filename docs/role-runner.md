@@ -29,7 +29,7 @@ claude mcp add sparra-run --scope user -- sparra-run-mcp
 ```
 Install the driving skill (ships in Sparra's plugin marketplace):
 ```bash
-claude plugin marketplace add /path/to/Sparra
+claude plugin marketplace add "$PWD"              # assumes cwd is the Sparra repo; else use the clone path, e.g. ~/code/Sparra
 claude plugin install sparra@sparra-skills        # gives you /sparra-loop
 # (or, without the plugin: ln -s /path/to/Sparra/skills/sparra-loop ~/.claude/skills/sparra-loop)
 ```

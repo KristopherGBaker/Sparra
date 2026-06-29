@@ -40,7 +40,7 @@ npm i @openai/codex-sdk           # optional: only if you want a Codex backend (
 
 # 2. Register the role-runner MCP server + install the driving skill (a Claude Code plugin)
 claude mcp add sparra-run --scope user -- sparra-run-mcp        # launch `claude` from the project (cwd = project root)
-claude plugin marketplace add /path/to/Sparra
+claude plugin marketplace add "$PWD"                            # assumes you're in the Sparra repo; else use the clone path, e.g. ~/code/Sparra
 claude plugin install sparra@sparra-skills                      # gives you /sparra-loop and /sparra
 ```
 
