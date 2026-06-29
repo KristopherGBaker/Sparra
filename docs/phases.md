@@ -36,6 +36,7 @@ There is **no automated "plan is done" check.** When satisfied, run `sparra free
 ## Self-improvement (outer loop)
 - Every agent's **full transcript** is written to `.sparra/traces/<run>/` as readable markdown.
 - `sparra reflect` reviews the last run's traces, finds where the evaluator was too lenient/harsh or drifted from the rubric, and **proposes prompt edits** (a diff per prompt). `sparra reflect --apply` applies them, backing up the originals. It also appends a note to `.sparra/memory.md`.
+- **Harness-level findings → a shared inbox.** Some findings are about **Sparra itself** (a config knob, a guard/holdout gap, a phase/role bug, a backend limit), not this project's prompts. The reflector tags those separately and `sparra reflect` routes each into a user-level inbox — `~/.sparra/reflections/` (override the root with `SPARRA_HOME`) — as its **own uniquely-named file** (so parallel reflects in different projects never collide, no locking). Later, from the Sparra repo, `sparra reflect --upstream` lists the accumulated findings to fold in; `--upstream --clear` archives them once you've acted. Nothing is applied to Sparra automatically — you triage.
 - `sparra batch -k N` runs **N independent builds** of the same frozen plan and summarizes which items are flaky across runs.
 
 ## Next feature — `sparra new`

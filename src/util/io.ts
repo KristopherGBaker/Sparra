@@ -40,6 +40,21 @@ export function exists(p: string): boolean {
   return fs.existsSync(p);
 }
 
+/** Directory entry names (non-recursive). Returns [] if the dir is absent or unreadable. */
+export function readDir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** Move/rename a file, creating the destination's parent dir first. */
+export async function moveFile(src: string, dst: string): Promise<void> {
+  await ensureDir(path.dirname(dst));
+  await fsp.rename(src, dst);
+}
+
 /** True iff `p` is itself a symlink (does NOT follow the link). False if absent or on stat error. */
 export function isSymlink(p: string): boolean {
   try {

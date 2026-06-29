@@ -229,7 +229,7 @@ Look for:
 - Contracts too weak (too few/vague assertions) that slipped through.
 - Calibration drift: slop scored well, or good work scored poorly.
 
-For each problem, propose a SPECIFIC edit (which prompt, what text, why) as a unified diff against prompts/<role>.md in fenced \`\`\`diff blocks, each with a short rationale.
+For each problem, propose a SPECIFIC edit (which prompt, what text, why) as a unified diff against prompts/<role>.md in fenced \`\`\`diff blocks, each with a short rationale. But if a finding is about the Sparra HARNESS itself (a config knob, a guard/holdout gap, a phase/role bug, a backend limit) rather than this project's prompts, don't make it a prompt edit — list it with its rationale in upstream.md to be carried back to the Sparra repo.
 
 Keep edits CONCISE — these prompts run every item every cycle, so findings ratchet length. Fit a finding into existing structure: extend a bullet, add one list item, or generalize an existing rule rather than add a new section restating nearby guidance. A finding is usually a clause, not a paragraph; prefer one generalized principle with a short concrete example over near-duplicate rules.`,
 };

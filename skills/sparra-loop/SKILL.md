@@ -107,10 +107,11 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
      "done") → fix this project's contract/brief/`.sparra/prompts` (or run `sparra reflect
      --apply` for the full project).
    - **Harness-level** (a Sparra config knob, a guard/holdout gap, a phase/role bug, a backend
-     limit) → these aren't this project's prompts; route them UPSTREAM to the Sparra repo
-     (capture in its backlog/issues) so the harness itself improves. When running Sparra inside
-     another project, keep a short list of harness findings to carry back — don't lose them in a
-     project-only reflect.
+     limit) → these aren't this project's prompts; route them UPSTREAM to the Sparra repo so the
+     harness itself improves. `sparra reflect` does this for you: it drops harness-level findings into
+     a shared user-level inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides) as a uniquely-named
+     file per run. Later, from the Sparra repo, `sparra reflect --upstream [--clear]` lists (then
+     archives) the accumulated findings to fold in — nothing is applied automatically, you triage.
 
 ## Two ways to be interactive — pick by scope
 - **Ad-hoc choreography (this skill):** you drive `run_role` calls with the user between

@@ -142,11 +142,16 @@ your-project/
    │                   #   adopt with `sparra prompts status` / `sparra prompts sync`. Tighten with
    │                   #   `sparra prompts audit` (review files land in prompts/audit/<role>.md).
    ├─ calibration/     # good/ vs slop/ reference samples
-   ├─ reflect/         # proposed prompt diffs awaiting approval
+   ├─ reflect/         # proposed prompt diffs awaiting approval (+ a run's upstream.md = harness findings)
    ├─ traces/<run>/    # full transcripts per role, as markdown
    ├─ runs/            # batch summaries
    └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, HOLDOUT, contracts, verdicts, …) — see `sparra new` / `sparra finish`
 ```
+
+Beyond the per-project `.sparra/`, reflect keeps a **user-level inbox** for findings about *Sparra
+itself* — `~/.sparra/reflections/` (override the root with the **`SPARRA_HOME`** env var). Each
+`sparra reflect` that surfaces a harness-level finding drops a uniquely-named file there; `sparra
+reflect --upstream [--clear]` lists (then archives) them from the Sparra repo. See [phases](phases.md).
 
 `memory.md`, `CHANGELOG.md`, `CODEBASE_MAP.md`, `config.yaml`, `calibration/`, and `prompts/`
 persist across cycles; the rest of the working set is archived per cycle by `sparra new` (or

@@ -62,6 +62,7 @@ ${color.bold("Commands")}
   build [--fresh] [--only <item-id>] [--step contract,round,commit,item]
                                                 Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
+  reflect --upstream [--clear]                  list (then archive) harness-level findings in the shared inbox (~/.sparra/reflections)
   prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]
                                                 compare/sync .sparra/prompts with the built-in defaults; audit = concision review (--apply coverage-gated; --source default audits DEFAULT_PROMPTS, report-only)
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
@@ -147,7 +148,12 @@ async function main(): Promise<void> {
       await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined, step: flags.step != null ? parseSteps(flags.step) : undefined });
       break;
     case "reflect":
-      await cmdReflect(ctx, { apply: !!flags.apply, run: flags.run as string | undefined });
+      await cmdReflect(ctx, {
+        apply: !!flags.apply,
+        run: flags.run as string | undefined,
+        upstream: !!flags.upstream,
+        clear: !!flags.clear,
+      });
       break;
     case "batch":
       await cmdBatch(ctx, { k: flags.k ? Number(flags.k) : undefined });

@@ -54,6 +54,7 @@ sparra prototype "…"   # optional throwaway spike → FINDINGS.md
 sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOUT) as build input
 sparra build           # the autonomous generator↔evaluator loop
 sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
+sparra reflect --upstream [--clear]  # list (then archive) harness-level findings in ~/.sparra/reflections (SPARRA_HOME)
 sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
 sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
 sparra prompts audit   # concision review of role prompts → prompts/audit/<role>.md; --apply tightens in place behind a coverage guard PLUS an independent prompt-audit-verifier pass (re-derives the original's rules; skips if any are missing)
@@ -206,4 +207,7 @@ Then, by symptom: decomposition shape → `workitems/items.json`; contract not c
   per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
 - **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;
   Claude loads natively (settingSources stays []), Codex inlines the SKILL.md.
-- After a meaningful run, `sparra reflect` turns the traces into proposed prompt edits.
+- After a meaningful run, `sparra reflect` turns the traces into proposed prompt edits, and routes any
+  **harness-level** findings (about Sparra itself, not this project's prompts) into a shared user-level
+  inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides). From the Sparra repo, `sparra reflect
+  --upstream [--clear]` lists (then archives) them to fold back in — nothing is applied automatically.
