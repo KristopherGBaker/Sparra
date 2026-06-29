@@ -1,6 +1,6 @@
 # Sparra
 
-A long-running **autonomous build harness**. You **plan collaboratively** with it, optionally **prototype** to de-risk, then hand off to an **autonomous build loop** that builds work item by work item — each one negotiated against a checkable "done" contract and graded by an adversarial evaluator that *actually runs the artifact*. It works on **new and existing codebases**, and runs on pluggable agent backends — **Claude and Codex** today.
+A long-running **autonomous build harness**. You **plan collaboratively** with it, optionally **prototype** to de-risk, then hand off to an **autonomous build loop** that builds work item by work item — each one negotiated against a checkable "done" contract and graded by an adversarial evaluator that *actually runs the artifact*. It works on **new and existing codebases**, and runs on pluggable agent backends — **Claude and Codex** today. You can also drive its roles **interactively from a Claude Code session** (see below).
 
 The guiding principle: **the filesystem is the source of truth and the only shared state.** Every phase reads its inputs from disk and writes its outputs to disk, so the whole thing is inspectable, diffable, and **resumable from any point**.
 
@@ -26,7 +26,7 @@ The guiding principle: **the filesystem is the source of truth and the only shar
 
 ```bash
 npm install                       # installs the Claude Agent SDK + deps
-npm link                          # put `sparra` / `sparra-tui` on your PATH (run once, from this repo)
+npm link                          # put `sparra` / `sparra-tui` / `sparra-run-mcp` on your PATH (run once, from this repo)
 # auth: set ANTHROPIC_API_KEY, or be logged in via Claude Code
 
 cd your-project/                  # new or existing — Sparra detects which
@@ -43,15 +43,54 @@ No build step — the bins run the TypeScript directly via `tsx`, so edits/`git 
 
 There are runnable examples to watch: [`examples/cli-greenfield/`](examples/cli-greenfield/) (a tiny Node CLI), [`examples/ios-greenfield/`](examples/ios-greenfield/) (a SwiftUI tip calculator) and [`examples/ios-notes/`](examples/ios-notes/) (a SwiftData notes app). The iOS ones need Xcode + `xcodebuildmcp` + `xcodegen` (see [docs/ios.md](docs/ios.md)).
 
+### More commands
+
+Beyond the phase flow above, the CLI exposes (run `sparra help` for the full signatures):
+
+- `prototype "<idea>"` · `log-finding <FINDINGS.md>` · `snapshot` — Phase B throwaway prototypes and folding findings back into `PLAN.md`.
+- `build [--fresh] [--only <item-id>] [--step contract,round,commit,item]` — `--step` pauses the autonomous loop at each checkpoint for human steering; `--only` rebuilds a single item.
+- `prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]` — compare/sync `.sparra/prompts` with the built-in defaults; `audit` is a concision review (see self-improvement below).
+- `batch [-k N]` — run N builds of the frozen plan and summarize the failures.
+- `finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]` — close out a cycle: land the Sparra branch (PR or ff-only merge), tear down, archive.
+- `clean [--yes] [--force]` — prune stale Sparra worktrees/branches (dry-run by default).
+- `resume` — continue whatever phase you're in, from disk.
+- `role run …` / `eval …` — the interactive/cross-model role seam (next section).
+- `sparra-tui` — a terminal UI over the same phases.
+
+## Drive it interactively (Claude Code)
+
+There are **two ways to run Sparra**:
+
+1. **The autonomous CLI phases** — `plan → freeze → build → reflect`, above. You hand off and the loop runs item by item.
+2. **Interactively from a Claude Code session** via the **`/sparra-loop` skill** — *you* drive the loop: **contract → generate → cross-model adversarial evaluate → pivot/accept**, steering between every step, with the **holdout wall** enforced by the runner. It's the interactive analogue of the build loop: same rigor, your hand on the wheel.
+
+**The seam both share** is the **role-runner** — run ONE Sparra role once, on a backend you pick:
+
+- The **`run_role` MCP tool** (server `sparra-run`) for an interactive session, and the `sparra role run` / `sparra eval` CLI for scripts and headless use.
+- Roles: `generator` · `contract-generator` · `contract-evaluator` · `evaluator` · `reviewer`.
+- The **holdout is passed BY PATH** — only the evaluator ever sees its contents; the parsed **verdict** comes back (never raw output).
+- Per-call **`--backend` / `--model` / `--effort`** (`low|medium|high|xhigh|max`) override the role's configured defaults for that one call.
+
+```bash
+# A Codex evaluator grading a Claude generator's WIP tree, against a contract + holdout:
+sparra eval . --contract contract.md --backend codex \
+  --holdout .sparra/HOLDOUT.md --out .sparra/verdicts/r1.md
+# (alias for: sparra role run --kind evaluator …)
+```
+
+**Why this is the point:** **cross-model on tap** — Claude builds while Codex judges, or vice versa — a genuine independent second opinion. Use it for a one-off review of a round, or run **standalone `sparra eval <dir>`** to grade a work-in-progress tree against a contract (and an optional holdout) — Sparra-grade adversarial rigor without the full plan→freeze→build loop. No `.sparra/` is required for an ad-hoc eval; it synthesizes a default-backed context.
+
+Both the **`/sparra-loop`** skill (drive the loop) and the **`/sparra`** skill (drive + debug Sparra) ship as a Claude Code **plugin** (`.claude-plugin/marketplace.json`), alongside a `sparra-role` subagent the conductor delegates role-runs to. See **[docs/role-runner.md](docs/role-runner.md)** for install, the MCP wiring, and exactly what the holdout wall does (and doesn't) guarantee.
+
 ## How it works
 
 - **Plan → freeze → build.** A relentless, human-led planning interview co-edits `PLAN.md`; nothing advances to building until *you* run `freeze`. → [docs/phases.md](docs/phases.md)
 - **Adversarial build loop.** Each work item gets a negotiated, proportionate "done" contract (a handful of checkable assertions, not a wishlist), is implemented by a generator, then **exercised for real** by an adversarial evaluator that grades it with evidence (and won't pass a flaky artifact, one that only "passes" via a degenerate/gamed input, or one whose own shipped tests crash as delivered). Stuck items **GAN-pivot**: discard and restart from scratch. An optional **code-review gate** adds a second lens on the diff — security, dead code, conventions — before acceptance. → [docs/build-loop.md](docs/build-loop.md)
 - **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** — Claude *or* Codex (incl. **local models** via LM Studio/Ollama) — and can even have one family **build** while another **judges**, or route **per work item** (local for trivial/sensitive items, cloud for the hard ones). Roles can be handed **agent skills** (SKILL.md), loaded natively on Claude and inlined on Codex. → [docs/backends.md](docs/backends.md)
 - **Pluggable exerciser.** CLI, web, or **iOS/macOS** — for Apple apps the multimodal evaluator builds, launches the Simulator, drives the UI, and *reads screenshots* to verify UI changes. → [docs/ios.md](docs/ios.md)
-- **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to. Accepted items can be **auto-committed** as agent-authored, atomic conventional commits (a cheap `committer` model splits the diff; harness executes) onto the Sparra branch (never your main). → [docs/build-loop.md](docs/build-loop.md)
+- **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to (a *reduced* on-disk surface — scope-exclusion + prompt-wall + verdict redaction — not an airtight box; see [docs/role-runner.md](docs/role-runner.md)). Accepted items can be **auto-committed** as agent-authored, atomic conventional commits (a cheap `committer` model splits the diff; harness executes) onto the Sparra branch — **never your main**. With `git.provisionDeps`, dependencies are auto-provisioned into the build worktree so verify/eval run there. → [docs/build-loop.md](docs/build-loop.md)
 - **Survives provider limits (unattended).** Opt-in **auto-restart**: when a model hits a rate/usage window, the loop switches to a configured **cross-provider fallback model** or **waits the window out**, then retries the same round — bounded by hard wait/restart caps and resumable from disk. → [docs/build-loop.md](docs/build-loop.md#auto-restart--model-fallback-on-provider-limits)
-- **Self-improving & resumable.** Full transcripts to `traces/`, `sparra reflect` proposes prompt diffs you approve, durable cross-run `memory.md`, and resume-from-disk at any phase. → [docs/configuration.md](docs/configuration.md)
+- **Self-improving & resumable.** Full transcripts to `traces/`, `sparra reflect` proposes prompt diffs you approve, and `sparra prompts audit` runs a **conciseness auditor over Sparra's own role prompts** — proposing tightenings with a coverage-gated `--apply` (an independent verifier pass guards it; `--source default` audits the shipping defaults, report-only). Durable cross-run `memory.md`, and resume-from-disk at any phase. → [docs/configuration.md](docs/configuration.md)
 - **Everything is a knob.** Per-role models/backends/effort, rubric weights, pivot thresholds, budgets, deviation strictness, exerciser. → [docs/configuration.md](docs/configuration.md)
 
 ## Docs
@@ -67,7 +106,7 @@ There are runnable examples to watch: [`examples/cli-greenfield/`](examples/cli-
 
 ## Requirements
 
-- **Node 18+**, and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
+- **Node 20+**, and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
 - For the **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI (optional; only if you use it).
 - For **iOS/macOS** builds: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`.
 
