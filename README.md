@@ -4,6 +4,8 @@
 
 A long-running **adversarial build harness**. It builds software one work item at a time: each item is negotiated into a checkable "done" contract, implemented by a generator, then graded by an adversarial evaluator that *actually runs the artifact*, with **cross-model judging** (Claude builds while Codex judges, or vice versa) and an optional **holdout wall** the builder can't overfit to. It works on **new and existing codebases**, over pluggable agent backends (**Claude and Codex** today).
 
+> **Status:** young and still finding its form, but already earning its keep on real projects (and on Sparra itself). Inspired by the Anthropic workshop [Build Agents That Run for Hours](https://youtu.be/mR-WAvEPRwE) (Ash Prabaker & Andrew Wilson).
+
 **Two ways to drive it:**
 
 1. **Interactively, from a Claude Code session** (how most sessions go). The **`/sparra-loop` skill** puts *you* on the wheel: **contract → generate → cross-model adversarial evaluate → pivot/accept**, steering between every step, with the holdout wall enforced by the runner. Same rigor as the autonomous loop, your hand on the wheel.
