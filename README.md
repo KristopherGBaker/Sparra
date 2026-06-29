@@ -32,14 +32,21 @@ The end-to-end lifecycle (the interactive loop drives the **build** step by hand
 ## Quick start: drive it from Claude Code
 
 ```bash
+# 1. From the Sparra repo, once: install + put the CLI/MCP server on PATH
 npm install                       # installs the Claude Agent SDK + deps
-npm link                          # put `sparra` / `sparra-tui` / `sparra-run-mcp` on your PATH (run once, from this repo)
+npm link                          # put `sparra` / `sparra-tui` / `sparra-run-mcp` on your PATH
+npm i @openai/codex-sdk           # optional: only if you want a Codex backend (also: `codex` CLI authed at ~/.codex)
 # auth: set ANTHROPIC_API_KEY, or be logged in via Claude Code
+
+# 2. Register the role-runner MCP server + install the driving skill (a Claude Code plugin)
+claude mcp add sparra-run --scope user -- sparra-run-mcp        # launch `claude` from the project (cwd = project root)
+claude plugin marketplace add /path/to/Sparra
+claude plugin install sparra@sparra-skills                      # gives you /sparra-loop and /sparra
 ```
 
 Then, from a Claude Code session in your project, invoke the **`/sparra-loop`** skill. *You* drive the loop, **contract → generate → cross-model adversarial evaluate → pivot/accept**, steering between every step, with the **holdout wall** enforced by the runner. It's the interactive analogue of the autonomous build loop: same rigor, your hand on the wheel.
 
-Both the **`/sparra-loop`** skill (drive the loop) and the **`/sparra`** skill (drive + debug Sparra) ship as a Claude Code **plugin** (`.claude-plugin/marketplace.json`), alongside a `sparra-role` subagent the conductor delegates role-runs to.
+Both the **`/sparra-loop`** skill (drive the loop) and the **`/sparra`** skill (drive + debug Sparra) ship in that plugin, alongside a `sparra-role` subagent the conductor delegates role-runs to.
 
 **The seam under both modes is the role-runner**: run ONE Sparra role once, on a backend you pick.
 
