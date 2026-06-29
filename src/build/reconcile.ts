@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
-import { runSession } from "../sdk/session.ts";
+import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
 import { plannerWriteScope } from "../sdk/permissions.ts";
 import { makeHoldoutReadDecider } from "./holdout.ts";
 import { appendText, writeText } from "../util/io.ts";
@@ -52,9 +52,11 @@ export async function reconcilePlan(
   item: WorkItem,
   deviations: Deviation[],
   traceDir: string,
-  traceSeq: number
+  traceSeq: number,
+  opts: { runSessionFn?: (p: RunSessionParams) => Promise<RunResult> } = {}
 ): Promise<void> {
   if (deviations.length === 0) return;
+  const run = opts.runSessionFn ?? runSession;
   const role = ctx.config.roles.planner;
   const system = fill(await loadPrompt(ctx.paths, "planner"), { MODE: ctx.store.data.mode });
 
@@ -64,7 +66,7 @@ DEVIATIONS:
 ${deviations.map((d) => `- [${d.scope}] ${d.summary} — ${d.rationale}`).join("\n")}`;
 
   info(`Reconciling PLAN.md after ${item.id}…`);
-  await runSession({
+  await run({
     role: `reconcile-${item.id}`,
     prompt: task,
     systemPrompt: system,

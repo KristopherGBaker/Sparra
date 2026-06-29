@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import { loadPrompt } from "../prompts.ts";
-import { runSession } from "../sdk/session.ts";
+import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { banner, color, detail, info, ok, warn } from "../util/log.ts";
 import { ensureDir, exists, writeText } from "../util/io.ts";
@@ -32,8 +32,12 @@ function showDiff(current: string, candidate: string): void {
 }
 
 /** Propose prompt improvements from the last run's traces (does NOT apply them). */
-export async function cmdReflect(ctx: Ctx, opts: { apply?: boolean; run?: string } = {}): Promise<void> {
+export async function cmdReflect(
+  ctx: Ctx,
+  opts: { apply?: boolean; run?: string; runSessionFn?: (p: RunSessionParams) => Promise<RunResult> } = {}
+): Promise<void> {
   if (opts.apply) return applyReflection(ctx);
+  const run = opts.runSessionFn ?? runSession;
 
   banner("SELF-IMPROVEMENT · REFLECT");
   const runId = opts.run ?? ctx.store.data.build.runId;
@@ -74,7 +78,7 @@ Also WRITE ${path.relative(ctx.root, outDir)}/SUMMARY.md explaining each change 
 with a short before/after for the key edits. Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
 
   info(`Reflecting on run ${runId} with ${role.model}…`);
-  await runSession({
+  await run({
     role: "reflector",
     prompt: task,
     systemPrompt: system,
@@ -113,7 +117,7 @@ with a short before/after for the key edits. Write ONLY inside ${path.relative(c
 }
 
 /** Apply the most recent reflection's candidate prompts, backing up the current ones. */
-async function applyReflection(ctx: Ctx): Promise<void> {
+export async function applyReflection(ctx: Ctx): Promise<void> {
   banner("REFLECT · APPLY");
   const dirs = listReflectDirs(ctx.paths.reflect).filter((d) => exists(path.join(d, "candidates")));
   const latest = dirs[dirs.length - 1];
