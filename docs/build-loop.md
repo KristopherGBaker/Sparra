@@ -71,6 +71,8 @@ A fresh worktree is a bare checkout with no `node_modules`, so the generator's v
 Build agents also can't reach your **personal cloud**: `settingSources: []` doesn't suppress auto-fetched claude.ai connectors (Drive/Gmail/Calendar), so every guard's deny-hook rejects any ambient MCP call (`denyAmbientMcp`) — only Sparra's own `mcp__exercise__*` tools are allowed.
 
 ## Bounded by default (budgets)
+**Adversarial evaluation is the point — and it is token-heavy by nature.** Catching gamed/flaky/degenerate work means the evaluator *actually runs the artifact* (build, boot, drive, read screenshots), often over several rounds, on top of generate + grade + the optional review gate. That's several model passes per item where a one-shot generate-and-check is one — the cost buys the rigor, but expect it. The caps below are how you bound it.
+
 The loop "starts closed". Each item is capped by **cost and/or tokens**; crossing either halts the item as **`BUDGET_EXCEEDED`** and the run moves to the next item (it doesn't crash).
 
 - `build.maxBudgetUsdPerItem` — default **5**. Note `total_cost_usd` is *notional* (tokens × list price); on a subscription you're billed in tokens, so this is a proxy.
