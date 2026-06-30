@@ -1,5 +1,5 @@
 import path from "node:path";
-import { appendText, readDir, readText, removeFile, writeText } from "../util/io.ts";
+import { appendText, exists, readDir, readText, removeFile, writeText } from "../util/io.ts";
 
 /**
  * Per-finding triage for the harness-level reflection inbox. A single inbox `.md` file (one per
@@ -144,8 +144,10 @@ export interface TriageResult {
 /**
  * Splice the marked findings out of their source files and append each (verbatim, under a disposition
  * marker) to `archive/<source-filename>`. Untriaged findings + all non-finding text stay in the inbox.
- * A source file left with no `###` findings (including the whole-file-fallback file) is removed from the
- * inbox entirely. ALL input is validated BEFORE any filesystem write, so invalid input changes nothing.
+ * A source file left with no `###` findings (including the whole-file-fallback file) is moved ENTIRELY
+ * into `archive/` — re-emitted byte-faithfully in its original segment order, each triaged finding's
+ * marker injected on the line just before its `###` heading — then removed from the inbox. ALL input is
+ * validated BEFORE any filesystem write, so invalid input changes nothing.
  */
 export async function triageUpstream(req: TriageRequest): Promise<TriageResult> {
   const now = req.now ?? ((): Date => new Date());
@@ -191,21 +193,32 @@ export async function triageUpstream(req: TriageRequest): Promise<TriageResult> 
   for (const [file, selected] of selectedByFile) {
     const entry = files.find((x) => x.file === file)!;
     const archivePath = path.join(req.dir, "archive", file);
-    const removeSeg = new Set<number>();
-    for (const f of [...selected].sort((a, b) => a.segIndex - b.segIndex)) {
-      await appendText(archivePath, `\n${archiveMarker(disposition(f.globalIndex), req.reason, ts)}\n${f.text}\n`);
-      removeSeg.add(f.segIndex);
-      result.archived.push({ globalIndex: f.globalIndex, file, title: f.title, disposition: disposition(f.globalIndex) });
-    }
+    const sorted = [...selected].sort((a, b) => a.segIndex - b.segIndex);
+    const removeSeg = new Set(sorted.map((f) => f.segIndex));
+    const dispBySeg = new Map(sorted.map((f) => [f.segIndex, disposition(f.globalIndex)] as const));
+
     const remaining = entry.segments.filter((_, idx) => !removeSeg.has(idx));
     if (remaining.some((s) => s.kind === "finding")) {
+      // Some findings remain — splice each triaged finding out, appended verbatim-with-marker to the
+      // archive, and leave the rest in the inbox byte-faithfully.
+      for (const f of sorted) {
+        await appendText(archivePath, `\n${archiveMarker(disposition(f.globalIndex), req.reason, ts)}\n${f.text}\n`);
+      }
       await writeText(path.join(req.dir, file), emitSegments(remaining));
     } else {
-      // No findings remain — move the file out of the inbox entirely (keep any residual non-finding text).
-      const residual = emitSegments(remaining);
-      if (residual.trim()) await appendText(archivePath, `\n${residual}\n`);
+      // Fully consumed — archive the WHOLE file byte-faithfully (original segment order + whitespace),
+      // injecting each triaged finding's disposition marker on the line immediately BEFORE its ###
+      // heading; non-finding segments are left unchanged in place. Then drop the source from the inbox.
+      const body = entry.segments
+        .map((seg, idx) => (removeSeg.has(idx) ? `${archiveMarker(dispBySeg.get(idx)!, req.reason, ts)}\n${seg.text}` : seg.text))
+        .join("\n");
+      if (exists(archivePath)) await appendText(archivePath, `\n${body}\n`);
+      else await writeText(archivePath, body);
       await removeFile(path.join(req.dir, file));
       result.filesMovedWhole.push(file);
+    }
+    for (const f of sorted) {
+      result.archived.push({ globalIndex: f.globalIndex, file, title: f.title, disposition: disposition(f.globalIndex) });
     }
   }
   return result;

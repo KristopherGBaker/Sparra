@@ -33,6 +33,10 @@ const DUMMY_CTX = {} as unknown as Ctx;
 const FIXED = "2026-06-30T12:00:00.000Z";
 const now = (): Date => new Date(FIXED);
 
+/** Mirror of the production archive marker — lets tests assert byte-faithful archive output. */
+const marker = (disposition: "done" | "wontdo", reason?: string): string =>
+  `<!-- sparra-triage disposition=${disposition} at=${FIXED}${reason ? ` reason="${reason}"` : ""} -->`;
+
 const isFinding = (s: Segment): s is Extract<Segment, { kind: "finding" }> => s.kind === "finding";
 
 function write(dir: string, name: string, content: string): string {
@@ -171,19 +175,21 @@ describe("cmdReflect --upstream — no-### whole-file fallback", () => {
     // source removed entirely — no stub left in the inbox
     expect(fs.existsSync(path.join(dir, "solo.md"))).toBe(false);
     expect(fs.readdirSync(dir).filter((f) => f.endsWith(".md"))).toHaveLength(0);
-    // whole body archived verbatim under a done marker
+    // archive is byte-faithful: the WHOLE original file, with the disposition marker injected on the
+    // line immediately before the (fallback) finding — nothing reordered or dropped.
     const arc = read(path.join(dir, "archive", "solo.md"));
-    expect(arc).toContain(body.trimEnd());
-    expect(arc).toContain("disposition=done");
+    expect(arc).toBe(`${marker("done")}\n${body}`);
   });
 });
 
 // ───────────────────────── triage: fully-triaged file ─────────────────────────
 
 describe("cmdReflect --upstream — fully-triaged file", () => {
-  it("(e) triaging ALL findings moves the residual to archive and leaves the inbox clean", async () => {
+  it("(e) triaging ALL findings archives the whole file BYTE-FAITHFULLY (order + whitespace) and cleans the inbox", async () => {
     const dir = withTempInbox();
-    write(dir, "a.md", "leading note\n### One\nb1\n### Two\nb2\n");
+    // preamble has a BLANK line — the archive must preserve it (no trim/reflow, original order).
+    const original = "intro\n\nleading note\n### One\nb1\n### Two\nb2\n";
+    write(dir, "a.md", original);
     const cap = suppressStdout();
     try {
       await cmdReflect(DUMMY_CTX, { upstream: true, done: "1", wontdo: "2", reason: "both handled", now });
@@ -192,12 +198,14 @@ describe("cmdReflect --upstream — fully-triaged file", () => {
     }
     expect(fs.existsSync(path.join(dir, "a.md"))).toBe(false);
     expect(fs.readdirSync(dir).filter((f) => f.endsWith(".md"))).toHaveLength(0);
-    const arc = read(path.join(dir, "archive", "a.md"));
-    expect(arc).toContain("### One\nb1");
-    expect(arc).toContain("### Two\nb2");
-    expect(arc).toContain("leading note"); // the non-finding residual is preserved in archive
-    expect(arc).toContain("disposition=done");
-    expect(arc).toContain('disposition=wontdo at=2026-06-30T12:00:00.000Z reason="both handled"');
+    // The archive == the ORIGINAL file with each finding's disposition marker injected on the line
+    // immediately before its ### heading. Every non-marker line (incl. the blank one) is byte-identical
+    // and in its original position; nothing is reordered or dropped.
+    const expected =
+      "intro\n\nleading note\n" +
+      `${marker("done", "both handled")}\n### One\nb1\n` +
+      `${marker("wontdo", "both handled")}\n### Two\nb2\n`;
+    expect(read(path.join(dir, "archive", "a.md"))).toBe(expected);
   });
 });
 
