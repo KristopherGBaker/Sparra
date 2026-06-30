@@ -61,11 +61,20 @@ output). Wire it into Claude Code pointed at your project:
 ```
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
-holdoutPath, backend, model, effort, out, maxBudgetUsd })`. `effort` (`low|medium|high|xhigh|max`)
+holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify })`. `effort` (`low|medium|high|xhigh|max`)
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
 `build.maxBudgetUsdPerItem` for that one call (`0` = unlimited; omit to use the config cap).
-The **`sparra-loop` skill** is the driving playbook.
+`allowVerify` (generator-only) lets an **in-place** run — one with no Sparra `build.branch`,
+i.e. the interactive `/sparra-loop` path — auto-run its project's `build.verifyCommands`
+(typecheck/test/build) through the same **strict** allow-hook the build loop uses on a worktree,
+so each self-verify gate isn't blocked by the permission wall on a hooks-only backend (Claude
+without `auto`). It reuses the existing `allowVerifyBash` decider unchanged — a single,
+self-contained verify command matching a `build.verifyCommands` prefix, with **no** command
+chaining / redirect / pipe / network / mutation / install / commit — so it adds no new
+auto-approval surface; the opt-in only drops the branch precondition. It is a **no-op for
+read-only roles** (only the generator's writer guard consumes it; the evaluator does not
+self-verify). The **`sparra-loop` skill** is the driving playbook.
 
 To **iterate a role without re-reading the workspace from scratch** (e.g. feeding the
 generator the evaluator's blocking points for another round), pass
@@ -137,7 +146,10 @@ sparra role run --kind evaluator --backend codex \
 Flags: `--kind` (generator | contract-generator | contract-evaluator | evaluator |
 reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--brief <file>` |
 `--brief-text "…"`, `--contract <file>`, `--holdout <file>`, `--workspace <dir>`, `--out <file>`,
-`--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited).
+`--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited), and
+`--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
+generator** auto-run `build.verifyCommands` through the strict allow-hook; no-op on `eval`, which
+runs the evaluator, not a writer).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
 [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>]` (alias for `role run --kind

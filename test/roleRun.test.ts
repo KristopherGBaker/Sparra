@@ -861,6 +861,60 @@ describe("runRole — writer no-progress fast-fail (Item B)", () => {
   });
 });
 
+describe("runRole — in-place generator self-verify opt-in (H7)", () => {
+  /** Invoke the PreToolUse decider on the hooks the runner handed the session, end-to-end —
+   *  so a forgotten thread-through (req.allowVerify → roleRun.ts → verifyInPlace → writer hooks)
+   *  fails the test, which a guard-only test would not catch. */
+  async function decideOn(p: RunSessionParams, tool_name: string, tool_input: unknown): Promise<string> {
+    const cb = p.hooks!.PreToolUse![0]!.hooks[0]!;
+    const out: any = await cb({ hook_event_name: "PreToolUse", tool_name, tool_input } as any, "id", {} as any);
+    return out?.hookSpecificOutput?.permissionDecision ?? "defer";
+  }
+
+  // A sample command from the default build.verifyCommands — the gate the in-place generator
+  // would otherwise hit the permission wall on.
+  const VERIFY_CMD = "npm test";
+
+  it("(a) positive: in-place (no branch) + allowVerify auto-approves a build.verifyCommands gate", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    expect(ctx.store.data.build.branch).toBeFalsy(); // in-place — no branch
+    expect(ctx.config.build.verifyCommands).toContain(VERIFY_CMD);
+    const gen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: gen.fn, allowVerify: true });
+    expect(await decideOn(gen.calls[0]!, "Bash", { command: VERIFY_CMD })).toBe("allow");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(b) negative: in-place (no branch) WITHOUT the opt-in does NOT auto-approve (unchanged)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    expect(ctx.store.data.build.branch).toBeFalsy();
+    const gen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: gen.fn }); // no allowVerify
+    expect(await decideOn(gen.calls[0]!, "Bash", { command: VERIFY_CMD })).toBe("defer");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(c) the opt-in only drops the branch precondition — a DISQUALIFIED command is still not approved", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const gen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: gen.fn, allowVerify: true });
+    // A chained/redirecting command built off a real verify prefix must STILL route through
+    // allowVerifyBash's disqualify list (no new auto-approve surface), so it stays deferred.
+    expect(await decideOn(gen.calls[0]!, "Bash", { command: `${VERIFY_CMD} && rm -rf x` })).toBe("defer");
+    expect(await decideOn(gen.calls[0]!, "Bash", { command: `${VERIFY_CMD} > out.txt` })).toBe("defer");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("on a branch the opt-in is irrelevant — verify is enabled exactly as today (unchanged)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.store.data.build.branch = "sparra/x"; // worktree/branch boundary
+    const gen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: gen.fn }); // no opt-in needed
+    expect(await decideOn(gen.calls[0]!, "Bash", { command: VERIFY_CMD })).toBe("allow");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("runRole — turn-cap (hitMaxTurns) surfacing (Item A)", () => {
   /** A fake session that stopped at the turn cap (optionally also limited). */
   function turnCapped(opts: { limitHit?: boolean } = {}) {

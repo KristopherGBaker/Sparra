@@ -120,7 +120,7 @@ generator may auto-run `build.verifyCommands` (typecheck/test/build) so it stops
 sandbox — the auto-approval is a PreToolUse `allow` for *single, self-contained* verification
 commands only (chaining/redirect/network-install/mutation/commit are disqualified), so for Claude
 the worktree + "never commit to main" + that disqualifier list are the guarantees (the same
-residual as the Claude evaluator's in-process exercise). In-place runs never auto-approve Bash.
+residual as the Claude evaluator's in-process exercise). In-place runs never auto-approve Bash unless they opt in via `allowVerify` / `sparra role run --verify` (generator only).
 
 **Provider limits & empty completions.** A backend reports a hit window via `AgentResult.limitHit`
 (rate / usage / session). The Codex backend also classifies a **silent empty completion**

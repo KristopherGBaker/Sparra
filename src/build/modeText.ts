@@ -22,11 +22,14 @@ there is no prior behavior to preserve.`;
 }
 
 /** Generator self-verification guidance — non-empty only when self-verify is actually available
- *  (verifyCommands configured AND on a worktree/branch boundary), so the generator isn't told to
- *  run checks it can't. Keeps it from "writing blind". */
-export function selfVerifyGuidance(ctx: Ctx): string {
+ *  (verifyCommands configured AND either on a worktree/branch boundary OR an explicit in-place
+ *  `allowVerify` opt-in), so the generator isn't told to run checks it can't. Keeps it from
+ *  "writing blind". `allowVerify` mirrors the guard's `verifyInPlace` opt: an in-place `run_role`
+ *  (no `build.branch`) that opted into the allow-hook must ALSO be told which commands it may run,
+ *  else the hook permits the Bash but the model never attempts it (friction not actually removed). */
+export function selfVerifyGuidance(ctx: Ctx, allowVerify = false): string {
   const cmds = ctx.config.build.verifyCommands;
-  if (!cmds.length || !ctx.store.data.build.branch) return "";
+  if (!cmds.length || !(ctx.store.data.build.branch || allowVerify)) return "";
   return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash. Use these commands AS WRITTEN: ${cmds
     .slice(0, 6)
     .join(", ")} — run them, READ the output, and FIX anything you broke. Do not report success on code you have not compiled/tested. ONLY these exact command forms are auto-approved: package-runner / path-qualified variants (\`npx tsc\`, \`./node_modules/.bin/vitest\`) and command chaining, redirects, network installs, or commits are NOT — they will be blocked, so don't substitute them. Writes stay inside your work tree.`;

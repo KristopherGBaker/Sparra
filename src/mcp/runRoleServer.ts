@@ -62,6 +62,10 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .number()
         .optional()
         .describe("Per-call USD budget override for THIS run; overrides build.maxBudgetUsdPerItem. 0 = unlimited. Omit to use the config default."),
+      allowVerify: z
+        .boolean()
+        .optional()
+        .describe("Generator-only: let an in-place run (no build.branch) auto-run the project's build.verifyCommands (typecheck/test/build) via the same strict allow-hook, so self-verify gates don't hit the permission wall. No-op for read-only roles."),
       resumeSessionId: z
         .string()
         .optional()
@@ -87,6 +91,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
           effort: args.effort,
           out: args.out,
           maxBudgetUsd: args.maxBudgetUsd,
+          allowVerify: args.allowVerify,
           resumeSessionId: args.resumeSessionId,
           resumeBackend: args.resumeBackend,
         });

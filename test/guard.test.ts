@@ -43,6 +43,29 @@ describe("scopedWriterGuard — worktree-gated generator self-verify", () => {
   });
 });
 
+describe("scopedWriterGuard — in-place verify opt-in (H7)", () => {
+  it("auto-approves a verify command in-place (no branch) WHEN verifyInPlace is set", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true, verifyInPlace: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+
+  it("verifyInPlace WITHOUT verify does NOT auto-approve (verify must also be requested)", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verifyInPlace: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("defer");
+  });
+
+  it("the opt-in still routes through allowVerifyBash's disqualifiers (no new auto-approve surface)", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true, verifyInPlace: true });
+    expect(await decide(g, "Bash", { command: "npm test && rm -rf x" })).toBe("defer");
+    expect(await decide(g, "Bash", { command: "rm -rf /" })).not.toBe("allow");
+  });
+
+  it("on a branch the opt-in is a no-op — verify already enabled regardless", async () => {
+    const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], { verify: true, verifyInPlace: false });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+});
+
 describe("evaluatorGuard — denies tree-mutating git (H1)", () => {
   // The five tree-mutating git commands the read-only evaluator must never run (it would clobber
   // the worktree it grades / trip the source-integrity guard). Behavioral: target the guard result.

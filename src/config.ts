@@ -208,7 +208,8 @@ export interface SparraConfig {
      * starts with one of these AND contains no command-chaining/redirect/network/mutation/commit
      * (so `npm test`/`tsc --noEmit` run, but `npm test && rm -rf x`, `curl …`, `git commit` do
      * not). Auto-approval is GATED to a git worktree/branch boundary (the same wall as Codex
-     * full-access); in-place runs don't get it. Codex confines these to its workspace-write sandbox
+     * full-access), OR to an in-place `run_role` that opts in via `allowVerify` / `--verify`.
+     * Codex confines these to its workspace-write sandbox
      * (no network); Claude has no OS sandbox, so for Claude these run with the worktree + "never
      * commit to main" + the disqualifier list as the only guarantees (like the evaluator's
      * exercise). Set to `[]` to disable generator self-verification.

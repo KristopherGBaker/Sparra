@@ -27,20 +27,7 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     return;
   }
 
-  const req: RoleRunRequest = {
-    ctx,
-    roleKind: kind,
-    workspace: typeof flags.workspace === "string" ? (flags.workspace as string) : undefined,
-    brief: briefText,
-    briefPath,
-    contractPath: typeof flags.contract === "string" ? (flags.contract as string) : undefined,
-    holdoutPath: typeof flags.holdout === "string" ? (flags.holdout as string) : undefined,
-    out: typeof flags.out === "string" ? (flags.out as string) : undefined,
-    backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,
-    model: typeof flags.model === "string" ? (flags.model as string) : undefined,
-    effort: parseEffort(flags.effort),
-    maxBudgetUsd: parseBudget(flags.budget),
-  };
+  const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
 
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
   let res;
@@ -60,6 +47,37 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   if (res.outPath) detail(`wrote: ${res.outPath}`);
   if (res.errors.length) warn(`errors: ${res.errors.join("; ")}`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
+}
+
+/**
+ * Map parsed CLI flags onto a `RoleRunRequest` — a small PURE helper (no model call, no IO) so the
+ * CLI-surface→request plumbing is unit-testable. `brief`/`briefPath` are resolved by the caller
+ * (it also validates them); everything else is read off `flags` here.
+ */
+export function roleRequestFromFlags(
+  ctx: Ctx,
+  kind: RoleKind,
+  flags: Record<string, string | boolean>,
+  brief: { briefText?: string; briefPath?: string }
+): RoleRunRequest {
+  return {
+    ctx,
+    roleKind: kind,
+    workspace: typeof flags.workspace === "string" ? (flags.workspace as string) : undefined,
+    brief: brief.briefText,
+    briefPath: brief.briefPath,
+    contractPath: typeof flags.contract === "string" ? (flags.contract as string) : undefined,
+    holdoutPath: typeof flags.holdout === "string" ? (flags.holdout as string) : undefined,
+    out: typeof flags.out === "string" ? (flags.out as string) : undefined,
+    backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,
+    model: typeof flags.model === "string" ? (flags.model as string) : undefined,
+    effort: parseEffort(flags.effort),
+    maxBudgetUsd: parseBudget(flags.budget),
+    // `--verify` (a bare boolean flag) opts the GENERATOR into in-place self-verify of
+    // build.verifyCommands. Parsed as a real boolean (`=== true`), never a stray "true" string;
+    // a no-op on the `eval` alias (the evaluator isn't a writer, so verifyInPlace is unused).
+    allowVerify: flags.verify === true ? true : undefined,
+  };
 }
 
 /** Parse a `--budget <usd>` flag into a per-call USD cap, or undefined (use the config default).

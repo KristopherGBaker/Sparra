@@ -5,7 +5,7 @@ import path from "node:path";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
-import { contractModeClauses } from "../src/build/modeText.ts";
+import { contractModeClauses, selfVerifyGuidance } from "../src/build/modeText.ts";
 import type { Ctx } from "../src/context.ts";
 
 async function makeCtx(mode: "existing" | "greenfield"): Promise<{ ctx: Ctx; dir: string }> {
@@ -73,6 +73,39 @@ describe("contractModeClauses — CODEBASE_MAP.md clause degrades when no map ex
     expect(out).toContain("greenfield");
     expect(out).not.toContain("MANDATORY CLAUSES");
     expect(out).not.toContain("CODEBASE_MAP.md");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("selfVerifyGuidance — in-place opt-in ungating (H7 assertion 7e)", () => {
+  it("in-place (no build.branch): emits the SELF-VERIFY block ONLY when allowVerify=true", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    expect(ctx.store.data.build.branch).toBeFalsy(); // in-place — no branch
+    expect(ctx.config.build.verifyCommands.length).toBeGreaterThan(0); // precondition
+
+    // Without the opt-in the generator is NOT told which commands it may run (today's behavior).
+    expect(selfVerifyGuidance(ctx)).toBe("");
+    expect(selfVerifyGuidance(ctx, false)).toBe("");
+
+    // With the opt-in the block appears, naming the verify commands.
+    const out = selfVerifyGuidance(ctx, true);
+    expect(out).toContain("SELF-VERIFY");
+    expect(out).toContain(ctx.config.build.verifyCommands[0]!);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("on a branch: the block is emitted regardless of the opt-in (unchanged)", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    ctx.store.data.build.branch = "sparra/x"; // worktree/branch boundary
+    expect(selfVerifyGuidance(ctx)).toContain("SELF-VERIFY");
+    expect(selfVerifyGuidance(ctx, true)).toContain("SELF-VERIFY");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no verifyCommands → empty even with the opt-in (nothing to run)", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    ctx.config.build.verifyCommands = [];
+    expect(selfVerifyGuidance(ctx, true)).toBe("");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

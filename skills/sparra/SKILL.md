@@ -110,7 +110,9 @@ The few that matter most:
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
   to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Only single,
   self-contained commands are approved (no chaining/redirect/network/mutation/commit), gated to a
-  worktree boundary; `[]` disables.
+  worktree boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
+  strict allow-hook with `allowVerify: true` (MCP) / `--verify` (CLI) — so the interactive
+  generator self-verifies its gates and the conductor no longer has to run every gate out-of-band.
 - **`exercise.sandbox`** — `workspace-write` (default) | `read-only`. The sandbox a **Codex**
   evaluator's exercise runs under on a worktree boundary: `workspace-write` lets `npm test`/`tsc`
   write the scratch they need (network off; a source-integrity guard reverts+fails any

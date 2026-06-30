@@ -94,6 +94,13 @@ export interface RoleRunRequest {
    *  `build.maxBudgetUsdPerItem` (behavior unchanged). `0` means unlimited (see budget.ts) —
    *  threaded with nullish-coalescing so a supplied `0` is preserved, not dropped. */
   maxBudgetUsd?: number;
+  /** Opt the writer/generator role into the `allowVerifyBash` allow-hook even on an in-place run
+   *  that has no `build.branch` — so an interactive `run_role` (the `/sparra-loop` path) can auto-run
+   *  its project's `build.verifyCommands` (typecheck/test/build) on a hooks-only backend without each
+   *  gate hitting the permission wall. Reuses the SAME strict allow-decider; the opt-in only drops the
+   *  branch precondition. Default (undefined/false) preserves today's behavior. No-op for non-writer
+   *  roles (only `scopedWriterGuard` consumes it). */
+  allowVerify?: boolean;
   /** Resume a prior role-run's backend session — so an iterate round (e.g. re-running the
    *  generator with feedback) doesn't re-read the whole worktree from scratch. Pass the
    *  `sessionId` AND `backend` returned by the previous RoleRunResult. A session id isn't
@@ -163,7 +170,7 @@ function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
 
 /** Fill the union of placeholders the standard role prompts use. Unknown placeholders are
  *  left visible (a misconfigured custom prompt should be obvious, not silently blanked). */
-async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: string): Promise<string> {
+async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: string, allowVerify = false): Promise<string> {
   const template = await loadPrompt(ctx.paths, SPECS[kind].promptName);
   return fill(template, {
     MODE: ctx.store.data.mode,
@@ -176,7 +183,7 @@ async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: stri
     ASSERTION_MIN: String(ctx.config.contract.assertionMin),
     ASSERTION_MAX: String(ctx.config.contract.assertionMax),
     MODE_CLAUSES: contractModeClauses(ctx),
-    SELF_VERIFY: selfVerifyGuidance(ctx),
+    SELF_VERIFY: selfVerifyGuidance(ctx, allowVerify),
   });
 }
 
@@ -339,7 +346,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const evaluator = isEvaluator(roleKind);
 
   const exerciser = evaluator ? (req.buildExerciserFn ?? buildExerciser)(ctx.config, workspace) : undefined;
-  const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "");
+  const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "", req.allowVerify);
 
   // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
   // build branch OR a linked git worktree) so a Codex exercise can write node_modules/.vite-temp etc.;
@@ -385,7 +392,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const extraDeny = evaluator ? [] : [makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)];
   const guard: Guard =
     spec.guard === "writer"
-      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, readScopes, extraDeny })
+      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, readScopes, extraDeny })
       : spec.guard === "evaluator"
         ? evaluatorGuard(ctx, { readScopes, extraDeny })
         : readOnlyGuard(ctx, { readScopes, extraDeny });
