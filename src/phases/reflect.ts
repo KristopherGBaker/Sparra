@@ -9,7 +9,8 @@ import { loadPrompt } from "../prompts.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { banner, color, detail, info, ok, warn } from "../util/log.ts";
-import { ensureDir, exists, moveFile, readDir, readText, writeText } from "../util/io.ts";
+import { ensureDir, exists, moveFile, readText, writeText } from "../util/io.ts";
+import { loadInbox, triageUpstream } from "./upstreamTriage.ts";
 import { appendLearning } from "../memory.ts";
 
 /** The user-level Sparra home (cross-project), overridable via SPARRA_HOME (mirrors SPARRA_DEBUG). */
@@ -36,26 +37,68 @@ export async function routeUpstreamFinding(project: string, stamp: string, conte
   return file;
 }
 
-/** Print (and optionally archive) the accumulated harness-level reflections — runs NO model session. */
-async function showUpstream(clear: boolean): Promise<void> {
+/** Parse a comma-separated index list into numbers; throws (atomically, before any I/O) on bad input. */
+function parseIds(raw: string | boolean | undefined, flag: string): number[] {
+  if (raw === undefined) return [];
+  if (raw === true || (typeof raw === "string" && raw.trim() === "")) {
+    throw new Error(`${flag} requires comma-separated indices (e.g. ${flag} 1,3)`);
+  }
+  return (raw as string).split(",").map((s) => {
+    const t = s.trim();
+    if (!/^\d+$/.test(t)) throw new Error(`invalid index "${t}" for ${flag} (use comma-separated positive integers)`);
+    return Number(t);
+  });
+}
+
+/**
+ * List (with per-finding global indices), triage, or archive the accumulated harness-level reflections.
+ * Runs NO model session. Triage (`done`/`wontdo`) splices the marked findings into `archive/`; `clear`
+ * (with no triage flags) archives ALL files; otherwise it just lists.
+ */
+async function showUpstream(opts: {
+  clear?: boolean;
+  done?: string | boolean;
+  wontdo?: string | boolean;
+  reason?: string;
+  now?: () => Date;
+}): Promise<void> {
   banner("REFLECT · UPSTREAM");
   const dir = upstreamInboxDir();
-  const files = readDir(dir).filter((f) => f.endsWith(".md")).sort();
+  const triaging = opts.done !== undefined || opts.wontdo !== undefined;
+
+  if (triaging) {
+    const done = parseIds(opts.done, "--done");
+    const wontdo = parseIds(opts.wontdo, "--wontdo");
+    const res = await triageUpstream({ dir, done, wontdo, reason: opts.reason, now: opts.now });
+    const archive = path.relative(sparraHome(), path.join(dir, "archive"));
+    for (const a of res.archived) ok(`#${a.globalIndex} ${a.disposition} — "${a.title}" → ${archive}/${a.file}`);
+    for (const f of res.filesMovedWhole) detail(`${f} had no findings left — moved out of the inbox`);
+    return;
+  }
+
+  const { files, findings } = await loadInbox(dir);
   if (files.length === 0) {
     warn(`(empty inbox) no harness-level reflections in ${dir}.`);
     return;
   }
-  ok(`${files.length} harness-level reflection(s) in ${dir}:`);
-  for (const f of files) {
-    process.stdout.write(`\n${color.bold("── " + f + " ──")}\n`);
-    process.stdout.write(((await readText(path.join(dir, f))) ?? "") + "\n");
+  ok(`${files.length} reflection file(s), ${findings.length} finding(s) in ${dir}:`);
+  for (const file of files) {
+    process.stdout.write(`\n${color.bold("── " + file.file + " ──")}\n`);
+    for (const f of findings.filter((x) => x.file === file.file)) {
+      process.stdout.write(`${color.bold(`  [${f.globalIndex}] ${f.title}`)}\n`);
+      process.stdout.write(f.text + "\n");
+    }
   }
-  if (clear) {
+  if (opts.clear) {
     const archive = path.join(dir, "archive");
-    for (const f of files) await moveFile(path.join(dir, f), path.join(archive, f));
-    ok(`archived ${files.length} reflection(s) → ${path.relative(sparraHome(), archive)}`);
+    const names = files.map((f) => f.file);
+    for (const f of names) await moveFile(path.join(dir, f), path.join(archive, f));
+    ok(`archived ${names.length} reflection(s) → ${path.relative(sparraHome(), archive)}`);
   } else {
-    info(`Fold these into the Sparra repo, then ${color.bold("sparra reflect --upstream --clear")} to archive.`);
+    info(
+      `Triage with ${color.bold("sparra reflect --upstream --done <ids>")} / ${color.bold("--wontdo <ids> [--reason …]")}, ` +
+        `or ${color.bold("--clear")} to archive all.`
+    );
   }
 }
 
@@ -88,10 +131,15 @@ export async function cmdReflect(
     run?: string;
     upstream?: boolean;
     clear?: boolean;
+    done?: string | boolean;
+    wontdo?: string | boolean;
+    reason?: string;
+    now?: () => Date;
     runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
   } = {}
 ): Promise<void> {
-  if (opts.upstream) return showUpstream(!!opts.clear);
+  if (opts.upstream)
+    return showUpstream({ clear: opts.clear, done: opts.done, wontdo: opts.wontdo, reason: opts.reason, now: opts.now });
   if (opts.apply) return applyReflection(ctx);
   const run = opts.runSessionFn ?? runSession;
 
@@ -133,7 +181,7 @@ For EACH prompt you would change, WRITE the full improved prompt to:
 Also WRITE ${path.relative(ctx.root, outDir)}/SUMMARY.md explaining each change and why,
 with a short before/after for the key edits.
 
-If any finding is about the Sparra HARNESS itself (a config knob, a guard/holdout gap, a phase/role bug, a backend limit) rather than THIS project's prompts, do NOT make it a prompt edit — list it with its rationale in ${path.relative(ctx.root, outDir)}/upstream.md (a portable note that gets routed to a shared inbox for the Sparra repo). Omit the file if there are no harness-level findings.
+If any finding is about the Sparra HARNESS itself (a config knob, a guard/holdout gap, a phase/role bug, a backend limit) rather than THIS project's prompts, do NOT make it a prompt edit — write EACH such finding as its own \`### <short title>\` section (with its rationale) in ${path.relative(ctx.root, outDir)}/upstream.md (a portable note routed to a shared inbox for the Sparra repo, where each section is triaged separately). Omit the file if there are no harness-level findings.
 
 Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
 

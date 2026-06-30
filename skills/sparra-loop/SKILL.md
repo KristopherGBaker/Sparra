@@ -110,8 +110,10 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
      limit) → these aren't this project's prompts; route them UPSTREAM to the Sparra repo so the
      harness itself improves. `sparra reflect` does this for you: it drops harness-level findings into
      a shared user-level inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides) as a uniquely-named
-     file per run. Later, from the Sparra repo, `sparra reflect --upstream [--clear]` lists (then
-     archives) the accumulated findings to fold in — nothing is applied automatically, you triage.
+     file per run, each finding under its own `###` heading. Later, from the Sparra repo, `sparra reflect
+     --upstream` lists every finding with a global index; triage them individually with `--done <ids>` /
+     `--wontdo <ids>` (`--reason "…"` optional) — only un-triaged findings resurface next run — or
+     `--clear` to archive ALL at once. Nothing is applied automatically, you triage.
 
 ## Two ways to be interactive — pick by scope
 - **Ad-hoc choreography (this skill):** you drive `run_role` calls with the user between

@@ -55,6 +55,11 @@ export async function moveFile(src: string, dst: string): Promise<void> {
   await fsp.rename(src, dst);
 }
 
+/** Delete a file. Silently no-ops if it is already absent. */
+export async function removeFile(p: string): Promise<void> {
+  await fsp.rm(p, { force: true });
+}
+
 /** True iff `p` is itself a symlink (does NOT follow the link). False if absent or on stat error. */
 export function isSymlink(p: string): boolean {
   try {

@@ -62,7 +62,8 @@ ${color.bold("Commands")}
   build [--fresh] [--only <item-id>] [--step contract,round,commit,item]
                                                 Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>]             self-improvement: propose/apply prompt edits from traces
-  reflect --upstream [--clear]                  list (then archive) harness-level findings in the shared inbox (~/.sparra/reflections)
+  reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "<text>"] [--clear]
+                                                list harness-level findings (global 1-based index) in the shared inbox (~/.sparra/reflections); --done/--wontdo triage individual findings to archive/; --clear archives ALL
   prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]
                                                 compare/sync .sparra/prompts with the built-in defaults; audit = concision review (--apply coverage-gated; --source default audits DEFAULT_PROMPTS, report-only)
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
@@ -153,6 +154,9 @@ async function main(): Promise<void> {
         run: flags.run as string | undefined,
         upstream: !!flags.upstream,
         clear: !!flags.clear,
+        done: flags.done as string | boolean | undefined,
+        wontdo: flags.wontdo as string | boolean | undefined,
+        reason: typeof flags.reason === "string" ? flags.reason : undefined,
       });
       break;
     case "batch":
