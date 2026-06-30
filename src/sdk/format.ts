@@ -48,27 +48,81 @@ function mapMentions(map: string | null | undefined, name: string): boolean {
   return !!map && map.toLowerCase().includes(name);
 }
 
-/** Known prettier-style extensions (the greenfield default formatter). */
+/** Known prettier-style extensions (the prettier/biome formatter family). */
 const PRETTIER_EXTS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc",
   ".css", ".scss", ".less", ".html", ".vue", ".md", ".mdx", ".yaml", ".yml", ".graphql",
 ]);
 
 /**
- * True when a config file `name` is discoverable by walking UP from the formatted file's own
- * directory through its TRUE ancestors, to (and including) `stopAt` — or to the filesystem root if
- * `stopAt` isn't an ancestor. Mirrors how a tool like swiftformat finds its own config up the tree;
- * only ancestors are visited, never an unrelated sibling subtree. The single I/O seam (`exists`) is
- * injectable so the choice stays unit-testable.
+ * Config-file candidates per formatter. An AUTODETECTED formatter auto-applies ONLY when one of its
+ * candidates is discoverable up-tree from the file (see {@link findConfigUp}); without it, stock rules
+ * churn diffs on a repo that doesn't format that way, so we run NOTHING (no greenfield exception).
+ * Existence-probe only — we deliberately do NOT read file CONTENTS, so e.g. a prettier config expressed
+ * solely as a `"prettier"` key in `package.json` is not detected (set `format.command` to opt in).
+ * swiftlint (a linter `--fix`, not a reformatter) is exempt and carries no entry here.
  */
-export function findConfigUp(filePath: string, name: string, stopAt: string | undefined, exists: (p: string) => boolean): boolean {
+const FORMATTER_CONFIGS: Record<string, string[]> = {
+  swiftformat: [".swiftformat"],
+  prettier: [
+    ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml", ".prettierrc.json5",
+    ".prettierrc.toml", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
+    "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
+  ],
+  biome: ["biome.json", "biome.jsonc"],
+  black: ["pyproject.toml"],
+  ruff: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
+  gofmt: ["go.mod"],
+  rustfmt: ["rustfmt.toml", ".rustfmt.toml"],
+};
+
+/**
+ * True when ANY of the config files `names` is discoverable by walking UP from the formatted file's
+ * own directory through its TRUE ancestors, to (and including) `stopAt` — or to the filesystem root if
+ * `stopAt` isn't an ancestor. Mirrors how a tool finds its own config up the tree; only ancestors are
+ * visited, never an unrelated sibling subtree. The single I/O seam (`exists`) is injectable for tests.
+ */
+export function findConfigUp(filePath: string, names: string | string[], stopAt: string | undefined, exists: (p: string) => boolean): boolean {
+  const candidates = Array.isArray(names) ? names : [names];
   let dir = path.dirname(path.resolve(filePath));
   const stop = stopAt ? path.resolve(stopAt) : undefined;
   for (let prev = ""; dir !== prev; prev = dir, dir = path.dirname(dir)) {
-    if (exists(path.join(dir, name))) return true;
+    if (candidates.some((n) => exists(path.join(dir, n)))) return true;
     if (stop && dir === stop) break; // reached the workspace root (inclusive) — don't over-reach
   }
   return false;
+}
+
+/** A candidate formatter for an extension. `lint` = a linter `--fix` (not config-gated, and only ever
+ *  selected when the map mentions it); `mentionOnly` = eligible only via a map mention, never as the
+ *  per-language default (preserves the original default tool per language). */
+interface Candidate {
+  tool: string;
+  argv: string[];
+  lint?: boolean;
+  mentionOnly?: boolean;
+}
+
+/** Ordered candidate formatters for a file extension (preference order). */
+function candidatesFor(ext: string, filePath: string): Candidate[] {
+  if (ext === ".swift")
+    return [
+      { tool: "swiftformat", argv: ["swiftformat", filePath] },
+      { tool: "swiftlint", argv: ["swiftlint", "--fix", filePath], lint: true, mentionOnly: true },
+    ];
+  if (PRETTIER_EXTS.has(ext))
+    return [
+      { tool: "biome", argv: ["biome", "format", "--write", filePath], mentionOnly: true },
+      { tool: "prettier", argv: ["prettier", "--write", filePath] },
+    ];
+  if (ext === ".py")
+    return [
+      { tool: "ruff", argv: ["ruff", "format", filePath], mentionOnly: true },
+      { tool: "black", argv: ["black", filePath] },
+    ];
+  if (ext === ".go") return [{ tool: "gofmt", argv: ["gofmt", "-w", filePath] }];
+  if (ext === ".rs") return [{ tool: "rustfmt", argv: ["rustfmt", filePath] }];
+  return [];
 }
 
 /**
@@ -88,41 +142,27 @@ export function chooseFormatter(filePath: string, opts: FormatOptions, deps: For
 
   const ext = path.extname(filePath).toLowerCase();
   const map = opts.codebaseMap;
+  const exists = deps.fileExists ?? ((p: string) => fs.existsSync(p));
+  // An AUTODETECTED reformatter only resolves when its config is discoverable up-tree (file's dir →
+  // true ancestors → workspace root). A linter `--fix` (swiftlint) isn't gated. Greenfield/no-config
+  // therefore resolves NOTHING — no per-language exception.
+  const ok = (c: Candidate) => c.lint || findConfigUp(filePath, FORMATTER_CONFIGS[c.tool] ?? [], opts.workspaceRoot, exists);
 
-  // 2) Swift: an AUTODETECTED swiftformat only applies when a `.swiftformat` config is discoverable
-  //    up the tree from the file (own dir or a true ancestor, to the workspace root). Without it,
-  //    stock rules reindent `#if` bodies etc. and churn diffs on a repo that doesn't format that way,
-  //    so we run NOTHING (no greenfield exception — a brand-new project has no config yet). swiftlint
-  //    (a linter --fix, not a reformatter) isn't gated. Explicit `format.command` (above) bypasses this.
-  if (ext === ".swift") {
-    const exists = deps.fileExists ?? ((p: string) => fs.existsSync(p));
-    const hasSwiftformatCfg = findConfigUp(filePath, ".swiftformat", opts.workspaceRoot, exists);
-    if (opts.mode === "existing" && map) {
-      if (mapMentions(map, "swiftformat") && hasSwiftformatCfg) return ["swiftformat", filePath];
-      if (mapMentions(map, "swiftlint")) return ["swiftlint", "--fix", filePath];
-    }
-    return hasSwiftformatCfg ? ["swiftformat", filePath] : null;
-  }
+  const candidates = candidatesFor(ext, filePath);
 
-  // 3) Existing repos: prefer a formatter the codebase map actually mentions.
+  // 2) Existing repos: prefer a formatter the codebase map actually mentions (still config-gated).
   if (opts.mode === "existing" && map) {
-    if (PRETTIER_EXTS.has(ext)) {
-      if (mapMentions(map, "biome")) return ["biome", "format", "--write", filePath];
-      if (mapMentions(map, "prettier")) return ["prettier", "--write", filePath];
+    for (const c of candidates.filter((c) => mapMentions(map, c.tool))) {
+      if (ok(c)) return c.argv;
     }
-    if (ext === ".py") {
-      if (mapMentions(map, "ruff")) return ["ruff", "format", filePath];
-      if (mapMentions(map, "black")) return ["black", filePath];
-    }
-    if (ext === ".go" && mapMentions(map, "gofmt")) return ["gofmt", "-w", filePath];
-    if (ext === ".rs" && mapMentions(map, "rustfmt")) return ["rustfmt", filePath];
   }
 
-  // 4) Sensible per-language defaults (greenfield, or existing with no map hint).
-  if (PRETTIER_EXTS.has(ext)) return ["prettier", "--write", filePath];
-  if (ext === ".py") return ["black", filePath];
-  if (ext === ".go") return ["gofmt", "-w", filePath];
-  if (ext === ".rs") return ["rustfmt", filePath];
+  // 3) Per-language default (greenfield, or existing with no usable map hint) — reformatters only,
+  //    config-gated. `mentionOnly` tools (biome/ruff/swiftlint) never fire as a bare default.
+  for (const c of candidates) {
+    if (c.mentionOnly) continue;
+    if (ok(c)) return c.argv;
+  }
 
   return null;
 }

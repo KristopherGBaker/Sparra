@@ -98,7 +98,9 @@ The few that matter most:
   a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;
   edit tags in `items.json`. See `docs/backends.md`.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem`** — per-item caps; crossing either
-  halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
+  halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap. The standalone role
+  surfaces override the USD cap per call: `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s
+  `--budget <usd>` (omit = config cap; `0` = unlimited).
 - **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
   rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by

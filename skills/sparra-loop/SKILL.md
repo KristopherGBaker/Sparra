@@ -152,7 +152,9 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
-  `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`). If that
+  `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
+  `maxBudgetUsd`). `maxBudgetUsd` (CLI: `--budget <usd>`) overrides `build.maxBudgetUsdPerItem`
+  for that one call (`0` = unlimited; omit for the config cap). If that
   agent isn't available, spawn a general subagent and instruct it to call the
   `run_role` MCP tool with the same args and these same holdout rules.
 - **Run role-subagents in the BACKGROUND (`run_in_background: true`) by default.** Role

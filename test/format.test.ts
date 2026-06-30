@@ -6,6 +6,12 @@ import { chooseFormatter, runFormatter, makeFormatHook, type FormatOptions } fro
 
 const base: FormatOptions = { enabled: true, command: "", autodetect: true, mode: "greenfield", codebaseMap: null };
 
+/** A `fileExists` seam that reports the named config file(s) as present at every level up-tree (i.e.
+ *  "discoverable"); any other probe is absent. Deterministic — no real filesystem. */
+function hasConfig(names: string[]): (p: string) => boolean {
+  return (p: string) => names.includes(path.basename(p));
+}
+
 /** Create a temp workspace; optionally drop a `.swiftformat` config at a chosen dir. */
 function swiftWorkspace(opts: { config?: "root" | "none" } = {}): { ws: string; file: string } {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-cfg-"));
@@ -30,9 +36,12 @@ describe("chooseFormatter", () => {
     expect(chooseFormatter("/x/a.ts", { ...base, command: "myfmt" })).toEqual(["myfmt", "/x/a.ts"]);
   });
 
-  it("defaults to a prettier-style formatter for TS/JS in greenfield", () => {
-    expect(chooseFormatter("/x/a.ts", base)).toEqual(["prettier", "--write", "/x/a.ts"]);
-    expect(chooseFormatter("/x/a.css", base)).toEqual(["prettier", "--write", "/x/a.css"]);
+  it("resolves a prettier-style formatter for TS/JS ONLY when a prettier config is discoverable", () => {
+    // No prettier config anywhere ⇒ no autodetected formatting (new H4 rule; was prettier before).
+    expect(chooseFormatter("/x/a.ts", base, { fileExists: () => false })).toBeNull();
+    expect(chooseFormatter("/x/a.css", base, { fileExists: () => false })).toBeNull();
+    // A discoverable .prettierrc up-tree ⇒ prettier resolves.
+    expect(chooseFormatter("/x/a.ts", base, { fileExists: hasConfig([".prettierrc"]) })).toEqual(["prettier", "--write", "/x/a.ts"]);
   });
 
   it("detects swiftformat from CODEBASE_MAP.md for existing iOS repos WHEN a .swiftformat config exists", () => {
@@ -92,6 +101,34 @@ describe("chooseFormatter — autodetect requires a discoverable config (H4)", (
   });
 });
 
+describe("chooseFormatter — the config gate applies to ALL autodetected formatters (not just swiftformat)", () => {
+  // ext, the formatter's argv, and a config filename that satisfies its gate.
+  const CASES: Array<{ name: string; file: string; cfg: string; argv: string[] }> = [
+    { name: "prettier (.ts)", file: "/x/a.ts", cfg: ".prettierrc", argv: ["prettier", "--write", "/x/a.ts"] },
+    { name: "prettier.config.js (.ts)", file: "/x/a.ts", cfg: "prettier.config.js", argv: ["prettier", "--write", "/x/a.ts"] },
+    { name: "black (.py)", file: "/x/a.py", cfg: "pyproject.toml", argv: ["black", "/x/a.py"] },
+    { name: "gofmt (.go)", file: "/x/a.go", cfg: "go.mod", argv: ["gofmt", "-w", "/x/a.go"] },
+    { name: "rustfmt (.rs)", file: "/x/a.rs", cfg: "rustfmt.toml", argv: ["rustfmt", "/x/a.rs"] },
+  ];
+
+  for (const c of CASES) {
+    it(`${c.name}: NO config ⇒ null, WITH config ⇒ resolves`, () => {
+      expect(chooseFormatter(c.file, base, { fileExists: () => false })).toBeNull();
+      expect(chooseFormatter(c.file, base, { fileExists: hasConfig([c.cfg]) })).toEqual(c.argv);
+    });
+  }
+
+  it("a map-mentioned formatter is STILL config-gated (existing repo, no config ⇒ null)", () => {
+    const opts: FormatOptions = { ...base, mode: "existing", codebaseMap: "We format with prettier." };
+    expect(chooseFormatter("/x/a.ts", opts, { fileExists: () => false })).toBeNull();
+    expect(chooseFormatter("/x/a.ts", opts, { fileExists: hasConfig([".prettierrc"]) })).toEqual(["prettier", "--write", "/x/a.ts"]);
+  });
+
+  it("an explicit format.command bypasses the gate for non-Swift files too", () => {
+    expect(chooseFormatter("/x/a.ts", { ...base, command: "myfmt" }, { fileExists: () => false })).toEqual(["myfmt", "/x/a.ts"]);
+  });
+});
+
 describe("runFormatter", () => {
   it("actually formats the touched file via the chosen formatter", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-"));
@@ -128,6 +165,7 @@ describe("runFormatter", () => {
     expect(() => {
       result = runFormatter("/x/a.ts", base, {
         warn: (m) => warnings.push(m),
+        fileExists: hasConfig([".prettierrc"]), // config present so prettier resolves; the exec then ENOENTs
         exec: () => ({ status: null, error: Object.assign(new Error("spawn prettier ENOENT"), { code: "ENOENT" }) }),
       });
     }).not.toThrow();
@@ -150,7 +188,7 @@ describe("runFormatter", () => {
     const result = runFormatter(
       "/x/a.ts",
       base,
-      { warn: (m) => warnings.push(m), exec: () => ({ status: 2 }) }
+      { warn: (m) => warnings.push(m), fileExists: hasConfig([".prettierrc"]), exec: () => ({ status: 2 }) }
     );
     expect(result.ran).toBe(false);
     expect(warnings.join(" ")).toMatch(/exited 2/);
