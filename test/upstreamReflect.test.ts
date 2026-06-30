@@ -219,7 +219,7 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(11);
-    expect(h.digest("hex")).toBe("fb142a22ff4778bf152be5f3e49581c326f2a9c2ee7e0ae6c3a4bfabb0e6791a");
+    expect(h.digest("hex")).toBe("2af57e8b1ec0ca0ae290bf081eece74bb2ea44df062778c78854173ea5eb8bc9");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

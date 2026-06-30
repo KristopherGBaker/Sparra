@@ -174,12 +174,36 @@ describe("runRole — safety intent + wiring", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("the evaluator runs with a default brief (standalone WIP eval), but other roles require one", async () => {
+  it("read-only judge roles synthesize a default brief; writers/proposers still require one", async () => {
     const { ctx, dir } = await makeCtx();
+
+    // evaluator (standalone WIP eval) — unchanged behavior.
     const ev = recorder();
     await runRole({ ctx, roleKind: "evaluator", runSessionFn: ev.fn }); // no brief
+    expect(ev.calls.length).toBeGreaterThanOrEqual(1);
     expect(ev.calls[0]!.prompt).toContain("Evaluate the artifact in");
+
+    // reviewer — defaults a review brief (the session WAS invoked, not merely "didn't throw").
+    const rev = recorder();
+    await runRole({ ctx, roleKind: "reviewer", runSessionFn: rev.fn }); // no brief
+    expect(rev.calls.length).toBeGreaterThanOrEqual(1);
+    expect(rev.calls[0]!.prompt).toContain("Review the changes in");
+
+    // contract-evaluator with a contract but no brief — defaults a critique brief (H5).
+    const ce = recorder();
+    await runRole({ ctx, roleKind: "contract-evaluator", contract: "- the thing works", runSessionFn: ce.fn });
+    expect(ce.calls.length).toBeGreaterThanOrEqual(1);
+    expect(ce.calls[0]!.prompt).toContain("Critique the proposed");
+
+    // contract-evaluator with NEITHER brief NOR contract → clear error naming the missing input.
+    await expect(runRole({ ctx, roleKind: "contract-evaluator", runSessionFn: recorder().fn })).rejects.toThrow(
+      /contract/i
+    );
+    // writers/proposers still require an explicit brief.
     await expect(runRole({ ctx, roleKind: "generator", runSessionFn: recorder().fn })).rejects.toThrow(/brief/i);
+    await expect(runRole({ ctx, roleKind: "contract-generator", runSessionFn: recorder().fn })).rejects.toThrow(
+      /brief/i
+    );
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

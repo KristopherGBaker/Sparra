@@ -315,13 +315,24 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     );
   }
 
+  // Resolve the contract first so a default brief can be gated on its presence (below).
+  const contract = req.contract ?? (req.contractPath ? (await readText(req.contractPath)) ?? "" : "");
+
   let brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
   if (!brief.trim()) {
-    // The standalone WIP-eval case: grading an existing tree needs no bespoke brief.
+    // Read-only JUDGE roles can synthesize a default brief from their inputs (workspace/contract) —
+    // so a config-less `run_role`/`sparra-loop` call needn't hand-write one. Only WRITERS/proposers
+    // (generator, contract-generator) must be briefed explicitly. A contract-evaluator still needs
+    // *something* to critique, so it requires either a brief or a contract.
     if (isEvaluator(roleKind)) brief = `Evaluate the artifact in ${workspace} against the contract.`;
-    else throw new Error(`runRole(${roleKind}) requires a non-empty brief (brief or briefPath).`);
+    else if (roleKind === "reviewer")
+      brief = `Review the changes in ${workspace} for correctness, safety, and maintainability.`;
+    else if (roleKind === "contract-evaluator") {
+      if (!contract.trim())
+        throw new Error(`runRole(contract-evaluator) requires a contract (contract or contractPath) to critique, or an explicit brief.`);
+      brief = `Critique the proposed "done" contract for fidelity, proportionality, satisfiability, and gameability.`;
+    } else throw new Error(`runRole(${roleKind}) requires a non-empty brief (brief or briefPath).`);
   }
-  const contract = req.contract ?? (req.contractPath ? (await readText(req.contractPath)) ?? "" : "");
 
   // The runner — not the conductor — is the only context that reads holdout.
   const holdoutText = await resolveHoldout(req);

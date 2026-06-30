@@ -144,6 +144,12 @@ reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--br
 evaluator`, with the brief defaulted) — to grade whatever you've been building, no full
 plan→freeze→build.
 
+`--brief` is **optional for the read-only judge roles** — `evaluator`, `reviewer`, and
+`contract-evaluator` synthesize a sensible default brief from their inputs (the workspace, and for
+`contract-evaluator` the `--contract`), so a config-less `run_role`/`sparra-loop` call needn't hand-write
+one. Writers/proposers (`generator`, `contract-generator`) still require an explicit `--brief`, and
+`contract-evaluator` needs at least a `--contract` (nothing to critique otherwise).
+
 ## What the runner enforces (the holdout wall)
 - **Only the evaluator** ever sees holdout contents — they're injected into its prompt
   by the runner. Every other ("forbid") role's brief is checked with

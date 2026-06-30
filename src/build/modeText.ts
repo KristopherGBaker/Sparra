@@ -5,9 +5,16 @@ import type { Ctx } from "../context.ts";
 /** Mandatory contract clauses. Existing projects ALWAYS include no-regression + conventions. */
 export function contractModeClauses(ctx: Ctx): string {
   if (ctx.store.data.mode === "existing") {
+    // The conventions clause must stay SATISFIABLE: a config-less ad-hoc loop never ran `orient`, so
+    // CODEBASE_MAP.md is absent and demanding conformance to it is unmeetable. Degrade to the repo's
+    // actual convention source when no map exists.
+    const hasMap = fs.existsSync(ctx.paths.codebaseMap) || fs.existsSync(ctx.paths.frozenMap);
+    const conventions = hasMap
+      ? `- "Conforms to the conventions in CODEBASE_MAP.md" — cite the specific patterns/idioms to follow.`
+      : `- "Conforms to the repo's existing conventions" — cite the actual source (CLAUDE.md / the surrounding code); there is no CODEBASE_MAP.md (orient was not run), so do NOT require conformance to that file.`;
     return `MANDATORY CLAUSES (existing project — these MUST appear as assertions):
 - "Does not regress existing behavior" — name the existing tests/flows that must still pass.
-- "Conforms to the conventions in CODEBASE_MAP.md" — cite the specific patterns/idioms to follow.
+${conventions}
 - The existing test suite must pass with no NEW failures.`;
   }
   return `This is a greenfield project. Assertions should fully define "done" for this item;

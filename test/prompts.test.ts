@@ -13,6 +13,21 @@ async function tmpPaths(): Promise<{ dir: string; paths: Paths }> {
   return { dir, paths };
 }
 
+describe("evaluator prompt — environmental blockers route to notes, not `blocking` (H3)", () => {
+  const ev = DEFAULT_PROMPTS.evaluator;
+  it("keeps the could-not-run → exerciseStatus='blocked' inability path", () => {
+    expect(ev).toContain("exerciseStatus='blocked'");
+    expect(ev).toContain("could not RUN due to ENVIRONMENT");
+  });
+  it("routes the environmental blocker into `notes`, NOT `blocking`", () => {
+    // (a) new distinction present.
+    expect(ev).toContain("name the blocker in `notes`");
+    // (b) the old contradictory routing is GONE — without this, a builder could append (a) while
+    // leaving the self-contradictory "name the blocker in `blocking`" text and still grep green.
+    expect(ev).not.toContain("name the blocker in `blocking`");
+  });
+});
+
 describe("prompt drift + sync", () => {
   it("reports every role in-sync right after seeding", async () => {
     const { dir, paths } = await tmpPaths();
