@@ -6,6 +6,7 @@ import {
   denyAnyWrite,
   denyBash,
   denyBashMutation,
+  denyTreeMutatingGit,
   denyWriteNotFile,
   denyWriteOutsideRoots,
   firstDeny,
@@ -139,6 +140,9 @@ export function evaluatorHooks(denyBashContains: string[], opts: RoleHookOpts = 
     (t) => denyAmbientMcp(t),
     (t) => (denyAnyWrite(t) ? `Evaluator does not edit source (${t} blocked). Exercise via Bash / the exercise tools.` : null),
     (t, i) => denyBash(t, i, denyBashContains),
+    // Best-effort raw-Bash residual (like denyBash): deny tree-mutating git so the read-only evaluator
+    // can't clobber the worktree it grades. Non-mutating git (status/diff/ls-files/log) stays allowed.
+    (t, i) => denyTreeMutatingGit(t, i),
     ...extraDeny,
   ];
   const allow: Decider[] = readScopes.length ? [(t, i) => allowReadInScope(t, i, readScopes)] : [];

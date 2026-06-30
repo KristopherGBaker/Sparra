@@ -39,6 +39,7 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,
     model: typeof flags.model === "string" ? (flags.model as string) : undefined,
     effort: parseEffort(flags.effort),
+    maxBudgetUsd: parseBudget(flags.budget),
   };
 
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
@@ -59,6 +60,14 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   if (res.outPath) detail(`wrote: ${res.outPath}`);
   if (res.errors.length) warn(`errors: ${res.errors.join("; ")}`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
+}
+
+/** Parse a `--budget <usd>` flag into a per-call USD cap, or undefined (use the config default).
+ *  `0` is preserved (it means unlimited per budget.ts); a non-numeric value is ignored. */
+function parseBudget(flag: string | boolean | undefined): number | undefined {
+  if (typeof flag !== "string") return undefined;
+  const n = Number(flag);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;

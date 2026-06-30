@@ -56,6 +56,22 @@ export function denyAmbientMcp(toolName: string): string | null {
   return null;
 }
 
+/**
+ * Deny TREE-MUTATING git via raw Bash (for the read-only evaluator). The evaluator may freely run
+ * inspecting git (`git status`/`diff`/`ls-files`/`log`) to read the artifact, but must NOT clobber
+ * the worktree it grades — a `git clean -xfd` / `git checkout -- .` / `git reset --hard` would wipe
+ * the generator's output and trip the source-integrity guard. BEST-EFFORT, exactly like {@link denyBash}:
+ * a shell can evade substring matching (the authoritative wall is the isolated worktree + integrity
+ * snapshot), so this only shrinks the obvious raw-Bash residual.
+ */
+export const TREE_MUTATING_GIT = ["git clean", "git checkout", "git reset", "git restore", "git stash"];
+export function denyTreeMutatingGit(toolName: string, input: any): string | null {
+  if (toolName !== "Bash") return null;
+  const cmd = String(input?.command ?? "");
+  const hit = TREE_MUTATING_GIT.find((bad) => cmd.includes(bad));
+  return hit ? `Read-only evaluator: tree-mutating git blocked ("${hit}"). Use non-mutating git (status/diff/log) to inspect.` : null;
+}
+
 /** Deny dangerous Bash by substring match. */
 export function denyBash(toolName: string, input: any, denyContains: string[]): string | null {
   if (toolName !== "Bash") return null;

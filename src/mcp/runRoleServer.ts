@@ -58,6 +58,10 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .optional()
         .describe("Reasoning-effort override (default: the role's config). Raise (e.g. xhigh) for a tougher adversarial pass."),
       out: z.string().optional().describe("Where to write the verdict/result on disk."),
+      maxBudgetUsd: z
+        .number()
+        .optional()
+        .describe("Per-call USD budget override for THIS run; overrides build.maxBudgetUsdPerItem. 0 = unlimited. Omit to use the config default."),
       resumeSessionId: z
         .string()
         .optional()
@@ -82,6 +86,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
           model: args.model,
           effort: args.effort,
           out: args.out,
+          maxBudgetUsd: args.maxBudgetUsd,
           resumeSessionId: args.resumeSessionId,
           resumeBackend: args.resumeBackend,
         });

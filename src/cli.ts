@@ -71,9 +71,9 @@ ${color.bold("Commands")}
   finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   clean [--yes] [--force]                       prune stale sparra worktrees/branches (dry-run by default)
-  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d]
-                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam
-  eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f]
+  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d] [--budget <usd>]
+                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem; 0 = unlimited)
+  eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f] [--budget <usd>]
                                                 grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator)
   resume                                        continue whatever phase you're in, from disk
   help                                          this

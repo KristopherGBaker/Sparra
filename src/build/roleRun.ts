@@ -90,6 +90,10 @@ export interface RoleRunRequest {
   backend?: string;
   model?: string;
   effort?: RoleConfig["effort"];
+  /** Per-call USD budget override (the per-session cap). When omitted, falls back to
+   *  `build.maxBudgetUsdPerItem` (behavior unchanged). `0` means unlimited (see budget.ts) —
+   *  threaded with nullish-coalescing so a supplied `0` is preserved, not dropped. */
+  maxBudgetUsd?: number;
   /** Resume a prior role-run's backend session — so an iterate round (e.g. re-running the
    *  generator with feedback) doesn't re-read the whole worktree from scratch. Pass the
    *  `sessionId` AND `backend` returned by the previous RoleRunResult. A session id isn't
@@ -441,7 +445,8 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     ...guard,
     maxTurns: ctx.config.build.maxTurnsPerSession,
-    maxBudgetUsd: ctx.config.build.maxBudgetUsdPerItem,
+    // Per-call override (nullish-coalesce so a supplied `0` = unlimited survives); else the per-item cap.
+    maxBudgetUsd: req.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir,
   };
 

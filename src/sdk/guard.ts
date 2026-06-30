@@ -59,7 +59,7 @@ export interface Guard {
 export function formatOptions(ctx: Ctx): FormatOptions {
   const f = ctx.config.format;
   const map = readTextSync(ctx.paths.frozenMap) ?? readTextSync(ctx.paths.codebaseMap);
-  return { enabled: f.enabled, command: f.command, autodetect: f.autodetect, mode: ctx.store.data.mode, codebaseMap: map };
+  return { enabled: f.enabled, command: f.command, autodetect: f.autodetect, mode: ctx.store.data.mode, codebaseMap: map, workspaceRoot: ctx.root };
 }
 
 /** Writer scoped to writeRoots (generator, prototyper, reflector output dir).

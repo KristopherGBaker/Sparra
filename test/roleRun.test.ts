@@ -191,6 +191,29 @@ describe("runRole — safety intent + wiring", () => {
     expect(r.backend).toBe("codex");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("maxBudgetUsd override reaches the session request; 0 survives; omission falls back to config", async () => {
+    const { ctx, dir } = await makeCtx();
+
+    // (a) a supplied override (25) reaches the session's per-call budget verbatim.
+    const supplied = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", maxBudgetUsd: 25, runSessionFn: supplied.fn });
+    expect(supplied.calls[0]!.maxBudgetUsd).toBe(25);
+
+    // (b) 0 is preserved (unlimited per budget.ts) — nullish-coalescing, NOT a truthy `||` that drops it.
+    const zero = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", maxBudgetUsd: 0, runSessionFn: zero.fn });
+    expect(zero.calls[0]!.maxBudgetUsd).toBe(0);
+
+    // (c) omission falls back to build.maxBudgetUsdPerItem — asserted by VARYING the config value
+    //     (not matching a hardcoded constant), so the fallback is genuinely the config seam.
+    ctx.config.build.maxBudgetUsdPerItem = 13.5;
+    const omitted = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: omitted.fn });
+    expect(omitted.calls[0]!.maxBudgetUsd).toBe(13.5);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 /** A no-op IntegrityDeps that reports a clean exercise (no artifact mutation). */

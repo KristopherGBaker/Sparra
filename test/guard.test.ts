@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scopedWriterGuard } from "../src/sdk/guard.ts";
+import { scopedWriterGuard, evaluatorGuard } from "../src/sdk/guard.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 
@@ -40,5 +40,30 @@ describe("scopedWriterGuard — worktree-gated generator self-verify", () => {
   it("does NOT auto-approve when verifyCommands is empty even on a branch", async () => {
     const g = scopedWriterGuard(ctxWith("sparra/x", []), ["/work"], { verify: true });
     expect(await decide(g, "Bash", { command: "npm test" })).toBe("defer");
+  });
+});
+
+describe("evaluatorGuard — denies tree-mutating git (H1)", () => {
+  // The five tree-mutating git commands the read-only evaluator must never run (it would clobber
+  // the worktree it grades / trip the source-integrity guard). Behavioral: target the guard result.
+  const MUTATING = ["git clean -xfd", "git checkout -- .", "git reset --hard", "git restore .", "git stash"];
+  it.each(MUTATING)("DENIES %s", async (command) => {
+    const g = evaluatorGuard(ctxWith(undefined));
+    expect(await decide(g, "Bash", { command })).toBe("deny");
+  });
+
+  it("ALLOWS (defers) non-mutating git the evaluator needs to inspect the artifact", async () => {
+    const g = evaluatorGuard(ctxWith(undefined));
+    for (const command of ["git status", "git diff", "git ls-files", "git log --oneline"]) {
+      expect(await decide(g, "Bash", { command })).toBe("defer");
+    }
+  });
+
+  it("does NOT newly deny tree-mutating git on the writer generator (scope is the evaluator)", async () => {
+    // The generator legitimately uses git; the new deny must not leak onto it.
+    const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], {});
+    for (const command of MUTATING) {
+      expect(await decide(g, "Bash", { command })).not.toBe("deny");
+    }
   });
 });
