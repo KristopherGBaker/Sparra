@@ -8,7 +8,7 @@ A long-running **adversarial build harness**. It builds software one work item a
 
 **Two ways to drive it:**
 
-1. **Interactively, from a Claude Code session** (how most sessions go). The **`/sparra-loop` skill** puts *you* on the wheel: **contract → generate → cross-model adversarial evaluate → pivot/accept**, steering between every step, with the holdout wall enforced by the runner. Same rigor as the autonomous loop, your hand on the wheel.
+1. **Interactively, from a Claude Code session** (how most sessions go). The **`/sparra-loop` skill** puts *you* on the wheel: **contract → generate → cross-model adversarial evaluate → pivot/accept**, with the holdout wall enforced by the runner. You choose how hands-on to be — steer at every step, or let Claude Code run it in **auto mode** and step in only when you see the need (the adversarial evaluator already plays the "catch it going sideways" role, so light-touch steering is enough for most runs). Same rigor as the autonomous loop, your hand as near or far from the wheel as you like.
 2. **Fully autonomous, as CLI phases**: `plan → freeze → build → reflect`. You hand off and the loop runs unattended, item by item. (See [Autonomous CLI phases](#autonomous-cli-phases).)
 
 The guiding principle: **the filesystem is the source of truth and the only shared state.** Every step reads its inputs from disk and writes its outputs to disk, so the whole thing is inspectable, diffable, and **resumable from any point**, and both modes share the same on-disk state and the same role-runner seam.
@@ -48,7 +48,7 @@ claude plugin marketplace add "$PWD"                            # assumes you're
 claude plugin install sparra@sparra-skills                      # gives you /sparra-loop and /sparra
 ```
 
-Then, from a Claude Code session in your project, invoke the **`/sparra-loop`** skill. *You* drive the loop, **contract → generate → cross-model adversarial evaluate → pivot/accept**, steering between every step, with the **holdout wall** enforced by the runner. It's the interactive analogue of the autonomous build loop: same rigor, your hand on the wheel.
+Then, from a Claude Code session in your project, invoke the **`/sparra-loop`** skill. *You* drive the loop, **contract → generate → cross-model adversarial evaluate → pivot/accept**, with the **holdout wall** enforced by the runner — steering every step or letting it run in auto mode and stepping in only when needed. It's the interactive analogue of the autonomous build loop: same rigor, your hand as near or far from the wheel as you like.
 
 Both the **`/sparra-loop`** skill (drive the loop) and the **`/sparra`** skill (drive + debug Sparra) ship in that plugin, alongside a `sparra-role` subagent the conductor delegates role-runs to.
 
