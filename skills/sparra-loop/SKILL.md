@@ -79,8 +79,10 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    generator is the point — an independent second opinion.
 4. **Decide.** Act on the subagent's returned summary (verdict + blocking points) —
    not a raw re-read of the verdict file. If it passes, accept (commit if the user
-   wants). If it fails, feed the blocking issues back into the generator brief and
-   repeat. Pivot to a fresh approach after repeated failures on the same point.
+   wants). If it fails, feed the blocking issues plus each failed assertion's
+   `#<id>: <evidence>` line (what the evaluator observed — the same shape as the
+   autonomous loop's round feedback) back into the generator brief and repeat. Pivot
+   to a fresh approach after repeated failures on the same point.
    **Limit ≠ fail:** if the summary carries a `limitHit` (a provider rate/usage/session
    limit, or a Codex empty completion classified as one — e.g. `tokens: 0`), the role
    never really ran. Do NOT treat it as a behavioral FAIL or feed it back to the

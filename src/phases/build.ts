@@ -18,6 +18,7 @@ import { reviewItem } from "../build/review.ts";
 import type { ReviewOutput } from "../build/review.ts";
 import type { Deviation } from "../build/generate.ts";
 import { updateStreaksAndDecide } from "../build/pivot.ts";
+import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from "../build/feedback.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
@@ -693,7 +694,7 @@ export async function cmdBuild(
         const roundBlocked = ev.verdict.exerciseStatus === "blocked";
         const defaultFeedback = passing
           ? ""
-          : `${roundBlocked ? "NOTE: the exercise was BLOCKED (inconclusive — it could not run; environment, not the artifact), so this is not a behavioral failure. Make the artifact exercisable, or accept/abandon as appropriate.\n\n" : ""}Address these blocking issues from the evaluator:\n${ev.verdict.blocking.map((x) => `- ${x}`).join("\n")}\nFailed assertions: ${ev.verdict.assertions.filter((a) => !a.pass).map((a) => `#${a.id}`).join(", ") || "(see verdict)"}`;
+          : `${roundBlocked ? "NOTE: the exercise was BLOCKED (inconclusive — it could not run; environment, not the artifact), so this is not a behavioral failure. Make the artifact exercisable, or accept/abandon as appropriate.\n\n" : ""}${renderPatchFeedback(ev.verdict)}`;
         await writeRoundPause(ctx, {
           runId,
           itemId: item.id,
@@ -784,7 +785,7 @@ export async function cmdBuild(
           break;
         }
         if (st.round >= ctx.config.build.maxRoundsPerItem) break;
-        feedback = `The exercise could NOT run (blocked): ${(ev.verdict.blocking.slice(0, 3).join("; ") || ev.verdict.notes).slice(0, 300)}. This is NOT a behavioral failure — ensure the artifact is exercisable (its tests/build can actually run) so it can be verified.`;
+        feedback = renderBlockedFeedback(ev.verdict);
         fresh = false;
         continue;
       }
@@ -803,7 +804,11 @@ export async function cmdBuild(
         st.pivots += 1;
         st.criterionFailStreak = {};
         fresh = true;
-        feedback = `GAN PIVOT: this item stayed below ${ctx.config.pivot.threshold} on "${decision.criterion}" for ${ctx.config.pivot.N} rounds. Discard the previous approach entirely and rebuild from scratch with a fundamentally different design. Latest blocking issues: ${ev.verdict.blocking.join("; ") || ev.verdict.notes}`;
+        feedback = renderPivotFeedback(ev.verdict, {
+          criterion: decision.criterion ?? "(criterion)",
+          threshold: ctx.config.pivot.threshold,
+          rounds: ctx.config.pivot.N,
+        });
         warn(`${item.id}: GAN pivot on "${decision.criterion}" → restarting from scratch (pivot #${st.pivots}).`);
         await d.appendLearning(ctx.paths, {
           item: item.id,
@@ -813,7 +818,7 @@ export async function cmdBuild(
         });
       } else {
         fresh = false;
-        feedback = `Address these blocking issues from the evaluator:\n${ev.verdict.blocking.map((x) => `- ${x}`).join("\n")}\nFailed assertions: ${ev.verdict.assertions.filter((a) => !a.pass).map((a) => `#${a.id}`).join(", ") || "(see verdict)"}`;
+        feedback = renderPatchFeedback(ev.verdict);
         detail(`${item.id}: patching for round ${st.round + 1}.`);
       }
       void dev;
