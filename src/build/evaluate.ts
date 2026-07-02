@@ -179,6 +179,21 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     };
   }
 
+  // Observed-run gate: a parsed PASS with ZERO observed mcp__exercise__ activity rests on pure
+  // self-report — the override above never fired. Where run_command/http_request ARE the exercise
+  // path (cli|web) and `exercise.requireObservedRun` is on, demote the pass to fail with a blocking
+  // note. ios/computer-use/custom are exempt (exercising legitimately flows through tools the
+  // classifier can't see); failing verdicts and the no-parseable-verdict path are untouched.
+  const mech = ctx.config.exercise.mechanism;
+  const observedRunGateApplies = ctx.config.exercise.requireObservedRun && (mech === "cli" || mech === "web");
+  if (verdict.verdict === "pass" && harnessStatus === "none" && observedRunGateApplies) {
+    verdict.verdict = "fail";
+    verdict.blocking.push(
+      "Unobserved pass: no mcp__exercise__ activity backed this pass; run gating commands via run_command so the harness can observe them."
+    );
+    warn(`${item.id} round ${round}: pass demoted to fail — no mcp__exercise__ activity observed (mechanism ${mech}).`);
+  }
+
   // Source-integrity guard: revert any artifact write the evaluator made during the exercise and,
   // if it mutated the surface, FORCE the verdict to fail (a verdict from an evaluator that edited
   // the code it grades cannot be trusted). Reverts BEFORE the verdict file is written so it records it.

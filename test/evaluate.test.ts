@@ -260,6 +260,80 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // — Observed-run gate (Q2): an unobserved pass (harness "none") is demoted to fail on cli/web —
+  const UNOBSERVED_NOTE = "no mcp__exercise__ activity backed this pass; run gating commands via run_command";
+
+  it("mechanism cli + harness 'none' + model pass ⇒ FAIL with the unobserved-exercise blocking note (Q2)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+    const out = await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("mechanism web + harness 'none' + model pass ⇒ FAIL with the same note (gate covers web too) (Q2)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "web";
+    const out = await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("mechanism cli + harness 'ran' + model pass ⇒ stays PASS (gate discriminates observed vs unobserved) (Q2)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+    const out = await runWithExerciser(recorder(PASS_JSON), "ran", dir, ctx);
+    expect(out.verdict.verdict).toBe("pass");
+    expect(out.verdict.blocking.join(" ")).not.toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("mechanisms ios, computer-use, and custom are EXEMPT — 'none' + model pass stays PASS (Q2)", async () => {
+    for (const mech of ["ios", "computer-use", "custom"] as const) {
+      const { ctx, dir } = await makeCtx();
+      ctx.config.exercise.mechanism = mech;
+      const out = await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+      expect(out.verdict.verdict, `mechanism ${mech} should be exempt`).toBe("pass");
+      expect(out.verdict.blocking.join(" ")).not.toContain(UNOBSERVED_NOTE);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exercise.requireObservedRun: false opts out — cli + 'none' + model pass stays PASS (Q2)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+    ctx.config.exercise.requireObservedRun = false;
+    const out = await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+    expect(out.verdict.verdict).toBe("pass");
+    expect(out.verdict.blocking.join(" ")).not.toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a FAILING verdict with 'none' observed stays fail WITHOUT the unobserved-pass note (gate targets passes only) (Q2)", async () => {
+    const failJson =
+      '```json\n{"assertions":[{"id":1,"pass":false,"evidence":"broken"}],' +
+      '"scores":{"design":40,"originality":40,"craft":40,"functionality":40},"verdict":"fail","blocking":["it is broken"],"notes":"n"}\n```';
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+    const out = await runWithExerciser(recorder(failJson), "none", dir, ctx);
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).not.toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the demoted verdict's markdown carries the unobserved-exercise note in its Blocking section (Q2)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+    await runWithExerciser(recorder(PASS_JSON), "none", dir, ctx);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toMatch(/verdict: \*\*fail\*\*/);
+    const blockingSection = written.split("## Blocking")[1]!.split("## Notes")[0]!;
+    expect(blockingSection).toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("a blocked exercise can NEVER pass, even if the model claims pass with a high score (H3)", async () => {
     // Contradictory verdict: model says pass + 90s but admits the exercise was blocked.
     const blockedButPass =

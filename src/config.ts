@@ -243,6 +243,12 @@ export interface SparraConfig {
     mechanism: ExerciseMechanism;
     /** On existing projects, also run the repo's own test suite; new failures = hard fail. */
     runExistingTests: boolean;
+    /** Observed-run gate: demote a PASS verdict to FAIL when the harness observed ZERO
+     *  mcp__exercise__ activity (`exerciseStatus() === "none"`) — an unobserved pass rests on
+     *  pure self-report. Applies to mechanisms `cli` and `web`, where run_command/http_request
+     *  ARE the exercise path; `ios`/`computer-use`/`custom` are exempt (exercising there
+     *  legitimately flows through tools the classifier can't see). `false` opts out. */
+    requireObservedRun: boolean;
     /** Sandbox the evaluator's EXERCISE runs under on a backend with a native OS sandbox (Codex).
      *  "workspace-write" (default) lets the exercise write the scratch that test/build tools need
      *  (e.g. node_modules/.vite-temp, tsc/test caches) so `npm test`/`tsc` actually run; a
@@ -375,6 +381,7 @@ export function defaultConfig(): SparraConfig {
     exercise: {
       mechanism: "cli",
       runExistingTests: true,
+      requireObservedRun: true,
       sandbox: "workspace-write",
       existingTestCommand: "",
       customRecipe: "",
