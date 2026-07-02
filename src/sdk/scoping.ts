@@ -92,11 +92,23 @@ export function allowVerifyBash(toolName: string, input: any, allowPrefixes: str
   if (toolName !== "Bash" || allowPrefixes.length === 0) return null;
   const cmd = String(input?.command ?? "").trim();
   if (!cmd) return null;
+  if (unsafeVerifyCommandReason(cmd, denyExtra)) return null;
+  const ok = allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "));
+  return ok ? `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}` : null;
+}
+
+/**
+ * THE self-verify safety rule, shared by the generator's `allowVerifyBash` allow-hook and the
+ * harness-side command executor (`src/build/exec.ts`): only a single, self-contained verification
+ * command qualifies. Returns a human-readable reason when `cmd` is DISQUALIFIED (chaining,
+ * redirect, network install, mutation, commit, control chars), or null when it is safe.
+ */
+export function unsafeVerifyCommandReason(cmd: string, denyExtra: string[] = []): string | null {
   // Any ASCII control char (newline, CR, tab, …) disqualifies — a newline is a shell command
-  // separator, so `npm test\ntouch pwned` must NOT slip through the prefix check below.
-  if (/[\x00-\x1f]/.test(cmd)) return null;
+  // separator, so `npm test\ntouch pwned` must NOT slip through a prefix/safety check.
+  if (/[\x00-\x1f]/.test(cmd)) return "contains a control character (shell command separator)";
   // Anything that could chain, redirect, reach the network, mutate the tree, install, or commit
-  // disqualifies auto-approval — only a single, self-contained verification command is granted.
+  // disqualifies — only a single, self-contained verification command is granted.
   const disqualify = [
     "&&", "||", ";", "|", "`", "$(", ">", "<", "rm ", "mv ", "cp ", "tee ", "sed -i", "chmod ", "chown ",
     "git commit", "git push", "git reset", "git checkout", "git clean", "git rm",
@@ -104,9 +116,8 @@ export function allowVerifyBash(toolName: string, input: any, allowPrefixes: str
     "yarn add", "pnpm add", "pip install", "sudo ",
     ...denyExtra,
   ];
-  if (disqualify.some((b) => b && cmd.includes(b))) return null;
-  const ok = allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "));
-  return ok ? `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}` : null;
+  const hit = disqualify.find((b) => b && cmd.includes(b));
+  return hit ? `contains forbidden token "${hit}" (chain/redirect/network/mutation/commit)` : null;
 }
 
 /**

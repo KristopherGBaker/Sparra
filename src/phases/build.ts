@@ -22,7 +22,8 @@ import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from 
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
-import { assertNoHoldoutLeak, readHoldout } from "../build/holdout.ts";
+import { assertNoHoldoutLeak, readHoldout, redactHoldout } from "../build/holdout.ts";
+import { extractVerifyCommands, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
 import {
   writeContractPause,
   writeRoundPause,
@@ -57,6 +58,8 @@ export interface BuildDeps {
   commitItem: typeof commitItem;
   waitForLimit: typeof waitForLimit;
   provisionWorkspaceDeps: typeof provisionWorkspaceDeps;
+  /** No-model safe executor for the contract verify-probe + flakiness rerun gate. */
+  execVerifyCommand: CommandExecutor;
 }
 
 const defaultDeps: BuildDeps = {
@@ -74,6 +77,7 @@ const defaultDeps: BuildDeps = {
   commitItem,
   waitForLimit,
   provisionWorkspaceDeps,
+  execVerifyCommand: runVerifyCommand,
 };
 
 /** Provider account a role runs against — the granularity a rate/usage limit applies to.
@@ -515,7 +519,7 @@ export async function cmdBuild(
     // 1) Negotiate the "done" contract.
     st.status = "contracting";
     await ctx.store.save();
-    const contract = await d.negotiateContract(ctx, item, traceDir, nextSeq(), priorLearnings, workspaceDir);
+    const contract = await d.negotiateContract(ctx, item, traceDir, nextSeq(), priorLearnings, workspaceDir, undefined, d.execVerifyCommand);
     // negotiateContract advanced the global seq via its own writes; bump our counter past it.
     b.build.traceSeq = (b.build.traceSeq ?? 0) + contract.tracesUsed;
 
@@ -713,6 +717,41 @@ export async function cmdBuild(
       }
 
       if (ev.verdict.verdict === "pass") {
+        // Flakiness RERUN gate (no model): re-run the contract's verify commands K times. ANY
+        // rerun failure prevents a clean pass — mixed exits = FLAKY, deterministic nonzero =
+        // failing-as-shipped — demoted with the command + output as blocking feedback.
+        const reruns = ctx.config.build.flakinessReruns;
+        const rerunBad =
+          reruns > 0
+            ? (await rerunVerifyCommands(workspaceDir, extractVerifyCommands(contract.text), reruns, d.execVerifyCommand)).filter(
+                (r) => r.status === "flaky" || r.status === "failing"
+              )
+            : [];
+        if (rerunBad.length) {
+          const holdout = await readHoldout(ctx);
+          const lines = rerunBad.map(
+            (r) => `- \`${r.command}\` is ${r.status === "flaky" ? "FLAKY (mixed exits across reruns)" : "FAILING-AS-SHIPPED (nonzero on every rerun)"} [exits: ${r.exitCodes.join(", ")}]\n${r.detail}`
+          );
+          warn(`${item.id}: pass demoted by the rerun gate — ${rerunBad.length} verify command(s) did not stay green over ${reruns} rerun(s).`);
+          await d.appendLearning(ctx.paths, {
+            item: item.id,
+            kind: "failed",
+            detail: `round ${st.round}: pass demoted by rerun gate — ${rerunBad.map((r) => `${r.command} (${r.status})`).join("; ").slice(0, 200)}`,
+            at: stamp(),
+          });
+          if (overBudget(st)) {
+            await haltOnBudget("rerun-gate");
+            break;
+          }
+          if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+          // Blocking feedback through the existing (holdout-redacted) feedback path.
+          feedback = redactHoldout(
+            `Your implementation passed the evaluator, but the HARNESS RERUN GATE demoted it: the contract's verify commands must exit 0 on EVERY rerun (${reruns}×). Fix the flakiness/failure — rerun-to-green does not pass:\n${lines.join("\n")}`,
+            holdout
+          );
+          fresh = false;
+          continue;
+        }
         // Optional independent code-review gate on the (behaviorally passing) change.
         const review: ReviewOutput | null = ctx.config.review.enabled
           ? await d.reviewItem({

@@ -346,3 +346,122 @@ describe("cmdBuild — hybrid generation routing (gen: local)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cmdBuild — flakiness RERUN gate (Q3)", () => {
+  /** A contract whose "I will verify by" section carries ONE runnable command. */
+  const contractWithVerify = async () => ({
+    text: "## Item\nthing\n## I will verify by\n- `npm test` → exit 0\n## Assertions\n1. works",
+    agreed: true,
+    tracesUsed: 0,
+  });
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  /** Fake executor: dequeues scripted exit codes; never spawns anything. */
+  const scriptedExec = (exits: number[]) => {
+    const calls: string[] = [];
+    const fn = async (_ws: string, command: string) => {
+      calls.push(command);
+      const exitCode = exits.shift() ?? 0;
+      return { ran: true as const, command, exitCode, stdout: "", stderr: exitCode ? "1 test failed" : "", timedOut: false };
+    };
+    return { calls, fn };
+  };
+
+  it("(a) mixed exits across reruns → demoted to fail, blocking feedback names the flaky command", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const exec = scriptedExec([0, 1, 0, 0]); // round 1 gate: flaky (0 then 1); round 2 gate: clean
+    const feedbacks: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      negotiateContract: contractWithVerify,
+      decompose: async () => one,
+      generateItem: async (args) => {
+        feedbacks.push(args.feedback);
+        return genOut();
+      },
+      evaluateItem: async () => evalOut(true), // evaluator says pass EVERY round
+      execVerifyCommand: exec.fn,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("passed"); // round 2's clean reruns kept the pass
+    expect(st.round).toBe(2); // …but round 1's pass WAS demoted (a second round happened)
+    expect(feedbacks[1]).toMatch(/RERUN GATE/);
+    expect(feedbacks[1]).toContain("npm test"); // blocking feedback names the flaky command
+    expect(feedbacks[1]).toMatch(/FLAKY/);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/demoted by rerun gate/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(b) deterministic nonzero across ALL reruns → demoted as failing-as-shipped", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 1 });
+    const exec = scriptedExec([1, 1]);
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      negotiateContract: contractWithVerify,
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      execVerifyCommand: exec.fn,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("failed"); // pass verdict did NOT survive
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/rerun gate/);
+    expect(mem).toMatch(/failing/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(c) deterministic exit 0 across K runs → pass unchanged (gate ran exactly K times)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const exec = scriptedExec([0, 0]);
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      negotiateContract: contractWithVerify,
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      execVerifyCommand: exec.fn,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("passed");
+    expect(st.round).toBe(1); // no demotion — accepted on the first pass verdict
+    expect(exec.calls).toEqual(["npm test", "npm test"]); // K=2 reruns of the ONE contract command
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("build.flakinessReruns=0 disables the gate (executor never called)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, flakinessReruns: 0 });
+    const exec = scriptedExec([1, 1]); // would demote if it ran
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      negotiateContract: contractWithVerify,
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      execVerifyCommand: exec.fn,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(exec.calls).toEqual([]); // gate is OFF — no reruns at all
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a contract with no verify commands leaves the pass untouched (nothing to rerun)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const exec = scriptedExec([1]);
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(), // baseDeps' contract has NO "I will verify by" section
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+      execVerifyCommand: exec.fn,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(exec.calls).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

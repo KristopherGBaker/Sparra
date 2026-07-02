@@ -219,7 +219,9 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(11);
-    expect(h.digest("hex")).toBe("2af57e8b1ec0ca0ae290bf081eece74bb2ea44df062778c78854173ea5eb8bc9");
+    // Regenerated 2026-07-02 (Q3): the contract-generator/-evaluator prompts intentionally changed —
+    // the model-side "dry-run every verify command" demand became a harness-probe reference.
+    expect(h.digest("hex")).toBe("eee1f931051a9d6b9c27d1e77d35061721bd4e299504196e1b26f3258803ec3d");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

@@ -145,6 +145,14 @@ export interface SparraConfig {
     assertionMax: number;
     /** Max gen↔eval ping-pong rounds before forcing convergence. */
     maxNegotiationRounds: number;
+    /**
+     * Harness verify-PROBE (no model): on CONTRACT: AGREED, dry-run each command in the
+     * contract's "I will verify by" section (safe executor, cwd=workspace). A USAGE error
+     * (command not found / unknown flag / usage text) bounces the contract back into
+     * negotiation with the probe output; an expected BEHAVIORAL failure (artifact not built
+     * yet) does not. Default true; false skips the probe.
+     */
+    probeVerifyCommands: boolean;
   };
 
   build: {
@@ -215,6 +223,14 @@ export interface SparraConfig {
      * exercise). Set to `[]` to disable generator self-verification.
      */
     verifyCommands: string[];
+    /**
+     * Flakiness RERUN gate (no model): after a PASSING verdict, the harness re-runs the
+     * contract's verify commands this many times. ANY rerun failure demotes the pass to a
+     * failed round with the command + output as blocking feedback — mixed exits = FLAKY,
+     * deterministic nonzero = failing-as-shipped; only all-runs-exit-0 keeps the pass.
+     * Default 2; 0 = off.
+     */
+    flakinessReruns: number;
   };
 
   format: {
@@ -353,7 +369,7 @@ export function defaultConfig(): SparraConfig {
     // maxNegotiationRounds 6: meaty items (foundational data models, etc.) often still have
     // genuine evaluator objections open at 4 → force-agree with real gaps. Contract rounds are
     // cheap text (no build); 6 lets the negotiation actually converge before the expensive build.
-    contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 6 },
+    contract: { assertionMin: 6, assertionMax: 20, maxNegotiationRounds: 6, probeVerifyCommands: true },
     // Start closed: a real per-item USD budget by default; set to 0 to opt out.
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
@@ -376,6 +392,7 @@ export function defaultConfig(): SparraConfig {
         "cargo build", "cargo test", "cargo check", "go build", "go test", "go vet",
         "make test", "make build", "make check",
       ],
+      flakinessReruns: 2,
     },
     format: { enabled: true, command: "", autodetect: true },
     exercise: {

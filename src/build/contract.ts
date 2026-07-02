@@ -8,7 +8,8 @@ import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./holdout.ts";
+import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider, redactHoldout } from "./holdout.ts";
+import { classifyExec, extractVerifyCommands, renderExecOutcome, runVerifyCommand, type CommandExecutor } from "./exec.ts";
 import { contractModeClauses } from "./modeText.ts";
 import type { WorkItem } from "./types.ts";
 
@@ -37,10 +38,13 @@ export async function negotiateContract(
   /** The worktree for an isolated build, else `ctx.root`; selects a holdout-free cwd. */
   workspaceDir?: string,
   /** Injectable for tests; defaults to the real SDK session (mirrors generateItem). */
-  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>
+  runSessionFn?: (p: RunSessionParams) => Promise<RunResult>,
+  /** Injectable no-model executor for the verify-probe; defaults to the real safe executor. */
+  executor?: CommandExecutor
 ): Promise<ContractResult> {
   const file = ctx.paths.contractFile(item.id);
   const run = runSessionFn ?? runSession;
+  const exec = executor ?? runVerifyCommand;
   const cwd = holdoutFreeCwd(ctx, workspaceDir ?? ctx.root);
 
   // Resume: if a contract was already agreed, reuse it. A human may have edited it
@@ -128,9 +132,31 @@ export async function negotiateContract(
     await appendText(file, `### Round ${round} — critique\n\n${critique}\n\n`);
 
     if (hasMarker(critique, AGREED)) {
-      agreed = true;
-      ok(`Contract ${item.id} agreed in round ${round}.`);
-      break;
+      // Harness verify-PROBE (no model): dry-run the agreed contract's verify commands. A USAGE
+      // error (broken as written: not found / unknown flag / usage text) re-opens negotiation with
+      // the probe output; a BEHAVIORAL failure is expected pre-build and does not bounce.
+      const usageErrors: string[] = [];
+      if (ctx.config.contract.probeVerifyCommands) {
+        for (const cmd of extractVerifyCommands(proposal)) {
+          const o = await exec(workspaceDir ?? ctx.root, cmd);
+          if (o.ran && classifyExec(o) === "usage") usageErrors.push(renderExecOutcome(o));
+        }
+      }
+      if (usageErrors.length === 0) {
+        agreed = true;
+        ok(`Contract ${item.id} agreed in round ${round}.`);
+        break;
+      }
+      // Probe output flows into the next generator round's critique context — redact holdout
+      // first (the existing redaction path), same wall as every other generator-visible text.
+      const probeReport = redactHoldout(
+        `HARNESS VERIFY-PROBE: the agreement is void — these "I will verify by" commands are broken AS WRITTEN (usage error, not a not-built-yet failure). Fix the commands (flags/subcommands/paths) against the real surface:\n${usageErrors.map((e) => `- ${e}`).join("\n")}`,
+        holdout
+      );
+      critique = `${critique}\n\n${probeReport}`;
+      await appendText(file, `### Round ${round} — verify-probe (harness)\n\n${probeReport}\n\n`);
+      warn(`Contract ${item.id}: verify-probe found ${usageErrors.length} broken verify command(s) — re-opening negotiation.`);
+      continue;
     }
     detail("evaluator not satisfied; generator will revise.");
   }
