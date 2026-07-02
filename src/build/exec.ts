@@ -135,16 +135,18 @@ export function renderExecOutcome(o: ExecOutcome, perStreamCap = 600): string {
 /** One command's rerun-gate summary across K runs. */
 export interface RerunResult {
   command: string;
-  /** Exit codes of the runs that actually executed (unsafe commands are skipped, not run). */
+  /** Exit codes of the runs that actually executed (empty for unsafe — never run). */
   exitCodes: (number | null)[];
-  /** all-zero → "ok"; all-nonzero → "failing" (failing-as-shipped); mixed → "flaky"; skipped = unsafe. */
-  status: "ok" | "flaky" | "failing" | "skipped";
+  /** all-zero → "ok"; all-nonzero → "failing" (failing-as-shipped); mixed → "flaky";
+   *  "unsafe" = the safety rules rejected the CONTRACTED command (never ran) — the contract's
+   *  "only all-runs-exit-0 keeps the pass" can never be witnessed, so it demotes like failing. */
+  status: "ok" | "flaky" | "failing" | "unsafe";
   /** Rendered output of the worst (last failing) run, for feedback. */
   detail: string;
 }
 
 /** RERUN GATE core: run each verify command `reruns` times via the injected executor.
- *  Any non-ok/non-skipped result prevents a clean pass (the caller demotes the verdict). */
+ *  ANY non-ok result — flaky, failing, or unsafe — prevents a clean pass (the caller demotes). */
 export async function rerunVerifyCommands(
   workspace: string,
   commands: string[],
@@ -155,19 +157,19 @@ export async function rerunVerifyCommands(
   for (const command of commands) {
     const exitCodes: (number | null)[] = [];
     let detail = "";
-    let skipped = false;
+    let unsafe = false;
     for (let i = 0; i < reruns; i++) {
       const o = await exec(workspace, command);
       if (!o.ran) {
-        skipped = true;
+        unsafe = true;
         detail = renderExecOutcome(o);
         break; // unsafe is deterministic — don't retry it
       }
       exitCodes.push(o.exitCode);
       if (o.exitCode !== 0) detail = renderExecOutcome(o);
     }
-    const status: RerunResult["status"] = skipped
-      ? "skipped"
+    const status: RerunResult["status"] = unsafe
+      ? "unsafe"
       : exitCodes.every((c) => c === 0)
       ? "ok"
       : exitCodes.every((c) => c !== 0)

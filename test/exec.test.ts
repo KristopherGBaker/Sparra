@@ -113,7 +113,7 @@ describe("extractVerifyCommands — bounded to the 'I will verify by' section", 
 describe("rerunVerifyCommands — the rerun-gate core over an injected executor", () => {
   const ran = (exitCode: number, command = "npm test"): ExecOutcome => ({ ran: true, command, exitCode, stdout: "", stderr: exitCode ? "boom" : "", timedOut: false });
 
-  it("mixed exits → flaky; all nonzero → failing; all zero → ok; unsafe → skipped (not retried)", async () => {
+  it("mixed exits → flaky; all nonzero → failing; all zero → ok; unsafe → unsafe (not retried, demotes like failing)", async () => {
     const seq = [0, 1]; // flaky
     let i = 0;
     const flaky = await rerunVerifyCommands("/ws", ["npm test"], 2, async () => ran(seq[i++]!));
@@ -126,8 +126,9 @@ describe("rerunVerifyCommands — the rerun-gate core over an injected executor"
     expect(okRes[0]!.status).toBe("ok");
 
     const spy = vi.fn(async (): Promise<ExecOutcome> => ({ ran: false, command: "a && b", unsafeReason: "chain" }));
-    const skipped = await rerunVerifyCommands("/ws", ["a && b"], 3, spy);
-    expect(skipped[0]!.status).toBe("skipped");
+    const unsafe = await rerunVerifyCommands("/ws", ["a && b"], 3, spy);
+    expect(unsafe[0]!.status).toBe("unsafe"); // its own non-ok class — the gate demotes it like failing
+    expect(unsafe[0]!.detail).toContain("a && b"); // detail names the command for the blocking feedback
     expect(spy).toHaveBeenCalledTimes(1); // unsafe is deterministic — no retry
   });
 });

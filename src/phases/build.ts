@@ -718,19 +718,27 @@ export async function cmdBuild(
 
       if (ev.verdict.verdict === "pass") {
         // Flakiness RERUN gate (no model): re-run the contract's verify commands K times. ANY
-        // rerun failure prevents a clean pass — mixed exits = FLAKY, deterministic nonzero =
-        // failing-as-shipped — demoted with the command + output as blocking feedback.
+        // non-ok result prevents a clean pass — mixed exits = FLAKY, deterministic nonzero =
+        // failing-as-shipped, UNSAFE (safety rules rejected it, never ran — the contracted
+        // command can never be witnessed exiting 0) — demoted with the command + output as
+        // blocking feedback.
         const reruns = ctx.config.build.flakinessReruns;
         const rerunBad =
           reruns > 0
             ? (await rerunVerifyCommands(workspaceDir, extractVerifyCommands(contract.text), reruns, d.execVerifyCommand)).filter(
-                (r) => r.status === "flaky" || r.status === "failing"
+                (r) => r.status !== "ok"
               )
             : [];
         if (rerunBad.length) {
           const holdout = await readHoldout(ctx);
+          const describe = (r: (typeof rerunBad)[number]) =>
+            r.status === "flaky"
+              ? "FLAKY (mixed exits across reruns)"
+              : r.status === "unsafe"
+              ? "UNSAFE for the harness executor (never ran — contract verify commands must be single self-contained commands the harness can run)"
+              : "FAILING-AS-SHIPPED (nonzero on every rerun)";
           const lines = rerunBad.map(
-            (r) => `- \`${r.command}\` is ${r.status === "flaky" ? "FLAKY (mixed exits across reruns)" : "FAILING-AS-SHIPPED (nonzero on every rerun)"} [exits: ${r.exitCodes.join(", ")}]\n${r.detail}`
+            (r) => `- \`${r.command}\` is ${describe(r)}${r.exitCodes.length ? ` [exits: ${r.exitCodes.join(", ")}]` : ""}\n${r.detail}`
           );
           warn(`${item.id}: pass demoted by the rerun gate — ${rerunBad.length} verify command(s) did not stay green over ${reruns} rerun(s).`);
           await d.appendLearning(ctx.paths, {
@@ -746,7 +754,7 @@ export async function cmdBuild(
           if (st.round >= ctx.config.build.maxRoundsPerItem) break;
           // Blocking feedback through the existing (holdout-redacted) feedback path.
           feedback = redactHoldout(
-            `Your implementation passed the evaluator, but the HARNESS RERUN GATE demoted it: the contract's verify commands must exit 0 on EVERY rerun (${reruns}×). Fix the flakiness/failure — rerun-to-green does not pass:\n${lines.join("\n")}`,
+            `Your implementation passed the evaluator, but the HARNESS RERUN GATE demoted it: the contract's verify commands must be harness-runnable and exit 0 on EVERY rerun (${reruns}×). Fix the flakiness/failure/unsafe command — rerun-to-green does not pass:\n${lines.join("\n")}`,
             holdout
           );
           fresh = false;

@@ -59,8 +59,9 @@ contract:
   maxNegotiationRounds: 6
   probeVerifyCommands: true   # harness dry-runs the agreed contract's "I will verify by" commands
                               #   (no model, safe executor, cwd=workspace); a USAGE error (command not
-                              #   found / unknown flag / usage text) bounces the contract back into
-                              #   negotiation with the probe output; false skips the probe
+                              #   found / unknown flag / usage text) or an UNSAFE command (safety-rule-
+                              #   rejected — the harness can never run it) bounces the contract back
+                              #   into negotiation with the probe output; false skips the probe
 
 build:
   maxRoundsPerItem: 6
@@ -78,9 +79,10 @@ build:
     [npm test, tsc, ...]      #   writing blind — auto-approved on a worktree boundary, or in-place via
                               #   run_role `allowVerify` / `--verify`; [] disables
   flakinessReruns: 2          # after a PASSING verdict the harness re-runs the contract's verify
-                              #   commands this many times; ANY rerun failure demotes the pass to a
-                              #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped)
-                              #   with the command + output as blocking feedback; 0 = off
+                              #   commands this many times; ANY non-ok result demotes the pass to a
+                              #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped,
+                              #   UNSAFE = safety-rule-rejected/never ran) with the command + output
+                              #   as blocking feedback; 0 = off
   extraReadDirs: []           # extra dirs the build may READ (e.g. ["~/.cache/models"]) — for big
                               # assets you don't want in git; pre-stage once, no commit, no network
 

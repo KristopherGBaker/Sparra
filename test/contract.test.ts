@@ -76,6 +76,35 @@ describe("negotiateContract — harness verify-probe on agreement", () => {
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
+  it("an UNSAFE verify command (safety-rule-rejected, never ran) bounces the contract like a usage error", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = fakeSession((r) => (r === 1 ? "npm test && echo done" : "npm test"));
+    const probed: string[] = [];
+    const exec: CommandExecutor = async (_ws, cmd) => {
+      probed.push(cmd);
+      // Mirrors the real executor: the chained command is rejected by the safety rules
+      // (ran: false — never spawned); the fixed one runs and fails behaviorally (pre-build).
+      return cmd.includes("&&")
+        ? { ran: false as const, command: cmd, unsafeReason: "chained command (&&) — single self-contained commands only" }
+        : behavioral(cmd);
+    };
+
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, exec);
+
+    expect(res.agreed).toBe(true);
+    expect(probed).toEqual(["npm test && echo done", "npm test"]);
+    // Negotiation RE-OPENED — the unsafe command did NOT sail through as an agreed contract.
+    const genCalls = session.calls.filter((c) => c.role === "contract-generator");
+    expect(genCalls).toHaveLength(2);
+    expect(genCalls[1]!.prompt).toContain("HARNESS VERIFY-PROBE");
+    expect(genCalls[1]!.prompt).toContain("npm test && echo done"); // probe output names the command
+    expect(genCalls[1]!.prompt).toMatch(/unsafe/i); // …and says why it can never run
+    // The agreed contract carries only the harness-runnable command.
+    expect(res.text).not.toContain("&&");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
   it("a BEHAVIORAL probe failure (artifact not built yet) does NOT bounce — agrees in round 1", async () => {
     const { ctx, root, wt } = await makeCtx();
     const session = fakeSession(() => "mytool run");

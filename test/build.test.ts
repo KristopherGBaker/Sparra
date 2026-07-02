@@ -413,6 +413,45 @@ describe("cmdBuild — flakiness RERUN gate (Q3)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("(d) an UNSAFE contracted command (never ran) demotes the pass; blocking feedback names it", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    // The contract shipped with a chained command the safety rules reject — the executor
+    // (mirroring the real one) reports it unsafe WITHOUT running it, every round.
+    const calls: string[] = [];
+    const unsafeExec = async (_ws: string, command: string) => {
+      calls.push(command);
+      return { ran: false as const, command, unsafeReason: "chained command (&&) — single self-contained commands only" };
+    };
+    const feedbacks: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      negotiateContract: async () => ({
+        text: "## Item\nthing\n## I will verify by\n- `npm test && true` → exit 0\n## Assertions\n1. works",
+        agreed: true,
+        tracesUsed: 0,
+      }),
+      decompose: async () => one,
+      generateItem: async (args) => {
+        feedbacks.push(args.feedback);
+        return genOut();
+      },
+      evaluateItem: async () => evalOut(true), // evaluator says pass EVERY round
+      execVerifyCommand: unsafeExec,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    // The pass never survives: the contracted command was never witnessed exiting 0.
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("failed");
+    expect(feedbacks[1]).toMatch(/RERUN GATE/);
+    expect(feedbacks[1]).toContain("npm test && true"); // blocking feedback names the unsafe command
+    expect(feedbacks[1]).toMatch(/UNSAFE/);
+    expect(calls).toEqual(["npm test && true", "npm test && true"]); // once per round — unsafe is not retried within a gate
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/demoted by rerun gate/);
+    expect(mem).toMatch(/unsafe/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("(c) deterministic exit 0 across K runs → pass unchanged (gate ran exactly K times)", async () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
     const exec = scriptedExec([0, 0]);

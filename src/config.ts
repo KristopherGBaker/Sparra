@@ -152,7 +152,8 @@ export interface SparraConfig {
     /**
      * Harness verify-PROBE (no model): on CONTRACT: AGREED, dry-run each command in the
      * contract's "I will verify by" section (safe executor, cwd=workspace). A USAGE error
-     * (command not found / unknown flag / usage text) bounces the contract back into
+     * (command not found / unknown flag / usage text) or an UNSAFE command (rejected by the
+     * safety rules — the harness can never run it) bounces the contract back into
      * negotiation with the probe output; an expected BEHAVIORAL failure (artifact not built
      * yet) does not. Default true; false skips the probe.
      */
@@ -229,10 +230,10 @@ export interface SparraConfig {
     verifyCommands: string[];
     /**
      * Flakiness RERUN gate (no model): after a PASSING verdict, the harness re-runs the
-     * contract's verify commands this many times. ANY rerun failure demotes the pass to a
+     * contract's verify commands this many times. ANY non-ok result demotes the pass to a
      * failed round with the command + output as blocking feedback — mixed exits = FLAKY,
-     * deterministic nonzero = failing-as-shipped; only all-runs-exit-0 keeps the pass.
-     * Default 2; 0 = off.
+     * deterministic nonzero = failing-as-shipped, UNSAFE (safety-rule-rejected, never ran)
+     * demotes the same way; only all-runs-exit-0 keeps the pass. Default 2; 0 = off.
      */
     flakinessReruns: number;
   };

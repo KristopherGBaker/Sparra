@@ -132,17 +132,19 @@ export async function negotiateContract(
     await appendText(file, `### Round ${round} — critique\n\n${critique}\n\n`);
 
     if (hasMarker(critique, AGREED)) {
-      // Harness verify-PROBE (no model): dry-run the agreed contract's verify commands. A USAGE
-      // error (broken as written: not found / unknown flag / usage text) re-opens negotiation with
-      // the probe output; a BEHAVIORAL failure is expected pre-build and does not bounce.
-      const usageErrors: string[] = [];
+      // Harness verify-PROBE (no model): dry-run the agreed contract's verify commands. Two
+      // outcomes re-open negotiation with the probe output: a USAGE error (broken as written:
+      // not found / unknown flag / usage text) and an UNSAFE command (rejected by the safety
+      // rules, never spawned — the harness can never run it, so it's broken-as-shipped too).
+      // A BEHAVIORAL failure is expected pre-build and does not bounce.
+      const brokenCommands: string[] = [];
       if (ctx.config.contract.probeVerifyCommands) {
         for (const cmd of extractVerifyCommands(proposal)) {
           const o = await exec(workspaceDir ?? ctx.root, cmd);
-          if (o.ran && classifyExec(o) === "usage") usageErrors.push(renderExecOutcome(o));
+          if (!o.ran || classifyExec(o) === "usage") brokenCommands.push(renderExecOutcome(o));
         }
       }
-      if (usageErrors.length === 0) {
+      if (brokenCommands.length === 0) {
         agreed = true;
         ok(`Contract ${item.id} agreed in round ${round}.`);
         break;
@@ -150,12 +152,12 @@ export async function negotiateContract(
       // Probe output flows into the next generator round's critique context — redact holdout
       // first (the existing redaction path), same wall as every other generator-visible text.
       const probeReport = redactHoldout(
-        `HARNESS VERIFY-PROBE: the agreement is void — these "I will verify by" commands are broken AS WRITTEN (usage error, not a not-built-yet failure). Fix the commands (flags/subcommands/paths) against the real surface:\n${usageErrors.map((e) => `- ${e}`).join("\n")}`,
+        `HARNESS VERIFY-PROBE: the agreement is void — these "I will verify by" commands are broken AS WRITTEN (a usage error, or unsafe for the harness executor — single self-contained commands only: no chaining/redirect/network/mutation/commit; not a not-built-yet failure). Replace them with commands the harness can actually run, checked against the real surface (flags/subcommands/paths):\n${brokenCommands.map((e) => `- ${e}`).join("\n")}`,
         holdout
       );
       critique = `${critique}\n\n${probeReport}`;
       await appendText(file, `### Round ${round} — verify-probe (harness)\n\n${probeReport}\n\n`);
-      warn(`Contract ${item.id}: verify-probe found ${usageErrors.length} broken verify command(s) — re-opening negotiation.`);
+      warn(`Contract ${item.id}: verify-probe found ${brokenCommands.length} broken verify command(s) — re-opening negotiation.`);
       continue;
     }
     detail("evaluator not satisfied; generator will revise.");
