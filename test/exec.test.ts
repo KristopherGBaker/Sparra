@@ -124,6 +124,72 @@ describe("runVerifyCommand — safety rules (shared with the self-verify allow-p
     fs.rmSync(ws, { recursive: true, force: true });
   });
 
+  it("SUBCOMMAND safety: `npm version patch --no-git-tag-version` is unsafe pre-spawn and package.json is UNCHANGED (real fs)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-exec-pm-"));
+    const pkg = path.join(ws, "package.json");
+    fs.writeFileSync(pkg, JSON.stringify({ name: "victim", version: "1.0.0" }));
+    const spawnFn = spySpawn();
+    const o = await runVerifyCommand(ws, "npm version patch --no-git-tag-version", { spawnFn });
+    expect(o.ran).toBe(false); // a mutating subcommand through an allowlisted binary — never spawned…
+    if (!o.ran) expect(o.unsafeReason).toContain("npm version");
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(pkg, "utf8")).version).toBe("1.0.0"); // …and the version survives
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("package managers permit ONLY test / run <script> / run-script <script>: every other verb and BARE invocations are unsafe", async () => {
+    const spawnFn = spySpawn();
+    const unsafePm = [
+      "npm", "yarn", "pnpm", "bun", // bare invocation (yarn/pnpm/bun install by default)
+      "npm version patch", "npm publish --dry-run", "npm link", "npm cache clean --force",
+      "npm config set registry x", "npm pack", "npm ci", "npm install", "npm update",
+      "yarn add left-pad", "yarn remove x", "yarn init", "pnpm update", "pnpm i", "pnpm add x",
+      "bun install", "bun add x", "npm run", "yarn run-script", // run/run-script need a script name
+    ];
+    for (const cmd of unsafePm) {
+      const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
+      expect(o.ran, cmd).toBe(false);
+      if (!o.ran) expect(o.unsafeReason).toBeTruthy();
+    }
+    expect(spawnFn).not.toHaveBeenCalled(); // the spy proves NONE of them ever spawned
+  });
+
+  it("safe verb forms still spawn: npm test / npm run build / pnpm test / bun test / python -m pytest / tsc --noEmit", async () => {
+    const fake = fakeSpawn();
+    for (const cmd of ["npm test", "npm run build", "npm run-script lint", "pnpm test", "yarn test", "bun test", "python -m pytest", "tsc --noEmit"]) {
+      const o = await runVerifyCommand("/ws", cmd, { spawnFn: fake });
+      expect(o.ran && o.exitCode === 0, cmd).toBe(true);
+    }
+    expect(fake.mock.calls).toHaveLength(8);
+    expect(fake.mock.calls[1]![0]).toBe("npm");
+    expect(fake.mock.calls[1]![1]).toEqual(["run", "build"]);
+  });
+
+  it("denies the concrete mutating first verbs of the other runners (cargo publish, go clean, mvn deploy, …); their test/build verbs still spawn", async () => {
+    const spawnFn = spySpawn();
+    for (const cmd of ["cargo publish", "cargo install ripgrep", "go clean -cache", "go get x", "dotnet nuget push x.nupkg", "mvn deploy", "mvn install", "gradle publish", "gradle publishToMavenLocal"]) {
+      const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
+      expect(o.ran, cmd).toBe(false);
+      if (!o.ran) expect(o.unsafeReason).toContain("mutating");
+    }
+    expect(spawnFn).not.toHaveBeenCalled();
+    const fake = fakeSpawn();
+    for (const cmd of ["cargo test", "go test ./...", "dotnet test", "mvn verify", "gradle build"]) {
+      const o = await runVerifyCommand("/ws", cmd, { spawnFn: fake });
+      expect(o.ran && o.exitCode === 0, cmd).toBe(true);
+    }
+  });
+
+  it("build.verifyCommands opt-in still works for a mutating subcommand the user EXPLICITLY declared", async () => {
+    const fake = fakeSpawn();
+    const optedIn = await runVerifyCommand("/ws", "npm version patch --no-git-tag-version", {
+      spawnFn: fake,
+      allowPrefixes: ["npm version"], // the user's explicit declaration, not the default
+    });
+    expect(optedIn.ran && optedIn.exitCode === 0).toBe(true);
+    expect(fake.mock.calls).toHaveLength(1);
+  });
+
   it("rejects command-substitution / chaining / backtick forms pre-spawn", async () => {
     const spawnFn = spySpawn();
     for (const cmd of ["echo $(whoami)", "npm test; rm x", "echo `whoami`", "echo ~/x", "echo a\\ b", 'echo "hi"', "echo {a,b}"]) {
@@ -245,5 +311,17 @@ describe("rerunVerifyCommands — the rerun-gate core over an injected executor"
     expect(unsafe[0]!.status).toBe("unsafe"); // its own non-ok class — the gate demotes it like failing
     expect(unsafe[0]!.detail).toContain("a && b"); // detail names the command for the blocking feedback
     expect(spy).toHaveBeenCalledTimes(1); // unsafe is deterministic — no retry
+  });
+
+  it("a mutating SUBCOMMAND as the contracted verify command is demoted by the REAL executor — never a silent [0,0]-clean (real fs)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-exec-rerun-pm-"));
+    const pkg = path.join(ws, "package.json");
+    fs.writeFileSync(pkg, JSON.stringify({ name: "victim", version: "1.0.0" }));
+    const results = await rerunVerifyCommands(ws, ["npm version patch --no-git-tag-version"], 2, runVerifyCommand);
+    expect(results[0]!.status).toBe("unsafe"); // demoted — the gate treats any non-ok as blocking
+    expect(results[0]!.exitCodes).toEqual([]); // never ran, so never the silent [0,0]
+    expect(results[0]!.detail).toContain("npm version"); // blocking feedback names the command
+    expect(JSON.parse(fs.readFileSync(pkg, "utf8")).version).toBe("1.0.0"); // and nothing mutated
+    fs.rmSync(ws, { recursive: true, force: true });
   });
 });

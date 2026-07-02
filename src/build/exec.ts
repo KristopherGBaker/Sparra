@@ -80,11 +80,39 @@ const INTERPRETER_ARGV0 = new Set(["node", "bun", "tsx", "python", "python3"]);
 const RUNNER_ESCAPE_SUBCOMMANDS = new Set(["exec", "x", "dlx", "create", "init"]);
 
 /**
+ * Package managers get SUBCOMMAND-level safety, superseding binary-only allowance: an
+ * allowlisted binary can still mutate through a mutating VERB (`npm version patch
+ * --no-git-tag-version` bumps package.json and exits 0 — the rerun gate would read [0,0]
+ * as clean). Enumerating mutating verbs is as unwinnable as a binary deny list (version,
+ * publish, install/i/ci/add/remove/rm/update/up, link, cache, config, pack, …), so ONLY
+ * known non-mutating verb forms run: `<pm> test …`, `<pm> run <script> …`,
+ * `<pm> run-script <script> …`. Every other subcommand — and a BARE invocation (`yarn`
+ * alone installs) — is unsafe pre-spawn; `build.verifyCommands` stays the explicit opt-in.
+ */
+const PACKAGE_MANAGER_ARGV0 = new Set(["npm", "yarn", "pnpm", "bun"]);
+const PM_SAFE_VERBS = new Set(["test", "run", "run-script"]);
+
+/** Obvious mutating FIRST-arg verbs reachable through the remaining allowlisted runners
+ *  (they are test/build verbs by nature, so these stay a short concrete list, not an
+ *  exhaustive enumeration — `build.verifyCommands` opts in anything unusual). */
+const DENY_FIRST_VERB: Record<string, RegExp> = {
+  cargo: /^(publish|install|uninstall|yank|login|owner)$/,
+  go: /^(clean|install|get|generate|mod)$/, // go get/mod rewrite go.mod; generate runs arbitrary commands
+  dotnet: /^(nuget|add|remove|new|tool|workload)$/, // dotnet nuget push, dotnet add package, …
+  mvn: /^(deploy|install|release:.+)$/, // mvn install/deploy write to the local/remote repo
+  gradle: /^publish/, // publish, publishToMavenLocal, publishPlugins, …
+  gradlew: /^publish/,
+};
+
+/**
  * The executor's full pre-spawn safety rule: the shared self-verify disqualifiers
  * ({@link unsafeVerifyCommandReason}) PLUS the executor-only rejections that exist because this
  * runner tokenizes and spawns argv itself — shell metacharacters/expansion tokens, then
  * ALLOWLIST-BY-DEFAULT on the argv[0] basename ({@link ALLOW_ARGV0}) with interpreter-eval and
- * package-runner escapes closed. `allowPrefixes` (the project's `build.verifyCommands`) is the
+ * package-runner escapes closed, SUBCOMMAND safety for the package managers
+ * ({@link PACKAGE_MANAGER_ARGV0} — only test/run/run-script forms), and the concrete mutating
+ * first verbs of the other runners denied ({@link DENY_FIRST_VERB} — cargo publish, go clean,
+ * mvn deploy, …). `allowPrefixes` (the project's `build.verifyCommands`) is the
  * explicit opt-in past the allowlist — prefix match, applied AFTER the shared + metachar rules
  * so an opted-in prefix still can't chain/redirect/expand. Returns the human-readable reason,
  * or null when safe to spawn.
@@ -112,8 +140,24 @@ export function unsafeExecReason(cmd: string, allowPrefixes: string[] = []): str
   if ((base === "python" || base === "python3") && (argv[1] !== "-m" || !argv[2])) {
     return `"${base}" is only allowed as "${base} -m <module>" (e.g. python -m pytest) for the harness executor`;
   }
-  if ((base === "npm" || base === "yarn" || base === "pnpm" || base === "bun") && RUNNER_ESCAPE_SUBCOMMANDS.has(argv[1] ?? "")) {
-    return `"${base} ${argv[1]}" resolves and runs arbitrary packages — denied for the harness executor`;
+  if (PACKAGE_MANAGER_ARGV0.has(base)) {
+    const verb = argv[1];
+    if (verb && RUNNER_ESCAPE_SUBCOMMANDS.has(verb)) {
+      return `"${base} ${verb}" resolves and runs arbitrary packages — denied for the harness executor`;
+    }
+    if (!verb) {
+      return `bare "${base}" installs by default — only "${base} test", "${base} run <script>", "${base} run-script <script>" are allowed for the harness executor (declare anything else in build.verifyCommands to opt in)`;
+    }
+    if (!PM_SAFE_VERBS.has(verb)) {
+      return `"${base} ${verb}" is not a known non-mutating subcommand — only "test", "run <script>", "run-script <script>" are allowed for the harness executor (declare anything else in build.verifyCommands to opt in)`;
+    }
+    if ((verb === "run" || verb === "run-script") && !argv[2]) {
+      return `"${base} ${verb}" needs a script name — only "${base} ${verb} <script>" is allowed for the harness executor`;
+    }
+  }
+  const denyVerb = DENY_FIRST_VERB[base];
+  if (denyVerb && denyVerb.test(argv[1] ?? "")) {
+    return `"${base} ${argv[1]}" is a mutating subcommand — denied for the harness executor (declare it in build.verifyCommands to opt in)`;
   }
   return null;
 }

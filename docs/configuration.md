@@ -78,8 +78,11 @@ contract:
                               #   found / unknown flag / usage text) or an UNSAFE command (safety-rule-
                               #   rejected — the harness can never run it) bounces the contract back
                               #   into negotiation with the probe output; false skips the probe.
-                              #   The executor is allowlist-by-default: unknown tools are rejected —
-                              #   declare them in build.verifyCommands to opt in
+                              #   The executor is allowlist-by-default: unknown tools are rejected, and
+                              #   npm/yarn/pnpm/bun run ONLY as test / run <script> / run-script <script>
+                              #   (npm version, npm install, a bare yarn are unsafe pre-spawn; so are
+                              #   cargo publish, go clean, mvn deploy, …) — declare anything else in
+                              #   build.verifyCommands to opt in
 
 build:
   maxRoundsPerItem: 6
