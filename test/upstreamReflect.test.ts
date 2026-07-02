@@ -219,10 +219,10 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(13);
-    // Regenerated 2026-07-02 (Q7): two prompts were intentionally ADDED — "decomposer" (moved out
-    // of decompose.ts's inline const) and "reconciler" (reconcile no longer reuses the planner's
-    // interactive prompt). No pre-existing prompt changed; this is a baseline refresh, not drift.
-    expect(h.digest("hex")).toBe("0a6736463b586d6c5f58e70fdfecffb53222a353518c5a65527433de10b76384");
+    // Regenerated 2026-07-02 (E1): the "contract-evaluator" prompt was intentionally edited — its
+    // ANCHOR/FIDELITY clauses now PERMIT cross-checking an explicitly NAMED plan doc + existing cwd
+    // behavior while STILL forbidding unrelated-project plans. No other prompt changed; expected drift.
+    expect(h.digest("hex")).toBe("5bf84f6d4ca7d770491e7343cbe5c02ccf2d5cf60e10710b2f62b435a9395f80");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

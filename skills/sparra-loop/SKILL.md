@@ -40,7 +40,13 @@ a quick cross-model second opinion. Run init for a customized or full plan→bui
    `codex` CLI authed (`~/.codex`) and `@openai/codex-sdk` installed in the Sparra repo —
    if either is missing, say so and fall back to a Claude evaluator (still useful, just
    same-family). Confirm Claude auth (CC login / `ANTHROPIC_API_KEY`).
-4. **Holdout (optional but recommended):** if the user wants a second, hidden gate, create
+4. **Self-verify gates:** before relying on generator self-verify (`allowVerify` /
+   `--verify`), set the project's own gates in `.sparra/config.yaml`
+   `build.verifyCommands` — a config-less run only gets the defaults, so custom gates
+   (`make seed`, a project script) won't be auto-approved. Each entry must be a SINGLE
+   matchable command: chained/subshell/piped forms (`(cd X && swift test)`, `a && b`)
+   never match the allowlist.
+5. **Holdout (optional but recommended):** if the user wants a second, hidden gate, create
    `.sparra/HOLDOUT.md` with acceptance checks **the generator must not see** — you (the
    conductor) write it but DON'T keep it in context after; pass it to the evaluator by path.
 
@@ -221,7 +227,10 @@ Defaults come from `roles.*` (see Setup). Override per call with `backend`/`mode
 (`low|medium|high|xhigh|max`) — handy for a one-off second opinion from a different model, or
 to raise an adversarial pass (e.g. `effort: "xhigh"`) without editing config. Useful when a
 backend is rate-limited: switch the evaluator to `backend:"claude", model:"opus",
-effort:"xhigh"` per call.
+effort:"xhigh"` per call. **Cost split:** round-1 contract critiques at high effort have run
+200k–480k tokens — put the contract-evaluator on a cheaper model / lower effort
+(`roles.contractEvaluator`, its `fallback`, or per-call `model`/`effort`) and reserve the
+strong high-effort model for the artifact evaluator.
 
 ## Don't
 - Don't reimplement grading yourself in this session — call the evaluator role (it has

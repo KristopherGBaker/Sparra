@@ -28,6 +28,26 @@ describe("evaluator prompt — environmental blockers route to notes, not `block
   });
 });
 
+describe("contract-evaluator prompt — named-plan cross-check without cross-project contamination (E1)", () => {
+  const ce = DEFAULT_PROMPTS["contract-evaluator"]!;
+  it("PERMITS cross-checking a plan doc the item explicitly NAMES + existing shipped behavior", () => {
+    // The grant lives in ANCHOR; the check itself lives in FIDELITY — both must survive.
+    expect(ce).toContain("explicitly NAMES");
+    expect(ce).toContain("cross-check contract vs that doc + existing cwd behavior");
+    expect(ce).toContain("contradicts/outlaws an already-shipped feature");
+  });
+  it("STILL FORBIDS consulting unrelated sibling/parent projects' plans", () => {
+    expect(ce).toContain("Do NOT search the filesystem");
+    expect(ce).toContain("belongs to another project");
+    // The old blanket ban ("judge ONLY against ... THIS message") must be gone, or the
+    // grant above would contradict it.
+    expect(ce).not.toContain("judge the contract ONLY against");
+  });
+  it("does not weaken the holdout wall — no text invites reading the holdout file", () => {
+    expect(ce).not.toMatch(/holdout/i);
+  });
+});
+
 describe("decomposer + reconciler prompts (Q7 a/b)", () => {
   it("DEFAULT_PROMPTS carries the decomposer prompt (moved out of decompose.ts)", () => {
     const d = DEFAULT_PROMPTS.decomposer;

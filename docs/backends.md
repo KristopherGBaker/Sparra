@@ -51,6 +51,14 @@ Because backend is per-role, you can have **one family build and another judge**
 
 The optional [code-review gate](build-loop.md#code-review-optional) is a third independent lens: set `roles.reviewer.backend` to a family *different from the generator* so the reviewer reads the diff with genuinely fresh eyes.
 
+### Cost tuning: contract critique vs artifact eval
+Contract negotiation is **token-heavy at high effort** — a single round-1 contract critique on a frontier model at `effort: high` has run 200k–480k tokens. The gate is worth keeping, but split the spend: put the round-1 **contract** critique on a cheaper model / lower effort — via `roles.contractEvaluator` (its own RoleConfig), its `fallback`, or a per-call `--model`/`--effort` override — and reserve the strong high-effort model for the **artifact** eval (`roles.evaluator`), where adversarial exercising pays off most:
+```yaml
+roles:
+  contractEvaluator: { backend: codex, model: gpt-5.5, effort: medium }  # contract critique — cheaper
+  evaluator:         { backend: codex, model: gpt-5.5, effort: high }    # artifact eval — strong
+```
+
 ## Skills
 Roles can be given [agent skills](https://docs.claude.com/en/docs/claude-code/skills) (SKILL.md) via `build.skills` (builder roles `generator`/`prototyper` inherit it) or per-role `roles.<role>.skills` (other roles opt in). Resolution searches the repo's `skills/`, then `~/.claude/skills`, then `~/.agents/skills` (or an explicit path). Missing skills warn and are skipped. The backends differ — Sparra normalizes it:
 
