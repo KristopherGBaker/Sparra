@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { exists } from "./io.ts";
 
@@ -253,6 +256,78 @@ export function isBranchMerged(root: string, branch: string, base: string): bool
 /** Remove a git worktree (the build's isolated checkout). */
 export function removeWorktree(root: string, dir: string): { ok: boolean; out: string } {
   return git(root, ["worktree", "remove", dir]);
+}
+
+// ── Temp WIP-snapshot worktrees (the `sparra eval --worktree` isolation seam). ──
+
+/**
+ * Create a TEMPORARY linked worktree at `wtDir` reflecting the CURRENT working tree of `srcDir` —
+ * uncommitted tracked modifications, untracked non-ignored files, AND tracked deletions — so a
+ * standalone eval grades exactly what the user is building, not just the last commit.
+ *
+ * The snapshot is taken through a THROWAWAY index (`GIT_INDEX_FILE`): seed it from HEAD (so
+ * tracked-but-ignored files survive and deletions diff correctly), `git add -A` the working tree
+ * into it, then `write-tree` + `commit-tree` a DANGLING snapshot commit. The user's real index,
+ * HEAD, and working tree are never touched, and no branch/ref is created — the worktree is added
+ * DETACHED at the snapshot commit, so teardown is just `removeWipWorktree` (the unreferenced
+ * commit is garbage for git gc).
+ */
+export function addWipWorktree(srcDir: string, wtDir: string): { ok: boolean; out: string } {
+  if (!isGitRepo(srcDir) || !hasCommits(srcDir)) return { ok: false, out: `${srcDir} is not a git repo with commits` };
+  if (exists(wtDir)) return { ok: false, out: `worktree target already exists: ${wtDir}` };
+  const tmpIndex = path.join(os.tmpdir(), `sparra-wip-index-${randomUUID().slice(0, 8)}`);
+  // Identity env so commit-tree works in a repo with no user.name/email configured.
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: tmpIndex,
+    GIT_AUTHOR_NAME: "sparra",
+    GIT_AUTHOR_EMAIL: "sparra@localhost",
+    GIT_COMMITTER_NAME: "sparra",
+    GIT_COMMITTER_EMAIL: "sparra@localhost",
+  };
+  const g = (args: string[]): { ok: boolean; out: string } => {
+    const r = spawnSync("git", args, { cwd: srcDir, encoding: "utf8", env });
+    return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
+  };
+  try {
+    const seed = g(["read-tree", "HEAD"]);
+    if (!seed.ok) return { ok: false, out: `snapshot read-tree failed: ${seed.out.trim()}` };
+    const add = g(["add", "-A"]);
+    if (!add.ok) return { ok: false, out: `snapshot add failed: ${add.out.trim()}` };
+    const tree = g(["write-tree"]);
+    if (!tree.ok) return { ok: false, out: `snapshot write-tree failed: ${tree.out.trim()}` };
+    const commit = g(["commit-tree", tree.out.trim(), "-p", "HEAD", "-m", "sparra: temporary WIP eval snapshot"]);
+    if (!commit.ok) return { ok: false, out: `snapshot commit-tree failed: ${commit.out.trim()}` };
+    // The worktree add runs WITHOUT the throwaway index (plain `git()`), detached at the snapshot.
+    return git(srcDir, ["worktree", "add", "--detach", wtDir, commit.out.trim()]);
+  } finally {
+    try {
+      fs.rmSync(tmpIndex, { force: true });
+    } catch {
+      /* a leaked temp index file is harmless */
+    }
+  }
+}
+
+/**
+ * Remove a TEMPORARY linked worktree created by `addWipWorktree`. SCOPED HARD to the temp dir so
+ * it can never delete uncommitted work in the MAIN tree: it REFUSES unless `wtDir` is a LINKED
+ * worktree distinct from `srcDir`. `--force` because an eval run legitimately dirties the worktree
+ * (provisioned node_modules, exercise scratch); if git's removal fails (e.g. a stray file lock),
+ * the dir is deleted directly and the stale registration pruned.
+ */
+export function removeWipWorktree(srcDir: string, wtDir: string): { ok: boolean; out: string } {
+  if (path.resolve(wtDir) === path.resolve(srcDir)) return { ok: false, out: `refusing to remove: ${wtDir} is the source dir` };
+  if (!isLinkedWorktree(wtDir)) return { ok: false, out: `refusing to remove: ${wtDir} is not a linked worktree` };
+  const r = git(srcDir, ["worktree", "remove", "--force", wtDir]);
+  if (r.ok) return r;
+  try {
+    fs.rmSync(wtDir, { recursive: true, force: true });
+  } catch {
+    /* fall through to the exists() verdict below */
+  }
+  git(srcDir, ["worktree", "prune"]);
+  return { ok: !exists(wtDir), out: r.out };
 }
 
 /** Delete a branch. `force` uses `-D` (allows unmerged); otherwise `-d` (merged-only, refuses unmerged). */

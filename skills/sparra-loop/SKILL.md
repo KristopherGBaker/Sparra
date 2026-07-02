@@ -144,8 +144,13 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
   use **`sparra build --step=contract,round,commit,item`** — don't re-implement the loop here.
 
 ### Standalone eval on a WIP tree
-`sparra eval [dir] --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md]`
+`sparra eval [dir] --worktree --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--keep-worktree]`
 — grade whatever the user has been building, no full process. (Alias for `role run --kind evaluator`.)
+**Use `--worktree` when the evaluator will exercise the tree** (run tests/builds): it snapshots the
+WIP — uncommitted edits, untracked files, deletions — into a TEMPORARY linked worktree, runs the
+eval there (writable exercise scratch, deps auto-provisioned; no manual `git worktree add` +
+`node_modules` copying), and tears it down after (`--keep-worktree` retains it and prints the path).
+An in-place eval without it stays read-only and can false-block on scratch writes (EPERM).
 
 ### Driving `sparra build --step` (checkpoint-and-resume)
 The build pauses at each checkpoint by writing a steering folder and exiting; you help the

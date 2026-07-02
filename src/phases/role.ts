@@ -83,6 +83,11 @@ export function roleRequestFromFlags(
     // build.verifyCommands. Parsed as a real boolean (`=== true`), never a stray "true" string;
     // a no-op on the `eval` alias (the evaluator isn't a writer, so verifyInPlace is unused).
     allowVerify: flags.verify === true ? true : undefined,
+    // `--worktree` (bare boolean) runs a read-only judge role (evaluator/reviewer) in a TEMPORARY
+    // linked worktree snapshotted from the selected workspace's WIP, so the exercise gets writable
+    // scratch; `--keep-worktree` retains it for inspection. Same strict boolean parse as --verify.
+    useWorktree: flags.worktree === true ? true : undefined,
+    keepWorktree: flags["keep-worktree"] === true ? true : undefined,
   };
 }
 

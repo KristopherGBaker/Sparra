@@ -57,6 +57,42 @@ describe("roleRequestFromFlags — CLI --verify → allowVerify (H7 assertion 7d
   });
 });
 
+// Item D: `--worktree` / `--keep-worktree` → the request's INTENT flags (useWorktree/keepWorktree).
+// Pure mapping only — whether the run actually lands in a worktree is runtime (evalWorktree.test.ts).
+describe("roleRequestFromFlags — --worktree / --keep-worktree (Item D)", () => {
+  it("--worktree present as a real boolean → useWorktree: true", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { worktree: true }, {});
+    expect(req.useWorktree).toBe(true);
+    expect(req.keepWorktree).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--keep-worktree present as a real boolean → keepWorktree: true", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { worktree: true, "keep-worktree": true }, {});
+    expect(req.useWorktree).toBe(true);
+    expect(req.keepWorktree).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("both absent → both falsy (in-place default, backward compatible)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", {}, {});
+    expect(req.useWorktree).toBeFalsy();
+    expect(req.keepWorktree).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stray string values (not parsed booleans) do NOT set them", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { worktree: "yes", "keep-worktree": "true" }, {});
+    expect(req.useWorktree).toBeFalsy();
+    expect(req.keepWorktree).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // Item A: the `sparra role run` CLI must EMIT the new not-a-fail signals (names + values) —
 // an MCP-only surfacing would leave a scripted CLI conductor blind to "the work landed".
 describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item A)", () => {

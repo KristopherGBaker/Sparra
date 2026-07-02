@@ -23,10 +23,10 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
-import { changedFiles, isLinkedWorktree } from "../util/git.ts";
+import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
-import { warn } from "../util/log.ts";
+import { info, warn } from "../util/log.ts";
 
 /**
  * The policy role-runner — the seam that makes Sparra's roles callable from an
@@ -101,6 +101,22 @@ export interface RoleRunRequest {
    *  branch precondition. Default (undefined/false) preserves today's behavior. No-op for non-writer
    *  roles (only `scopedWriterGuard` consumes it). */
   allowVerify?: boolean;
+  /** Run the role in a TEMPORARY linked git worktree snapshotted from the CURRENT working tree of
+   *  the selected workspace (WIP-faithful: uncommitted tracked edits, untracked non-ignored files,
+   *  tracked deletions) — so an in-place `sparra eval` gets writable exercise scratch (the
+   *  linked-worktree branch of `exerciseScratchEnabled`) without manual `git worktree add` +
+   *  node_modules copying. Read-only judge roles only (evaluator, reviewer); a WRITER is rejected
+   *  (the generator gets its build worktree via the full loop). Torn down after the run. */
+  useWorktree?: boolean;
+  /** With `useWorktree`: keep the temp worktree after the run (its path is printed) instead of
+   *  removing it — for inspecting exactly what was graded. */
+  keepWorktree?: boolean;
+  /** Source dir for dep provisioning (node_modules etc.) into a linked-worktree workspace. The
+   *  temp-worktree wrapper sets this to the SELECTED source dir (the dir the worktree was
+   *  snapshotted from) so `sparra eval <other-dir> --worktree` provisions THAT project's deps —
+   *  never ctx.root's. Defaults to ctx.root (the pre-existing behavior for a plain
+   *  `role run --workspace <linked-worktree>`, whose worktrees are cut from ctx.root). */
+  depSourceDir?: string;
   /** Resume a prior role-run's backend session — so an iterate round (e.g. re-running the
    *  generator with feedback) doesn't re-read the whole worktree from scratch. Pass the
    *  `sessionId` AND `backend` returned by the previous RoleRunResult. A session id isn't
@@ -323,8 +339,73 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
  * Run a single Sparra role once, enforcing the holdout wall, and return a normalized
  * result (a verdict for the evaluator). The interactive surface never receives holdout
  * contents — only this runner materializes them, and only for the evaluator.
+ *
+ * `useWorktree` routes through the temp-worktree wrapper below (a WIP-faithful isolated
+ * checkout, torn down after the run); the default stays the in-place run, unchanged.
  */
 export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
+  if (req.useWorktree) return runRoleInTempWorktree(req);
+  return runRoleInPlace(req);
+}
+
+/** Injectable seams for the temp-worktree wrapper — tests use a throwaway git repo + a fake
+ *  inner runner; no live model, no recursive real evaluation. */
+export interface TempWorktreeDeps {
+  /** The inner role runner the wrapper delegates to (defaults to the real in-place run). */
+  runRoleFn?: (req: RoleRunRequest) => Promise<RoleRunResult>;
+  addWorktreeFn?: typeof addWipWorktree;
+  removeWorktreeFn?: typeof removeWipWorktree;
+  /** Where to create the temp worktree for a given source dir (defaults to a uniquely-stamped
+   *  SIBLING of the source, so a COW dep copy stays on the same volume). */
+  worktreeDirFn?: (src: string) => string;
+}
+
+/**
+ * `sparra eval --worktree` / `role run --worktree`: run a read-only judge role (evaluator,
+ * reviewer) in a TEMPORARY linked git worktree snapshotted from the CURRENT working tree of the
+ * SELECTED workspace (`req.workspace`, else ctx.root) — WIP-faithful, so grading matches exactly
+ * what the user is building. The inner run's `workspace` IS the worktree, so the existing
+ * linked-worktree paths (dep provisioning, exercise scratch, source-integrity revert) apply
+ * unchanged, and the user's REAL tree is never written to. Teardown (scoped to the temp dir only —
+ * it can never touch uncommitted work in the main tree) runs even when the role throws;
+ * `keepWorktree` retains the dir and prints its path.
+ */
+export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorktreeDeps = {}): Promise<RoleRunResult> {
+  const { ctx, roleKind } = req;
+  if (roleKind !== "evaluator" && roleKind !== "reviewer") {
+    throw new Error(
+      `--worktree is supported only for the read-only judge roles (evaluator, reviewer); rejected for "${roleKind}" — ` +
+        `a generator gets its build worktree via the full loop (\`sparra build\`). Drop --worktree, or use --workspace to point at an existing checkout.`
+    );
+  }
+  const src = req.workspace ?? ctx.root; // the SELECTED source dir — never blindly ctx.root
+  const wtDir = (deps.worktreeDirFn ?? defaultTempWorktreeDir)(src);
+  const added = (deps.addWorktreeFn ?? addWipWorktree)(src, wtDir);
+  if (!added.ok) throw new Error(`--worktree: could not snapshot ${src} into a temp worktree: ${added.out.trim()}`);
+  info(`role-run-${roleKind}: temp eval worktree ${wtDir} (WIP snapshot of ${src})`);
+  const run = deps.runRoleFn ?? runRoleInPlace;
+  try {
+    // Deps are provisioned FROM the selected source dir (`src`, the dir the worktree was
+    // snapshotted from) — never blindly ctx.root, which is a DIFFERENT project when the user
+    // ran `sparra eval <other-dir> --worktree`.
+    return await run({ ...req, workspace: wtDir, useWorktree: false, depSourceDir: src });
+  } finally {
+    if (req.keepWorktree) {
+      info(`--keep-worktree: retained temp eval worktree at ${wtDir}`);
+    } else {
+      const removed = (deps.removeWorktreeFn ?? removeWipWorktree)(src, wtDir);
+      if (!removed.ok) warn(`--worktree teardown failed for ${wtDir}: ${removed.out.trim()}`);
+    }
+  }
+}
+
+/** Unique sibling dir for the temp worktree (same volume as the source, so COW dep copies stay cheap). */
+function defaultTempWorktreeDir(src: string): string {
+  return path.join(path.dirname(src), `${path.basename(src)}-eval-${stampFromDate(new Date())}-${randomUUID().slice(0, 6)}`);
+}
+
+/** The in-place role run — the pre-`--worktree` behavior, byte-for-byte. */
+async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const { ctx, roleKind } = req;
   const spec = SPECS[roleKind];
   if (!spec) throw new Error(`Unknown roleKind "${roleKind}". Valid: ${Object.keys(SPECS).join(", ")}`);
@@ -351,7 +432,9 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // already present); worktree-gated so an arbitrary --workspace dir is never clobbered.
   const provision = req.provisionFn ?? provisionWorkspaceDeps;
   if (onLinkedWorktree && ctx.config.git.provisionDeps.enabled) {
-    provision(ctx.root, workspace, ctx.config.git.provisionDeps);
+    // Source = the dir the worktree came from: `depSourceDir` when the temp-worktree wrapper cut
+    // it from a non-default workspace, else ctx.root (the build loop's own worktrees).
+    provision(req.depSourceDir ?? ctx.root, workspace, ctx.config.git.provisionDeps);
   }
 
   // Optional session resume (e.g. iterating the generator) — only honored when the attempt's

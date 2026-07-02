@@ -72,10 +72,10 @@ ${color.bold("Commands")}
   finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   clean [--yes] [--force]                       prune stale sparra worktrees/branches (dry-run by default)
-  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify]
-                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands)
-  eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f] [--budget <usd>] [--verify]
-                                                grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator)
+  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify] [--worktree [--keep-worktree]]
+                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands; --worktree runs an evaluator/reviewer in a temp WIP-snapshot worktree, torn down after — --keep-worktree retains it)
+  eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f] [--budget <usd>] [--worktree [--keep-worktree]]
+                                                grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator; --worktree gives the exercise writable scratch in a temp worktree that mirrors your WIP)
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 

@@ -66,7 +66,7 @@ sparra eval . --contract contract.md --backend codex \
 # (alias for: sparra role run --kind evaluator …)
 ```
 
-**Why this is the point:** **cross-model on tap** (Claude builds while Codex judges, or vice versa) gives a genuine independent second opinion. Use it for a one-off review of a round, or run **standalone `sparra eval <dir>`** to grade a work-in-progress tree against a contract (and an optional holdout): Sparra-grade adversarial rigor without the full plan→freeze→build loop. No `.sparra/` is required for an ad-hoc eval; it synthesizes a default-backed context.
+**Why this is the point:** **cross-model on tap** (Claude builds while Codex judges, or vice versa) gives a genuine independent second opinion. Use it for a one-off review of a round, or run **standalone `sparra eval <dir>`** to grade a work-in-progress tree against a contract (and an optional holdout): Sparra-grade adversarial rigor without the full plan→freeze→build loop. No `.sparra/` is required for an ad-hoc eval; it synthesizes a default-backed context. Add **`--worktree`** to run the evaluator in a **temporary linked git worktree** snapshotted from your WIP (uncommitted edits, untracked files, deletions — exactly what you see) — the exercise gets writable scratch there (no in-place EPERM on `node_modules/.vite-temp` etc.), your real tree is never written to, and the worktree is torn down afterwards (`--keep-worktree` retains it and prints its path).
 
 See **[docs/role-runner.md](docs/role-runner.md)** for install, the MCP wiring, and exactly what the holdout wall does (and doesn't) guarantee.
 
