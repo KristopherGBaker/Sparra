@@ -558,12 +558,17 @@ describe("runRole — holdout never reaches the conductor", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("repeated role runs get distinct trace dirs (no overwrite)", async () => {
+  it("repeated role runs get distinct trace dirs (no overwrite); the result echoes its trace dir", async () => {
     const { ctx, dir } = await makeCtx();
     const rec = recorder();
-    await runRole({ ctx, roleKind: "generator", brief: "a", runSessionFn: rec.fn });
-    await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn });
+    const r0 = await runRole({ ctx, roleKind: "generator", brief: "a", runSessionFn: rec.fn });
+    const r1 = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn });
     expect(rec.calls[0]!.traceDir).not.toBe(rec.calls[1]!.traceDir);
+    // The result surfaces the SAME dir the run streamed its transcript to (so the conductor can
+    // tail `<traceDir>/NN-*.md` for live progress), under the project's traces dir.
+    expect(r0.traceDir).toBe(rec.calls[0]!.traceDir);
+    expect(r1.traceDir).toBe(rec.calls[1]!.traceDir);
+    expect(r0.traceDir.startsWith(ctx.paths.traces)).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

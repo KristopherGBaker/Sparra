@@ -188,6 +188,32 @@ roles (evaluator, reviewer, contract-evaluator) are always safe to parallelize. 
 one caveat: **two WRITER role-runs (generators) must not target the same workspace
 concurrently** — give them separate workspaces or run them in sequence.
 
+### Live progress while a role runs (optional)
+A backgrounded role streams its transcript to disk *as it works* (the runner's
+`TraceWriter` appends per step to `.sparra/traces/role-run-<kind>-*/NN-*.md`). So
+between the spawn and the completion notification you can surface **small** status
+updates to the user — a pulse, on demand ("how's it going?"), not a tight poll loop.
+Two rules keep it cheap and safe:
+- **Filter, never dump.** The trace is verbose (tool inputs, results, thinking) —
+  reading the whole file re-imports the exact context bloat the summary-only design
+  exists to prevent. The non-evaluator result/payload carries **`traceDir`** (use it;
+  fall back to globbing the newest `role-run-<kind>-*` dir if you don't have it). Tail
+  only the tool-call *headers*:
+  ```bash
+  f=$(ls -t "$traceDir"/*.md 2>/dev/null | head -1)   # $traceDir from the run_role result
+  printf '%s tool calls; recent: ' "$(grep -cE '^\*\*→ tool:' "$f")"
+  grep -E '^\*\*→ tool:' "$f" | tail -6 | sed 's/.*`\(.*\)`.*/\1/' | paste -sd' ' -
+  ```
+  That returns tool *names* + a count — a heartbeat, a few tokens, no artifact
+  content.
+- **Non-evaluator roles ONLY — never tail the evaluator.** The runner **omits the
+  evaluator's `traceDir` from the payload** on purpose: its trace contains holdout by
+  design (it's the one role allowed to see it), and your conductor context feeds forward
+  into the next generator brief — tailing it would bypass the verdict redaction that
+  keeps the wall intact. For the evaluator, wait for the redacted verdict summary; that
+  *is* the progress signal. The generator (and other writer/read-only roles) are
+  holdout-free by scope, so their `traceDir` is returned and safe to watch.
+
 ## Backends
 Defaults come from `roles.*` (see Setup). Override per call with `backend`/`model`/`effort`
 (`low|medium|high|xhigh|max`) — handy for a one-off second opinion from a different model, or

@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Skills for driving and debugging Sparra — the autonomous build harness.",
-    "version": "2026.6.30.3"
+    "version": "2026.7.1.1"
   },
   "plugins": [
     {

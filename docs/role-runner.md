@@ -109,6 +109,14 @@ same session** by re-calling `run_role` with `resumeSessionId` + `resumeBackend`
 result's `sessionId`/`backend`, mirroring how the build loop continues a turn-capped generator
 across rounds rather than re-reading the workspace or pivoting.
 
+**Live progress (non-evaluator roles).** A backgrounded role streams its transcript to disk as it
+works (`TraceWriter` appends per step). For a **non-evaluator** role the result and MCP payload
+carry `traceDir` — that role is holdout-free by scope, so the conductor may tail
+`<traceDir>/NN-*.md` (filtered to tool-call headers to stay cheap) for a live heartbeat between the
+spawn and completion. The **evaluator's** `traceDir` is **omitted** from the MCP payload: its trace
+is holdout-bearing by design, and the conductor's context feeds forward into the next generator
+brief, so its only progress signal is the redacted verdict.
+
 #### Subagent delegation (the conductor's pattern)
 The `sparra-loop` conductor delegates **each** role-run to a **Claude subagent** (the
 plugin's `sparra-role` agent, or a general subagent given the `run_role` tool) instead

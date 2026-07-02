@@ -136,6 +136,10 @@ export interface RoleRunResult {
   verdict?: Verdict;
   /** Path the verdict/result was written to, if `out` was given. */
   outPath?: string;
+  /** Dir the run streamed its transcript to (`NN-role.md` inside). For a non-evaluator role this
+   *  is holdout-free (holdout is dropped from its scope) and the conductor may tail it for live
+   *  progress; the EVALUATOR's trace dir is holdout-bearing and is NOT exposed over MCP. */
+  traceDir: string;
   sessionId: string;
   costUsd: number;
   tokens: number;
@@ -506,6 +510,7 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     backend: ranRole.backend ?? "claude",
     model: ranRole.model,
     resultText: res.resultText,
+    traceDir,
     sessionId: res.sessionId,
     costUsd: res.costUsd,
     tokens: res.tokens,

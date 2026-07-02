@@ -1,9 +1,57 @@
 import { Writable } from "node:stream";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadCtxForRole } from "../context.ts";
-import { runRole, type RoleKind } from "../build/roleRun.ts";
+import { runRole, type RoleKind, type RoleRunResult } from "../build/roleRun.ts";
+
+/**
+ * Shape the holdout-safe MCP payload from a role result. Pure + exported so the wall-critical
+ * split is unit-testable: the EVALUATOR branch (has a verdict) returns the parsed verdict and
+ * **omits `traceDir`** (its trace is holdout-bearing); every other role returns its result text
+ * plus `traceDir` (holdout-free by scope) so the conductor can tail it for live progress. Neither
+ * branch ever carries holdout contents.
+ */
+export function buildRunRolePayload(r: RoleRunResult, passThreshold: number): Record<string, unknown> {
+  return r.verdict
+    ? {
+        roleKind: r.roleKind,
+        backend: r.backend,
+        model: r.model,
+        sessionId: r.sessionId,
+        ok: r.ok,
+        verdict: r.verdict.verdict,
+        weightedTotal: r.verdict.weightedTotal,
+        passThreshold,
+        blocking: r.verdict.blocking,
+        failedAssertions: r.verdict.assertions.filter((a) => !a.pass),
+        outPath: r.outPath,
+        tokens: r.tokens,
+        costUsd: r.costUsd,
+        limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
+        hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
+      }
+    : {
+        roleKind: r.roleKind,
+        backend: r.backend,
+        model: r.model,
+        sessionId: r.sessionId,
+        ok: r.ok,
+        result: r.resultText,
+        // Holdout-free for these roles (holdout is dropped from their scope) — the conductor
+        // may tail `<traceDir>/NN-*.md` for live progress. NOT included in the evaluator
+        // (verdict) branch above, whose trace is holdout-bearing.
+        traceDir: r.traceDir,
+        outPath: r.outPath,
+        tokens: r.tokens,
+        costUsd: r.costUsd,
+        limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
+        hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
+        noProgress: r.noProgress, // writer changed no files → blocked reads/brief, NOT a behavioral fail
+      };
+}
 
 /**
  * The MCP `run_role` server — the *interactive* surface of the role-runner for a
@@ -95,39 +143,9 @@ export async function startRunRoleServer(root: string): Promise<void> {
           resumeSessionId: args.resumeSessionId,
           resumeBackend: args.resumeBackend,
         });
-        // Never return holdout: evaluator → verdict summary only; others → result text.
-        const payload = r.verdict
-          ? {
-              roleKind: r.roleKind,
-              backend: r.backend,
-              model: r.model,
-              sessionId: r.sessionId,
-              ok: r.ok,
-              verdict: r.verdict.verdict,
-              weightedTotal: r.verdict.weightedTotal,
-              passThreshold: ctx.config.rubric.passThreshold,
-              blocking: r.verdict.blocking,
-              failedAssertions: r.verdict.assertions.filter((a) => !a.pass),
-              outPath: r.outPath,
-              tokens: r.tokens,
-              costUsd: r.costUsd,
-              limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
-              hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
-            }
-          : {
-              roleKind: r.roleKind,
-              backend: r.backend,
-              model: r.model,
-              sessionId: r.sessionId,
-              ok: r.ok,
-              result: r.resultText,
-              outPath: r.outPath,
-              tokens: r.tokens,
-              costUsd: r.costUsd,
-              limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
-              hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
-              noProgress: r.noProgress, // writer changed no files → blocked reads/brief, NOT a behavioral fail
-            };
+        // Never return holdout: evaluator → verdict summary only; others → result text. The
+        // holdout-safe field split (incl. evaluator omitting `traceDir`) lives in buildRunRolePayload.
+        const payload = buildRunRolePayload(r, ctx.config.rubric.passThreshold);
         return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
       } catch (e) {
         // Holdout-leak and other failures surface as a (sanitized) tool error.
@@ -145,7 +163,12 @@ function rootFromArgv(): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : process.cwd();
 }
 
-startRunRoleServer(rootFromArgv()).catch((e) => {
-  process.stderr.write(`sparra-run MCP server failed: ${(e as Error).message}\n`);
-  process.exit(1);
-});
+// Auto-start only when run as the entry point (the bin execs this file via tsx); stay importable
+// so buildRunRolePayload can be unit-tested without launching the stdio server.
+const isEntry = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isEntry) {
+  startRunRoleServer(rootFromArgv()).catch((e) => {
+    process.stderr.write(`sparra-run MCP server failed: ${(e as Error).message}\n`);
+    process.exit(1);
+  });
+}
