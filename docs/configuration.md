@@ -54,7 +54,18 @@ rubric:
                               #   at round(100 × passed/total) — a ceiling only (never a boost),
                               #   noted in the verdict; no assertions → no cap; false disables
 
-pivot: { N: 3, threshold: 50 }             # GAN restart after N rounds below threshold on one criterion
+pivot:
+  N: 3                        # GAN restart after N rounds below threshold on one criterion
+  threshold: 50
+  resetWorkspace: true        # on a pivot, reset the workspace to the item-start state (revert
+                              #   tracked changes + remove non-ignored untracked files; gitignored
+                              #   scratch survives — clean WITHOUT -x) so the fresh generator can't
+                              #   re-anchor on the failed attempt's files. Default true but INERT
+                              #   unless an exact Sparra-owned anchor holds at reset time:
+                              #   git.autoCommit on (HEAD == item-start), a recorded Sparra branch,
+                              #   and the workspace's live git branch matching it (no-git, detached
+                              #   HEAD, branch mismatch all refuse). In-place runs never reset.
+                              #   The pivot's attempt LEDGER (see build-loop.md) is unaffected.
 
 contract:
   assertionMin: 6             # upper guide, scaled per item

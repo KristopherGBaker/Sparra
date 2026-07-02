@@ -5,6 +5,9 @@ import path from "node:path";
 import { cmdBuild, type BuildDeps } from "../src/phases/build.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
+import { maybeResetWorkspace, type ResetDeps } from "../src/build/reset.ts";
+import { APPROACH_CAP, FAILURE_CAP } from "../src/build/attempts.ts";
+import { TRUNCATION_MARKER } from "../src/build/feedback.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
@@ -727,6 +730,249 @@ describe("cmdBuild — quality escalation routing (Q5)", () => {
     expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "fb-model", "fb-model", "fb-model"]);
     expect(ctx.store.data.build.items["item-001"]!.failedRounds).toBe(1); // only round 1's primary fail counted
     expect(fs.readFileSync(ctx.paths.memory, "utf8")).not.toMatch(/escalated/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — pivot workspace reset + attempt ledger (Q6)", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  /** Evaluator that fails craft every round → GAN pivot at N=3 (rounds 3, 6, …). */
+  const failCraft = async () => evalOut(false, { verdict: makeVerdict(false, { craft: 10 }) });
+  /** Fake ResetDeps whose probes pass but whose reset OPS count (the "no reset invocation" proof). */
+  const countingResetDeps = () => {
+    const calls = { restore: 0, clean: 0 };
+    const deps: ResetDeps = {
+      isGitRepo: () => true,
+      hasHead: () => true,
+      currentBranch: () => "sparra/test",
+      restoreTracked: () => { calls.restore++; },
+      cleanUntracked: () => { calls.clean++; },
+    };
+    return { calls, deps };
+  };
+
+  it("ordering: the reset completes BEFORE the fresh generateItem (and only for the fresh round); gate inputs are threaded from config/state", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4 });
+    ctx.config.git.autoCommit = true;
+    const events: string[] = [];
+    const seenArgs: Parameters<typeof maybeResetWorkspace>[0][] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      commitItem: async () => ({ ok: true, commits: 0 }),
+      decompose: async () => one,
+      maybeResetWorkspace: (args) => {
+        events.push("reset");
+        seenArgs.push(args);
+        return { reset: true };
+      },
+      generateItem: async (args) => {
+        events.push(`gen:${!!args.fresh}`);
+        return genOut();
+      },
+      evaluateItem: failCraft,
+    };
+    await cmdBuild(ctx, {}, deps);
+    // Rounds 1-3 patch (no reset); the pivot's fresh round 4 resets FIRST, then generates fresh.
+    expect(events).toEqual(["gen:false", "gen:false", "gen:false", "reset", "gen:true"]);
+    expect(seenArgs[0]).toEqual({
+      workspaceDir: dir,
+      persistedWorkspaceDir: dir,
+      recordedBranch: "sparra/test",
+      resetWorkspaceEnabled: true,
+      autoCommit: true,
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gate (a) + ledger-without-reset: in-place (no branch) pivot records + injects the ledger but NEVER calls a reset op", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4 });
+    ctx.config.git.autoCommit = true; // even with autoCommit on, no branch → refuse
+    const { calls, deps: resetDeps } = countingResetDeps();
+    const prompts: string[] = [];
+    const run = async (p: RunSessionParams): Promise<RunResult> => {
+      prompts.push(p.prompt);
+      return {
+        ok: true, subtype: "success", resultText: `{"report":"approach-${prompts.length}","deviations":[]}`,
+        sessionId: `s${prompts.length}`, costUsd: 0, tokens: 10, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      maybeResetWorkspace: (args) => maybeResetWorkspace(args, resetDeps), // REAL gates, fake git
+      generateItem: (args) => generateItem({ ...args, runSessionFn: run }),
+      evaluateItem: failCraft,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps); // in-place: no Sparra branch
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.attempts?.length).toBe(1); // pivot at round 3 recorded
+    expect(st.attempts![0]!.approach).toContain("approach-3");
+    expect(prompts[3]).toContain("PRIOR ATTEMPTS"); // round 4 (fresh) injects the ledger…
+    expect(prompts[3]).toContain("approach-3");
+    expect(calls).toEqual({ restore: 0, clean: 0 }); // …while the reset ops never ran
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gate (b): autoCommit off → pivot happens with NO reset op", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4 });
+    ctx.config.git.autoCommit = false;
+    const { calls, deps: resetDeps } = countingResetDeps();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => one,
+      maybeResetWorkspace: (args) => maybeResetWorkspace(args, resetDeps),
+      generateItem: async () => genOut(),
+      evaluateItem: failCraft,
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(ctx.store.data.build.items["item-001"]!.pivots).toBe(1); // the pivot DID fire
+    expect(calls).toEqual({ restore: 0, clean: 0 });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gate (c): pivot.resetWorkspace: false → pivot happens with NO reset op", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4 });
+    ctx.config.git.autoCommit = true;
+    ctx.config.pivot.resetWorkspace = false;
+    const { calls, deps: resetDeps } = countingResetDeps();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      commitItem: async () => ({ ok: true, commits: 0 }),
+      decompose: async () => one,
+      maybeResetWorkspace: (args) => maybeResetWorkspace(args, resetDeps),
+      generateItem: async () => genOut(),
+      evaluateItem: failCraft,
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(ctx.store.data.build.items["item-001"]!.pivots).toBe(1);
+    expect(calls).toEqual({ restore: 0, clean: 0 });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gate (d): ordinary failed rounds (no pivot) never invoke the reset path at all", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3 });
+    ctx.config.git.autoCommit = true;
+    let invoked = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => one,
+      maybeResetWorkspace: () => {
+        invoked++;
+        return { reset: true };
+      },
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(false), // fails, but all criteria ≥ threshold → never pivots
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(ctx.store.data.build.items["item-001"]!.pivots).toBe(0);
+    expect(invoked).toBe(0); // no pivot → the reset seam is never even consulted
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("4b: a throwing reset dep halts the round — the error surfaces + is recorded, and generateItem(fresh) is NOT called", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 6 });
+    ctx.config.git.autoCommit = true;
+    const freshFlags: boolean[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => one,
+      maybeResetWorkspace: () => {
+        throw new Error("git clean -fd failed in /ws: disk error");
+      },
+      generateItem: async (args) => {
+        freshFlags.push(!!args.fresh);
+        return genOut();
+      },
+      evaluateItem: failCraft,
+    };
+    await expect(cmdBuild(ctx, {}, deps)).rejects.toThrow(/reset failed.*dirty tree/);
+    expect(freshFlags).toEqual([false, false, false]); // rounds 1-3 only; the fresh generate never ran
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("failed");
+    expect(fs.readFileSync(ctx.paths.memory, "utf8")).toMatch(/pivot workspace reset FAILED/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ledger recording: two consecutive pivots → two entries with round, approach (from the report) and failure (from blocking), caps enforced", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 7 });
+    let n = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: `approach-${++n} ${"A".repeat(600)}` }), // oversized
+      evaluateItem: async () =>
+        evalOut(false, { verdict: { ...makeVerdict(false, { craft: 10 }), blocking: ["B".repeat(600)] } }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.attempts?.length).toBe(2); // pivots at rounds 3 and 6
+    expect(st.attempts!.map((a) => a.round)).toEqual([3, 6]);
+    expect(st.attempts![0]!.approach).toContain("approach-3");
+    expect(st.attempts![1]!.approach).toContain("approach-6");
+    for (const a of st.attempts!) {
+      expect(a.approach.length).toBe(APPROACH_CAP + TRUNCATION_MARKER.length); // truncated + marked
+      expect(a.approach.endsWith(TRUNCATION_MARKER)).toBe(true);
+      expect(a.failure.length).toBe(FAILURE_CAP + TRUNCATION_MARKER.length);
+      expect(a.failure.endsWith(TRUNCATION_MARKER)).toBe(true);
+      expect(a.failure).toContain("BBB"); // from the verdict's blocking items
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ledger injection: the fresh prompts carry PRIOR ATTEMPTS (2nd fresh carries BOTH entries); patch-round prompts don't (runSessionFn proof)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 7 });
+    const prompts: string[] = [];
+    const run = async (p: RunSessionParams): Promise<RunResult> => {
+      prompts.push(p.prompt);
+      return {
+        ok: true, subtype: "success", resultText: `{"report":"approach-${prompts.length}","deviations":[]}`,
+        sessionId: `s${prompts.length}`, costUsd: 0, tokens: 10, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: (args) => generateItem({ ...args, runSessionFn: run }),
+      evaluateItem: failCraft,
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(prompts.length).toBe(7);
+    expect(prompts[1]).not.toContain("PRIOR ATTEMPTS"); // round 2: ordinary patch round
+    expect(prompts[3]).toContain("PRIOR ATTEMPTS"); // round 4: fresh after pivot 1
+    expect(prompts[3]).toContain("approach-3");
+    expect(prompts[6]).toContain("PRIOR ATTEMPTS"); // round 7: fresh after pivot 2 — BOTH entries
+    expect(prompts[6]).toContain("approach-3");
+    expect(prompts[6]).toContain("approach-6");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("durability: the ledger survives a state save/load round-trip; `cmdBuild --fresh` clears it with the per-item state", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    // Seed a prior run whose item carries a ledger.
+    ctx.store.data.build.runId = "build-old";
+    ctx.store.data.build.items["item-001"] = {
+      status: "failed", round: 4, pivots: 1, criterionFailStreak: {},
+      attempts: [{ round: 3, approach: "old approach", failure: "old failure" }],
+    };
+    await ctx.store.save();
+    const reloaded = await StateStore.load(ctx.paths);
+    expect(reloaded!.data.build.items["item-001"]!.attempts).toEqual([
+      { round: 3, approach: "old approach", failure: "old failure" },
+    ]); // durable across save/load
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { fresh: true, workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("passed");
+    expect(st.attempts).toBeUndefined(); // --fresh cleared the ledger with the item state
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

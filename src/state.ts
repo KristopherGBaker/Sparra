@@ -34,6 +34,15 @@ export interface ItemState {
   failedRounds?: number;
   /** This item's generator switched to its `escalation` role (per-item, one-way). */
   escalated?: boolean;
+  /** Attempt ledger: one entry per GAN pivot ({round, approach, failure}, capped — see
+   *  build/attempts.ts). Rendered into the FRESH restart's prompt as "PRIOR ATTEMPTS" so a
+   *  pivot can't silently repeat a failed approach. Built ONLY from the generator's own report
+   *  + already-redacted Verdict fields (the feedback.ts redaction wall). */
+  attempts?: { round: number; approach: string; failure: string }[];
+  /** The most recent generator report (capped) — durable so a HUMAN pivot decided on resume
+   *  (a later process, where the round's GenerateOutput is out of scope) can still record what
+   *  the discarded attempt tried. */
+  lastReport?: string;
 
   // ── Interactive (`sparra build --step`) — unused in autonomous builds ──
   /** Round whose verdict a `--step=round` pause is waiting on (so resume applies the

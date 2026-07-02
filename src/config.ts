@@ -151,6 +151,15 @@ export interface SparraConfig {
      *  SAME criterion for `N` consecutive rounds (GAN-style). */
     N: number;
     threshold: number;
+    /**
+     * On a pivot, also RESET the workspace to the item-start state (revert tracked changes +
+     * remove non-ignored untracked files; gitignored scratch survives — `clean` without `-x`)
+     * so the fresh generator can't re-anchor on the failed attempt's files. Default true, but
+     * INERT unless an exact Sparra-owned anchor holds at reset time: `git.autoCommit` on
+     * (HEAD == item-start), a recorded Sparra branch, and the workspace's live git state
+     * matching it (see src/build/reset.ts). In-place runs never reset.
+     */
+    resetWorkspace: boolean;
   };
 
   contract: {
@@ -388,7 +397,7 @@ export function defaultConfig(): SparraConfig {
       useCalibration: true,
       anchorFunctionality: true,
     },
-    pivot: { N: 3, threshold: 50 },
+    pivot: { N: 3, threshold: 50, resetWorkspace: true },
     // Range is an upper guide, scaled down per item — small items use far fewer.
     // maxNegotiationRounds 6: meaty items (foundational data models, etc.) often still have
     // genuine evaluator objections open at 4 → force-agree with real gaps. Contract rounds are

@@ -18,6 +18,8 @@ import { reviewItem } from "../build/review.ts";
 import type { ReviewOutput } from "../build/review.ts";
 import type { Deviation } from "../build/generate.ts";
 import { updateStreaksAndDecide } from "../build/pivot.ts";
+import { maybeResetWorkspace } from "../build/reset.ts";
+import { recordAttempt, attemptFailure, renderPriorAttempts, APPROACH_CAP } from "../build/attempts.ts";
 import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from "../build/feedback.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
@@ -58,6 +60,8 @@ export interface BuildDeps {
   commitItem: typeof commitItem;
   waitForLimit: typeof waitForLimit;
   provisionWorkspaceDeps: typeof provisionWorkspaceDeps;
+  /** Gate-checked workspace reset on a pivot (destructive; see build/reset.ts). */
+  maybeResetWorkspace: typeof maybeResetWorkspace;
   /** No-model safe executor for the contract verify-probe + flakiness rerun gate. */
   execVerifyCommand: CommandExecutor;
 }
@@ -77,6 +81,7 @@ const defaultDeps: BuildDeps = {
   commitItem,
   waitForLimit,
   provisionWorkspaceDeps,
+  maybeResetWorkspace,
   execVerifyCommand: runVerifyCommand,
 };
 
@@ -595,6 +600,13 @@ export async function cmdBuild(
       if (res.decision === "pivot") {
         st.pivots += 1;
         st.criterionFailStreak = {};
+        // Ledger the discarded attempt from durable fields (the round's GenerateOutput/Verdict
+        // belong to the process that paused; lastReport/lastScore survived the resume).
+        recordAttempt(st, {
+          round: st.round,
+          approach: st.lastReport ?? "",
+          failure: `human pivot after round ${st.round} (score ${st.lastScore ?? 0})${res.feedback ? `: ${res.feedback}` : ""}`,
+        });
         fresh = true;
         feedback = res.feedback || "GAN PIVOT: discard the previous approach and rebuild from scratch with a fundamentally different design.";
         warn(`${item.id}: human pivot → rebuilding from scratch (pivot #${st.pivots}).`);
@@ -644,6 +656,35 @@ export async function cmdBuild(
       const noteFailedRound = () => {
         if (!genPick.usedFallback) st.failedRounds = (st.failedRounds ?? 0) + 1;
       };
+      // ── Real pivot (Q6): a fresh restart must not re-anchor on the failed attempt's files.
+      // The reset runs BEFORE the fresh generateItem and only when every anchor gate holds
+      // (config + live git state — see build/reset.ts); any gate false → no reset (today's
+      // behavior). A reset FAILURE halts the item — never generate on a dirty tree. ──
+      if (fresh) {
+        let rr;
+        try {
+          rr = d.maybeResetWorkspace({
+            workspaceDir,
+            persistedWorkspaceDir: b.build.workspaceDir,
+            recordedBranch: b.build.branch,
+            resetWorkspaceEnabled: ctx.config.pivot.resetWorkspace,
+            autoCommit: ctx.config.git.autoCommit,
+          });
+        } catch (e) {
+          const msg = (e as Error).message;
+          st.status = "failed";
+          await d.appendLearning(ctx.paths, {
+            item: item.id,
+            kind: "note",
+            detail: `round ${st.round}: pivot workspace reset FAILED — ${msg.slice(0, 200)}`,
+            at: stamp(),
+          });
+          await ctx.store.save();
+          throw new Error(`${item.id}: pivot workspace reset failed — halting rather than generating on a dirty tree: ${msg}`);
+        }
+        if (rr.reset) detail(`${item.id}: workspace reset to the item-start state for the fresh restart.`);
+        else detail(`${item.id}: fresh restart without a workspace reset (${rr.reason}).`);
+      }
       const gen = await d.generateItem({
         ctx,
         item,
@@ -654,6 +695,7 @@ export async function cmdBuild(
         feedback,
         resumeSessionId: resumeFor(genKey),
         fresh,
+        priorAttempts: fresh ? renderPriorAttempts(st.attempts) : undefined,
         priorLearnings,
         role: genPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
@@ -663,6 +705,7 @@ export async function cmdBuild(
       st.tokensUsed = (st.tokensUsed ?? 0) + gen.tokens;
       st.generatorSessionId = gen.sessionId;
       st.generatorBackend = genKey;
+      st.lastReport = gen.report.slice(0, APPROACH_CAP); // durable, for a human pivot on resume
       await ctx.store.save();
 
       const gl = await onLimit(st, genPick.role, gen.limitHit, `${item.id} generate`);
@@ -881,6 +924,11 @@ export async function cmdBuild(
       if (decision.pivot) {
         st.pivots += 1;
         st.criterionFailStreak = {};
+        // Attempt ledger: what this discarded attempt tried (the generator's own report) and why
+        // it failed (top blocking items — Verdict fields only, already holdout-redacted). The
+        // NEXT fresh generate renders these as PRIOR ATTEMPTS so it can't repeat the approach.
+        recordAttempt(st, { round: st.round, approach: gen.report, failure: attemptFailure(ev.verdict) });
+        await ctx.store.save();
         fresh = true;
         feedback = renderPivotFeedback(ev.verdict, {
           criterion: decision.criterion ?? "(criterion)",

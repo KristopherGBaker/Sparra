@@ -48,6 +48,10 @@ export async function generateItem(args: {
   feedback?: string;
   resumeSessionId?: string;
   fresh?: boolean; // GAN restart: start a new session ignoring prior context
+  /** Rendered "PRIOR ATTEMPTS" ledger section (build/attempts.ts) — injected into the task
+   *  ONLY on a fresh (pivot) restart, so the new approach can't repeat a failed one. Built
+   *  solely from redacted Verdict fields + the generator's own reports (no holdout path). */
+  priorAttempts?: string;
   /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
   priorLearnings?: string;
   /** Per-session USD budget (remaining item budget). Defaults to the per-item cap. */
@@ -79,7 +83,7 @@ AGREED CONTRACT (your spec — satisfy every assertion):
 ---
 ${contractText}
 ---
-${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${conventions}${memory}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n` : ""}`;
+${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing behavior):\n---\n${map.slice(0, 5000)}\n---\n` : ""}${conventions}${memory}${args.feedback ? `\nThe adversarial evaluator REJECTED the previous attempt. Fix exactly these blocking issues:\n${args.feedback}\n` : ""}${args.fresh ? `\nThis item is being RESTARTED FROM SCRATCH after repeated failures on the same criterion. Take a genuinely different approach; do not just patch the old one.\n${args.priorAttempts ? `\n${args.priorAttempts}\n` : ""}` : ""}`;
 
   // Isolation wall: the builder must never see the evaluator's holdout checks — not in its prompt
   // (assertNoHoldoutLeak) NOR off disk. The read-scope drops any holdout-bearing dir and the
