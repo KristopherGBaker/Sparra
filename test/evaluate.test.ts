@@ -361,6 +361,84 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
   });
 });
 
+describe("evaluateItem — JSON re-ask on no-parseable-verdict (Q7d)", () => {
+  /** Fake session returning texts[i] on the i-th call (last one repeats); sessionId is s<i>. */
+  function seqRecorder(texts: string[], costUsd = 0) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const i = calls.length;
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: texts[Math.min(i, texts.length - 1)]!, sessionId: `s${i}`,
+        costUsd, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    return { calls, fn };
+  }
+
+  async function runSeq(ctx: Ctx, dir: string, rec: ReturnType<typeof seqRecorder>) {
+    return evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps,
+    });
+  }
+
+  it("re-asks ONCE, resuming the SAME session; a valid verdict on the re-ask is parsed, NOT forced FAIL", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false; // isolate the re-ask from the observed-run gate
+    const rec = seqRecorder(["no verdict json here", PASS_JSON]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("s0"); // resumed the first call's session
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
+    expect(out.verdict.verdict).toBe("pass"); // round proceeds normally
+    expect(out.verdict.notes).not.toBe("no verdict parsed");
+    expect(out.raw).toContain("no verdict json here"); // original output preserved in the raw record
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("both responses unparseable → one re-ask, then today's forced-FAIL fallback", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder(["garbage one", "garbage two"]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2); // exactly ONE re-ask, never more
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.notes).toBe("no verdict parsed");
+    expect(out.verdict.blocking.join(" ")).toContain("parseable JSON verdict");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("build.jsonReask: false → NO re-ask call, straight to the forced FAIL (contrast)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.jsonReask = false;
+    const rec = seqRecorder(["garbage", PASS_JSON]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.notes).toBe("no verdict parsed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips the re-ask when the session already exhausted the item budget", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder(["garbage", PASS_JSON], 99); // each call costs $99 vs the default $5 cap
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1); // budget-exhausted → no re-ask
+    expect(out.verdict.verdict).toBe("fail");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accumulates the re-ask's cost + tokens into the eval output", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder(["garbage", PASS_JSON], 0.5);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    expect(out.costUsd).toBe(1); // 0.5 × 2
+    expect(out.tokens).toBe(2);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("evaluateItem — assertion-anchored functionality cap (Q4, rubric.anchorFunctionality)", () => {
   // Verdict JSON with a chosen assertion pass/fail mix + a chosen functionality score.
   const verdictJson = (passes: boolean[], functionality: number, others = 90) =>

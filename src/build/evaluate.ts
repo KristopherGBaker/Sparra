@@ -10,7 +10,8 @@ import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type Int
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
-import { extractJsonWhere } from "../util/extract.ts";
+import { budgetExceeded } from "./budget.ts";
+import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -105,7 +106,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
   // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.
   const snap = exerciseScratch ? snapshotArtifact(workspaceDir, integrityDeps) : undefined;
-  const res = await run({
+  const baseReq: RunSessionParams = {
     role: `evaluator-${item.id}-r${round}`,
     prompt: task,
     systemPrompt: system,
@@ -125,7 +126,41 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir: args.traceDir,
     traceSeq: args.traceSeq,
-  });
+  };
+  const res = await run(baseReq);
+  let resultText = res.resultText;
+  let costUsd = res.costUsd;
+  let tokens = res.tokens;
+
+  // Shape-aware: the verdict is the JSON with rubric scores — not just the last
+  // fenced block (evaluator output is full of incidental JSON/command snippets).
+  const isVerdict = (v: any) =>
+    v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v);
+  let parsed = extractJsonWhere<Verdict>(resultText, isVerdict);
+
+  // JSON re-ask (build.jsonReask): ONLY when the reply has no parseable JSON at all — a JSON
+  // block of the wrong shape goes straight to today's forced-FAIL fallback ("re-emit the JSON
+  // block" can't fix a block that was already emitted). ONE resumed re-emit call inside this
+  // step; never on a provider-limit reply (the round loop's fallback chain owns those), and
+  // skipped when this session already exhausted the item budget.
+  const itemBudget = args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
+  const noJson = extractAllJson(resultText).length === 0;
+  if (!parsed && noJson && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
+    warn(`Evaluator for ${item.id} returned no parseable verdict — re-asking once for the JSON block.`);
+    const retry = await run({
+      ...baseReq,
+      role: `evaluator-${item.id}-r${round}-reask`,
+      prompt: "Your previous reply had no parseable JSON verdict. Re-emit ONLY the JSON block per your instructions — nothing else.",
+      resume: res.sessionId,
+    });
+    costUsd += retry.costUsd;
+    tokens += retry.tokens;
+    const reparsed = extractJsonWhere<Verdict>(retry.resultText, isVerdict);
+    if (reparsed) {
+      parsed = reparsed;
+      resultText = `${res.resultText}\n\n${retry.resultText}`;
+    }
+  }
 
   // The harness — not the model's self-report — decides whether run_command/http_request
   // verifications actually ran (from real exit codes); when it's not "none" it OVERRIDES the
@@ -134,12 +169,6 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   const decideStatus = (modelStatus: "blocked" | "ran"): "blocked" | "ran" =>
     harnessStatus !== "none" ? harnessStatus : modelStatus;
 
-  // Shape-aware: the verdict is the JSON with rubric scores — not just the last
-  // fenced block (evaluator output is full of incidental JSON/command snippets).
-  const parsed = extractJsonWhere<Verdict>(
-    res.resultText,
-    (v) => v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v)
-  );
   let verdict: Verdict;
   let capNote = ""; // set when the anchor cap actually lowered the functionality score
   if (!parsed || !parsed.scores) {
@@ -238,7 +267,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
       evidence: redactHoldout(String((a as { evidence?: unknown })?.evidence ?? ""), holdoutText),
     }));
   }
-  const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(res.resultText, holdoutText) : res.resultText;
+  const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(resultText, holdoutText) : resultText;
 
   const failedAssertions = verdict.assertions.filter((a) => !a.pass);
   await writeText(
@@ -249,5 +278,5 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);
   else warn(`${item.id} FAILED round ${round} (${verdict.weightedTotal}); ${verdict.blocking.length} blocking issue(s).`);
 
-  return { verdict, raw: safeRaw, sessionId: res.sessionId, limitHit: res.limitHit, costUsd: res.costUsd, tokens: res.tokens };
+  return { verdict, raw: safeRaw, sessionId: res.sessionId, limitHit: res.limitHit, costUsd, tokens };
 }

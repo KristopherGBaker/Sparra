@@ -1,8 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { cmdBuild, type BuildDeps } from "../src/phases/build.ts";
+import { decompose } from "../src/build/decompose.ts";
+import { diffClaims } from "../src/build/claims.ts";
+import { DEFAULT_PROMPTS } from "../src/prompts.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { maybeResetWorkspace, type ResetDeps } from "../src/build/reset.ts";
@@ -974,6 +977,172 @@ describe("cmdBuild — pivot workspace reset + attempt ledger (Q6)", () => {
     const st = ctx.store.data.build.items["item-001"]!;
     expect(st.status).toBe("passed");
     expect(st.attempts).toBeUndefined(); // --fresh cleared the ledger with the item state
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ───────────────────────────── Q7a: decompose — prompt via loadPrompt + build.maxItems clamp ─────────────────────────────
+
+describe("decompose — DEFAULT_PROMPTS prompt + build.maxItems clamp (Q7a)", () => {
+  const itemsJson = (n: number) =>
+    "```json\n" +
+    JSON.stringify(
+      Array.from({ length: n }, (_, i) => ({
+        id: `item-${String(i + 1).padStart(3, "0")}`,
+        title: `t${i + 1}`,
+        summary: "",
+        dependsOn: [],
+        rationale: "",
+      }))
+    ) +
+    "\n```";
+
+  function decomposeRun(n: number) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: itemsJson(n), sessionId: "d",
+        costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    return { calls, fn };
+  }
+
+  function captureStdout(): { lines: () => string; restore: () => void } {
+    let buf = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      return true;
+    });
+    return { lines: () => buf, restore: () => spy.mockRestore() };
+  }
+
+  it("clamps a 20-item decomposition to build.maxItems (default 12), keeps the head, and warns", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(ctx.config.build.maxItems).toBe(12); // the default lives in defaultConfig
+    const rec = decomposeRun(20);
+    const out = captureStdout();
+    const result = await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    out.restore();
+    expect(result).toHaveLength(12);
+    expect(result[0]!.id).toBe("item-001"); // order preserved — the head is kept
+    expect(result[11]!.id).toBe("item-012");
+    expect(out.lines()).toContain("clamping to build.maxItems (12)");
+    // The persisted items.json is clamped too.
+    expect(JSON.parse(fs.readFileSync(ctx.paths.workitemsFile, "utf8"))).toHaveLength(12);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("contrast: a count ≤ the cap passes through unclamped with no warning", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = decomposeRun(5);
+    const out = captureStdout();
+    const result = await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    out.restore();
+    expect(result).toHaveLength(5);
+    expect(out.lines()).not.toContain("clamping");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("loads the system prompt via loadPrompt — the default text absent a file, an edited prompts/decomposer.md when present", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = decomposeRun(2);
+    await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    expect(rec.calls[0]!.systemPrompt).toBe(DEFAULT_PROMPTS.decomposer);
+    // An on-disk edit wins — proves there is no hard-coded const left in decompose.ts.
+    fs.writeFileSync(ctx.paths.promptFile("decomposer"), "CUSTOM DECOMPOSER PROMPT\n");
+    const rec2 = decomposeRun(2);
+    await decompose(ctx, path.join(dir, "trace"), true, dir, rec2.fn);
+    expect(rec2.calls[0]!.systemPrompt).toBe("CUSTOM DECOMPOSER PROMPT\n");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ───────────────────────────── Q7c: assertionsClaimed → calibration gap ─────────────────────────────
+
+describe("diffClaims — pure claims-vs-verdict diff (Q7c)", () => {
+  const asserts = [
+    { id: 1, pass: true, evidence: "ok" },
+    { id: 2, pass: false, evidence: "broken" },
+  ];
+
+  it("claims {1: pass, 2: pass} vs verdict 1 pass / 2 fail → count 1, naming id 2", () => {
+    expect(diffClaims([{ id: 1, claim: "pass" }, { id: 2, claim: "pass" }], asserts)).toEqual({ count: 1, ids: [2] });
+  });
+
+  it("omitted or empty claims → complete no-op", () => {
+    expect(diffClaims(undefined, asserts)).toEqual({ count: 0, ids: [] });
+    expect(diffClaims([], asserts)).toEqual({ count: 0, ids: [] });
+  });
+
+  it("agreeing claims, unknown ids, and junk claim values never count; a wrong fail-claim does", () => {
+    expect(diffClaims([{ id: 1, claim: "pass" }, { id: 2, claim: "fail" }], asserts)).toEqual({ count: 0, ids: [] });
+    expect(diffClaims([{ id: 9, claim: "pass" }, { id: 2, claim: "dunno" }], asserts)).toEqual({ count: 0, ids: [] });
+    expect(diffClaims([{ id: 1, claim: "fail" }], asserts)).toEqual({ count: 1, ids: [1] });
+  });
+});
+
+describe("cmdBuild — assertionsClaimed calibration gap surfaced (Q7c)", () => {
+  const mixedVerdict = (): Verdict => {
+    const v = makeVerdict(true);
+    v.assertions = [
+      { id: 1, pass: true, evidence: "ok" },
+      { id: 2, pass: false, evidence: "broken" },
+    ];
+    return v;
+  };
+
+  it("a claims-vs-verdict mismatch lands in the round's verdict artifact AND a memory note on completion", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2 });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () =>
+        genOut({ assertionsClaimed: [{ id: 1, claim: "pass", how: "ran" }, { id: 2, claim: "pass", how: "ran" }] }),
+      evaluateItem: async () => ({ verdict: mixedVerdict(), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100 }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    const vf = fs.readFileSync(ctx.paths.verdictFile("item-001", 1), "utf8");
+    expect(vf).toContain("Calibration gap");
+    expect(vf).toContain("1 claimed assertion(s) contradicted by the evaluator: ids 2");
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toContain("calibration gap");
+    expect(mem).toContain("ids 2");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("zero mismatches → no verdict gap entry and no memory note", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2 });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () =>
+        genOut({ assertionsClaimed: [{ id: 1, claim: "pass" }, { id: 2, claim: "fail" }] }), // matches the verdict
+      evaluateItem: async () => ({ verdict: mixedVerdict(), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100 }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    // The faked evaluateItem never writes a verdict file, so only a gap-append could create it.
+    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(false);
+    const mem = fs.existsSync(ctx.paths.memory) ? fs.readFileSync(ctx.paths.memory, "utf8") : "";
+    expect(mem).not.toContain("calibration gap");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("generator omitted the field entirely → no-op: no crash, no gap entry, no note", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2 });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(), // no assertionsClaimed at all
+      evaluateItem: async () => ({ verdict: mixedVerdict(), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100 }),
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(res.passed).toBe(1);
+    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(false);
+    const mem = fs.existsSync(ctx.paths.memory) ? fs.readFileSync(ctx.paths.memory, "utf8") : "";
+    expect(mem).not.toContain("calibration gap");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

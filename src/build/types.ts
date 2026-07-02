@@ -26,6 +26,9 @@ export interface Verdict {
   exerciseStatus?: "ran" | "blocked";
   blocking: string[];
   notes: string;
+  /** Set by the build loop when the generator's `assertionsClaimed` contradicted this verdict
+   *  (build/claims.ts) — the round's calibration gap (assertion ids + count only). */
+  claimMismatches?: { count: number; ids: number[] };
 }
 
 export const RUBRIC_CRITERIA = ["design", "originality", "craft", "functionality"] as const;

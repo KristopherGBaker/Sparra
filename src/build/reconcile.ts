@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Ctx } from "../context.ts";
-import { fill, loadPrompt } from "../prompts.ts";
+import { loadPrompt } from "../prompts.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
 import { plannerWriteScope } from "../sdk/permissions.ts";
 import { makeHoldoutReadDecider } from "./holdout.ts";
@@ -57,8 +57,10 @@ export async function reconcilePlan(
 ): Promise<void> {
   if (deviations.length === 0) return;
   const run = opts.runSessionFn ?? runSession;
+  // The reconciler has its own small HEADLESS prompt (no interview/ask-one-question directives —
+  // nobody is there to answer), but keeps the planner's RoleConfig for model choice.
   const role = ctx.config.roles.planner;
-  const system = fill(await loadPrompt(ctx.paths, "planner"), { MODE: ctx.store.data.mode });
+  const system = await loadPrompt(ctx.paths, "reconciler");
 
   const task = `Work item ${item.id} (${item.title}) was just built and accepted, with deviations from the original plan. WITHOUT asking questions, reconcile PLAN.md (${ctx.paths.plan}) so it reflects reality: update Approach / Constraints / Risks / Open questions as warranted so the plan does not go stale. Keep it high-level. Edit only PLAN.md.
 

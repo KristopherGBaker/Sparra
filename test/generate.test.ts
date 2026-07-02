@@ -22,11 +22,15 @@ async function ctxFor(mechanism: "ios" | "cli"): Promise<{ ctx: Ctx; dir: string
 
 const item = { id: "item-001", title: "thing", summary: "", dependsOn: [], rationale: "" };
 
+// A parseable report block, so the default-on JSON re-ask (Q7d) never fires in these tests
+// and each capture reflects the single real generation call.
+const OK_REPORT = '```json\n{"report":"ok","deviations":[]}\n```';
+
 function fakeRun(capture: (p: RunSessionParams) => void): (p: RunSessionParams) => Promise<RunResult> {
   return async (p) => {
     capture(p);
     return {
-      ok: true, subtype: "success", resultText: "{}", sessionId: "s",
+      ok: true, subtype: "success", resultText: OK_REPORT, sessionId: "s",
       costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
     };
   };
@@ -98,6 +102,89 @@ describe("generateItem — Apple conventions injection", () => {
       runSessionFn: fakeRun((p) => (backend = p.backend)),
     });
     expect(backend).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("generateItem — JSON re-ask + assertionsClaimed (Q7 c/d)", () => {
+  const REPORT_JSON =
+    '```json\n{"report":"did it","deviations":[],"assertionsClaimed":[{"id":1,"claim":"pass","how":"ran tests"}]}\n```';
+
+  /** Fake session returning texts[i] on the i-th call (last one repeats). */
+  function seqRun(texts: string[]) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const i = calls.length;
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: texts[Math.min(i, texts.length - 1)]!, sessionId: `s${i}`,
+        costUsd: 0, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    return { calls, fn };
+  }
+
+  async function gen(ctx: Ctx, dir: string, rec: ReturnType<typeof seqRun>) {
+    return generateItem({ ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1, runSessionFn: rec.fn });
+  }
+
+  it("re-asks ONCE on an unparseable report, resuming the SAME session, and parses the re-ask's JSON", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = seqRun(["no json in sight", REPORT_JSON]);
+    const out = await gen(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("s0"); // resumed the first call's session
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
+    expect(out.report).toBe("did it"); // parsed from the re-ask, not the degraded fallback
+    expect(out.assertionsClaimed).toEqual([{ id: 1, claim: "pass", how: "ran tests" }]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("both responses unparseable → one re-ask, then today's degraded-report fallback", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = seqRun(["first garbage", "second garbage"]);
+    const out = await gen(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2); // exactly ONE re-ask, never more
+    expect(out.report).toBe("first garbage"); // degraded: first 500 chars of the original output
+    expect(out.deviations).toEqual([]);
+    expect(out.assertionsClaimed).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("build.jsonReask: false → NO re-ask call, straight to the degraded fallback (contrast)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.build.jsonReask = false;
+    const rec = seqRun(["garbage", REPORT_JSON]);
+    const out = await gen(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.report).toBe("garbage");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips the re-ask when the session already exhausted the item budget", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = seqRun(["garbage", REPORT_JSON]);
+    const expensive = async (p: RunSessionParams): Promise<RunResult> => ({ ...(await rec.fn(p)), costUsd: 99 });
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      maxBudgetUsd: 1, runSessionFn: expensive,
+    });
+    expect(rec.calls).toHaveLength(1); // budget-exhausted → no re-ask
+    expect(out.report).toBe("garbage");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a clean first response parses assertionsClaimed with no re-ask; omitted field stays undefined", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = seqRun([REPORT_JSON]);
+    const out = await gen(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.assertionsClaimed).toEqual([{ id: 1, claim: "pass", how: "ran tests" }]);
+
+    const rec2 = seqRun(['```json\n{"report":"r","deviations":[]}\n```']);
+    const out2 = await gen(ctx, dir, rec2);
+    expect(rec2.calls).toHaveLength(1);
+    expect(out2.assertionsClaimed).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

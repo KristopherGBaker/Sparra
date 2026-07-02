@@ -218,10 +218,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const roles = Object.keys(DEFAULT_PROMPTS).filter((r) => r !== "reflector").sort();
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
-    expect(roles).toHaveLength(11);
-    // Regenerated 2026-07-02 (Q3): the contract-generator/-evaluator prompts intentionally changed —
-    // the model-side "dry-run every verify command" demand became a harness-probe reference.
-    expect(h.digest("hex")).toBe("eee1f931051a9d6b9c27d1e77d35061721bd4e299504196e1b26f3258803ec3d");
+    expect(roles).toHaveLength(13);
+    // Regenerated 2026-07-02 (Q7): two prompts were intentionally ADDED — "decomposer" (moved out
+    // of decompose.ts's inline const) and "reconciler" (reconcile no longer reuses the planner's
+    // interactive prompt). No pre-existing prompt changed; this is a baseline refresh, not drift.
+    expect(h.digest("hex")).toBe("0a6736463b586d6c5f58e70fdfecffb53222a353518c5a65527433de10b76384");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

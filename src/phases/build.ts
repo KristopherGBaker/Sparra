@@ -4,7 +4,7 @@ import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
-import { exists, readText } from "../util/io.ts";
+import { appendText, exists, readText } from "../util/io.ts";
 import { prepareWorkspace, changedFiles } from "../util/git.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { commitItem } from "../build/commit.ts";
@@ -24,6 +24,7 @@ import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from 
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
+import { diffClaims, renderClaimGap } from "../build/claims.ts";
 import { assertNoHoldoutLeak, readHoldout, redactHoldout } from "../build/holdout.ts";
 import { extractVerifyCommands, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
 import {
@@ -549,6 +550,9 @@ export async function cmdBuild(
     st.status = "building";
     let feedback: string | undefined;
     let fresh = false;
+    // (Q7c) Assertion ids where the generator's assertionsClaimed contradicted an evaluator
+    // verdict this item — accumulated across rounds; surfaced as one memory note on completion.
+    const claimGapIds: number[] = [];
     // Whether the most recent round's exercise was BLOCKED (inconclusive) rather than a real fail —
     // used so the terminal message doesn't call an unverifiable item a behavioral failure.
     let lastBlocked = false;
@@ -762,6 +766,20 @@ export async function cmdBuild(
 
       st.lastScore = ev.verdict.weightedTotal;
 
+      // (Q7c) Calibration gap: pure claims-vs-verdict diff. Omitted/empty assertionsClaimed is a
+      // complete no-op. The gap carries assertion ids + count ONLY (never evaluator/holdout text),
+      // so the verdict's holdout-redaction flow is untouched; it lands in the round's verdict
+      // data + artifact and the run log here, and in one memory note on item completion below.
+      const claimGap = diffClaims(gen.assertionsClaimed, ev.verdict.assertions);
+      if (claimGap.count > 0) {
+        ev.verdict.claimMismatches = claimGap;
+        await appendText(ctx.paths.verdictFile(item.id, st.round), renderClaimGap(claimGap));
+        warn(
+          `${item.id} round ${st.round}: calibration gap — the generator claimed the opposite of the evaluator on ${claimGap.count} assertion(s) (ids ${claimGap.ids.join(", ")}).`
+        );
+        for (const id of claimGap.ids) if (!claimGapIds.includes(id)) claimGapIds.push(id);
+      }
+
       // ── Interactive: ROUND checkpoint — defer accept/pivot/continue to the human ──
       if (steps.has("round")) {
         st.lastEvaluatedRound = st.round;
@@ -957,6 +975,17 @@ export async function cmdBuild(
       void dev;
     }
     if (stopRun || pausedRun) break; // provider limit OR interactive checkpoint — resumable
+
+    // (Q7c) The item just completed (terminal either way): one memory note when any evaluated
+    // round showed a claims-vs-verdict calibration gap, so future generators self-report honestly.
+    if (claimGapIds.length) {
+      await d.appendLearning(ctx.paths, {
+        item: item.id,
+        kind: "note",
+        detail: `calibration gap: the generator's assertionsClaimed contradicted the evaluator on ${claimGapIds.length} assertion(s) (ids ${claimGapIds.join(", ")}) — self-reported passes ran hot; verify before claiming.`,
+        at: stamp(),
+      });
+    }
 
     // `haltOnBudget`/pass mutate st.status through a closure, which defeats TS's
     // flow narrowing here — read it back through the declared union.

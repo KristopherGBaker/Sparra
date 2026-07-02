@@ -180,6 +180,14 @@ export interface SparraConfig {
   };
 
   build: {
+    /** Max work items a decomposition may produce; more are clamped (head kept) with a
+     *  warning. The prompt already asks for a coarse split — this is the code-side guard
+     *  against a runaway decomposition multiplying contract/build cost. 0 = no cap. */
+    maxItems: number;
+    /** On an unparseable generator report / evaluator verdict JSON, re-ask ONCE (resuming the
+     *  same session: "re-emit ONLY the JSON block") before the existing fallback (degraded
+     *  report / forced FAIL). Skipped when the item budget is already exhausted. */
+    jsonReask: boolean;
     /** Max generate→evaluate rounds per work item before giving up the item. */
     maxRoundsPerItem: number;
     /** Per-SDK-session turn cap; sessions that hit it are resumed. */
@@ -412,6 +420,8 @@ export function defaultConfig(): SparraConfig {
     // maxTokensPerItem defaults to off (the USD cap is the default bound); set it
     // for a direct token ceiling, which is the meaningful lever on a subscription.
     build: {
+      maxItems: 12,
+      jsonReask: true,
       maxRoundsPerItem: 6,
       maxTurnsPerSession: 60,
       // Quality escalation is off by default; pair a >0 value with roles.generator.escalation.

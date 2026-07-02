@@ -85,6 +85,11 @@ contract:
                               #   build.verifyCommands to opt in
 
 build:
+  maxItems: 12                # cap on how many work items a decomposition may produce; extra
+                              #   items are clamped (head kept, with a warning); 0 = no cap
+  jsonReask: true             # on an unparseable generator report / evaluator verdict, re-ask
+                              #   ONCE on the same session ("re-emit ONLY the JSON block") before
+                              #   the usual fallback (degraded report / forced FAIL)
   maxRoundsPerItem: 6
   maxTurnsPerSession: 60
   escalateAfterRounds: 0      # quality escalation: after this many FAILED rounds on an item, switch

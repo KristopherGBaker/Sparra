@@ -5,9 +5,11 @@ import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { extractJsonWhere } from "../util/extract.ts";
+import { budgetExceeded } from "./budget.ts";
+import type { AssertionClaim } from "./claims.ts";
+import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
-import { info } from "../util/log.ts";
+import { info, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
@@ -25,6 +27,9 @@ export interface Deviation {
 export interface GenerateOutput {
   report: string;
   deviations: Deviation[];
+  /** Per-assertion self-claims from the report JSON; diffed against the evaluator's verdict
+   *  (build/claims.ts) to surface the generator's calibration gap. Absent when omitted. */
+  assertionsClaimed?: AssertionClaim[];
   sessionId: string;
   hitMaxTurns: boolean;
   /** Set when the session failed on a provider rate/usage limit — the build loop waits + retries. */
@@ -92,7 +97,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
   const genReadDirs = buildReadDirs(ctx, workspaceDir, { excludeHoldoutScope: true });
 
   info(`Generating ${item.id} with ${role.model}${args.fresh ? " (fresh restart)" : args.resumeSessionId ? " (resumed)" : ""}…`);
-  const res = await run({
+  const baseReq: RunSessionParams = {
     role: `generator-${item.id}`,
     prompt: task,
     systemPrompt: system,
@@ -123,21 +128,45 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir: args.traceDir,
     traceSeq: args.traceSeq,
-  });
+  };
+  const res = await run(baseReq);
+  let costUsd = res.costUsd;
+  let tokens = res.tokens;
 
-  const parsed =
-    extractJsonWhere<{ report?: string; deviations?: Deviation[] }>(
-      res.resultText,
-      (v) => v && typeof v === "object" && ("report" in v || "deviations" in v)
-    ) ?? {};
-  const deviations = Array.isArray(parsed.deviations) ? parsed.deviations : [];
+  type Report = { report?: string; deviations?: Deviation[]; assertionsClaimed?: AssertionClaim[] };
+  const isReport = (v: any) => v && typeof v === "object" && ("report" in v || "deviations" in v);
+  let parsed = extractJsonWhere<Report>(res.resultText, isReport);
+
+  // JSON re-ask (build.jsonReask): ONLY when the reply has no parseable JSON at all — a JSON
+  // block of the wrong shape goes straight to today's degraded fallback ("re-emit the JSON
+  // block" can't fix a block that was already emitted). ONE resumed re-emit call inside this
+  // step; never on a provider-limit reply (the round loop's fallback chain owns those), and
+  // skipped when this session already exhausted the item budget.
+  const itemBudget = args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
+  const noJson = extractAllJson(res.resultText).length === 0;
+  if (!parsed && noJson && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
+    warn(`Generator for ${item.id} returned no parseable report JSON — re-asking once for the JSON block.`);
+    const retry = await run({
+      ...baseReq,
+      role: `generator-${item.id}-reask`,
+      prompt: "Your previous reply had no parseable report JSON. Re-emit ONLY the JSON block per your instructions — nothing else.",
+      resume: res.sessionId,
+    });
+    costUsd += retry.costUsd;
+    tokens += retry.tokens;
+    parsed = extractJsonWhere<Report>(retry.resultText, isReport);
+  }
+
+  const p = parsed ?? {};
+  const deviations = Array.isArray(p.deviations) ? p.deviations : [];
   return {
-    report: parsed.report ?? res.resultText.slice(0, 500),
+    report: p.report ?? res.resultText.slice(0, 500),
     deviations,
+    assertionsClaimed: Array.isArray(p.assertionsClaimed) ? p.assertionsClaimed : undefined,
     sessionId: res.sessionId,
     hitMaxTurns: res.hitMaxTurns,
     limitHit: res.limitHit,
-    costUsd: res.costUsd,
-    tokens: res.tokens,
+    costUsd,
+    tokens,
   };
 }

@@ -28,6 +28,41 @@ describe("evaluator prompt — environmental blockers route to notes, not `block
   });
 });
 
+describe("decomposer + reconciler prompts (Q7 a/b)", () => {
+  it("DEFAULT_PROMPTS carries the decomposer prompt (moved out of decompose.ts)", () => {
+    const d = DEFAULT_PROMPTS.decomposer;
+    expect(d).toContain("decompose a frozen build plan");
+    expect(d).toContain("SCALE THE COUNT TO THE PLAN'S SIZE");
+    expect(d).toContain("Order items so dependencies come first");
+  });
+
+  it("DEFAULT_PROMPTS carries a short HEADLESS reconciler prompt — no interview/question language", () => {
+    const r = DEFAULT_PROMPTS.reconciler!;
+    expect(r).toBeTruthy();
+    expect(r).toContain("PLAN.md");
+    expect(r).toContain("NEVER ask questions");
+    // The planner's interactive directives must be absent (grep-checkable headlessness).
+    expect(r).not.toContain("Ask ONE question at a time");
+    expect(r).not.toMatch(/interview/i);
+    expect(r.length).toBeLessThan(DEFAULT_PROMPTS.planner!.length); // stays small
+  });
+
+  it("seedPrompts seeds both to disk matching the defaults, and promptDrift tracks them", async () => {
+    const { dir, paths } = await tmpPaths();
+    for (const role of ["decomposer", "reconciler"]) {
+      expect(fs.readFileSync(paths.promptFile(role), "utf8").trim()).toBe(DEFAULT_PROMPTS[role]!.trim());
+    }
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["decomposer"]).toBe("same");
+    expect(byRole["reconciler"]).toBe("same");
+    // Drift machinery sees an edit like any other role.
+    fs.writeFileSync(paths.promptFile("decomposer"), "edited\n");
+    const after = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(after["decomposer"]).toBe("drifted");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("prompt drift + sync", () => {
   it("reports every role in-sync right after seeding", async () => {
     const { dir, paths } = await tmpPaths();

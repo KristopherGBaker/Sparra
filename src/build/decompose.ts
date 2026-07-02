@@ -1,4 +1,5 @@
 import type { Ctx } from "../context.ts";
+import { loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
@@ -8,20 +9,6 @@ import { extractJson } from "../util/extract.ts";
 import { readJson, readText, writeJson, exists } from "../util/io.ts";
 import { info, warn } from "../util/log.ts";
 import type { WorkItem } from "./types.ts";
-
-const DECOMPOSE_SYSTEM = `You decompose a frozen build plan into a small, ordered set of
-work items for an autonomous build loop. Keep items COARSE — each should be a meaningful,
-independently verifiable chunk of product value, not a micro-task.
-
-SCALE THE COUNT TO THE PLAN'S SIZE. A tiny project (e.g. a single-file tool, or a
-one-screen app) is ONE item. A small project is 1–3 items; a typical project 3–8. Do NOT
-split a trivial task into setup/implement/verify steps — verification is handled separately
-by the build loop, so never make a standalone "test it" item. Likewise NEVER make a
-standalone scaffold / project-setup / "create the project" / "generate the Xcode project"
-item — project generation, config files, and boilerplate are SETUP, not independently
-shippable value; fold them into the first feature item that needs them (that item's
-contract can still check the project builds). Order items so dependencies come first. The
-plan is a strong prior, not a contract; do not over-specify implementation.`;
 
 /** Read the frozen plan and produce items.json. Idempotent unless force is set.
  *  `workspaceDir` (the worktree for an isolated build, else `ctx.root`) selects a holdout-free cwd;
@@ -75,7 +62,8 @@ Order matters: earlier items should not depend on later ones.`;
   const res = await run({
     role: "decomposer",
     prompt: task,
-    systemPrompt: DECOMPOSE_SYSTEM,
+    // Seeded/editable/reflectable like every other role prompt (.sparra/prompts/decomposer.md).
+    systemPrompt: await loadPrompt(ctx.paths, "decomposer"),
     backend: role.backend,
     model: role.model,
     effort: role.effort,
@@ -93,6 +81,14 @@ Order matters: earlier items should not depend on later ones.`;
   if (!items || !Array.isArray(items) || items.length === 0) {
     warn("Decomposition produced no parseable items; check the trace.");
     return [];
+  }
+  // Code-side item-count clamp (build.maxItems, 0 = no cap): the prompt asks for a coarse
+  // decomposition, but a model that over-splits anyway is clamped here so a runaway
+  // decomposition can't multiply contract/build cost. Order matters, so the head is kept.
+  const maxItems = ctx.config.build.maxItems;
+  if (maxItems > 0 && items.length > maxItems) {
+    warn(`Decomposer produced ${items.length} items — clamping to build.maxItems (${maxItems}); dropping the last ${items.length - maxItems}.`);
+    items.length = maxItems;
   }
   // Normalize ids/fields.
   const normalized = items.map((it, i) => ({

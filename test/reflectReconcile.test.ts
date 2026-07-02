@@ -5,7 +5,7 @@ import path from "node:path";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
-import { seedPrompts } from "../src/prompts.ts";
+import { seedPrompts, DEFAULT_PROMPTS } from "../src/prompts.ts";
 import { recordDeviations, reconcilePlan } from "../src/build/reconcile.ts";
 import { cmdReflect, applyReflection } from "../src/phases/reflect.ts";
 import type { Ctx } from "../src/context.ts";
@@ -138,6 +138,11 @@ describe("reconcilePlan", () => {
       const p = rec.calls[0]!;
       expect(p.role).toBe("reconcile-I1");
       expect(p.systemPrompt).toBeTruthy();
+      // Q7b: the session runs on the dedicated HEADLESS reconciler prompt, not the planner's
+      // interactive one — no ask-one-question directive can reach an unattended reconcile.
+      expect(p.systemPrompt!.trim()).toBe(DEFAULT_PROMPTS.reconciler!.trim());
+      expect(p.systemPrompt).not.toContain("Ask ONE question at a time");
+      expect(p.systemPrompt).not.toMatch(/interview/i);
       expect(p.permissionMode).toBe("default");
       // the planner reconciles PLAN.md only
       expect(p.tools).toContain("Edit");
