@@ -80,9 +80,12 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",
    backend="codex", contractPath=…, holdoutPath=".sparra/HOLDOUT.md", workspace=…,
-   out=".sparra/verdicts/r1.md")`. The evaluator exercises the artifact for real and
-   grades it against the contract + holdout. Using a *different* backend than the
-   generator is the point — an independent second opinion.
+   worktree=true, out=".sparra/verdicts/r1.md")`. The evaluator exercises the artifact for
+   real and grades it against the contract + holdout. Using a *different* backend than the
+   generator is the point — an independent second opinion. **Pass `worktree=true` whenever the
+   evaluator will run tests/builds** — it snapshots the WIP into a temporary linked worktree
+   with writable scratch + provisioned deps; without it an in-place eval is read-only and
+   false-blocks on scratch writes (EPERM on `node_modules/.vite-temp` → a bogus "tests failed").
 4. **Decide.** Act on the subagent's returned summary (verdict + blocking points) —
    not a raw re-read of the verdict file. If it passes, accept (commit if the user
    wants). If it fails, feed the blocking issues plus each failed assertion's
@@ -180,7 +183,10 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
-  `maxBudgetUsd`). `maxBudgetUsd` (CLI: `--budget <usd>`) overrides `build.maxBudgetUsdPerItem`
+  `maxBudgetUsd`, `worktree`/`keepWorktree`). `worktree=true` (evaluator/reviewer) runs the role
+  in a temp WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
+  pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes).
+  `maxBudgetUsd` (CLI: `--budget <usd>`) overrides `build.maxBudgetUsdPerItem`
   for that one call (`0` = unlimited; omit for the config cap). If that
   agent isn't available, spawn a general subagent and instruct it to call the
   `run_role` MCP tool with the same args and these same holdout rules.

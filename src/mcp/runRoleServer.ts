@@ -4,8 +4,56 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadCtxForRole } from "../context.ts";
-import { runRole, type RoleKind, type RoleRunResult } from "../build/roleRun.ts";
+import { loadCtxForRole, type Ctx } from "../context.ts";
+import { runRole, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+
+/** The `run_role` tool's argument shape (mirrors the zod schema below). */
+export interface RunRoleToolArgs {
+  roleKind: RoleKind;
+  brief?: string;
+  briefPath?: string;
+  contractPath?: string;
+  workspace?: string;
+  holdoutPath?: string;
+  backend?: string;
+  model?: string;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  out?: string;
+  maxBudgetUsd?: number;
+  allowVerify?: boolean;
+  worktree?: boolean;
+  keepWorktree?: boolean;
+  resumeSessionId?: string;
+  resumeBackend?: string;
+}
+
+/**
+ * Map the MCP tool args onto a `runRole` request. Pure + exported so the forwarding is
+ * unit-testable — the `worktree`→`useWorktree` mapping is the one that, when it was silently
+ * dropped, made every `run_role` evaluator exercise run IN-PLACE read-only and false-block on
+ * scratch writes (EPERM on node_modules/.vite-temp), so it stays covered by a test.
+ */
+export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunRequest {
+  return {
+    ctx,
+    roleKind: args.roleKind,
+    brief: args.brief,
+    briefPath: args.briefPath,
+    contractPath: args.contractPath,
+    workspace: args.workspace,
+    holdoutPath: args.holdoutPath,
+    backend: args.backend,
+    model: args.model,
+    effort: args.effort,
+    out: args.out,
+    maxBudgetUsd: args.maxBudgetUsd,
+    allowVerify: args.allowVerify,
+    useWorktree: args.worktree,
+    keepWorktree: args.keepWorktree,
+    resumeSessionId: args.resumeSessionId,
+    resumeBackend: args.resumeBackend,
+  };
+}
 
 /**
  * Shape the holdout-safe MCP payload from a role result. Pure + exported so the wall-critical
@@ -118,6 +166,14 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .boolean()
         .optional()
         .describe("Generator-only: let an in-place run (no build.branch) auto-run the project's build.verifyCommands (typecheck/test/build) via the same strict allow-hook, so self-verify gates don't hit the permission wall. No-op for read-only roles."),
+      worktree: z
+        .boolean()
+        .optional()
+        .describe("Read-only judge roles (evaluator/reviewer): run in a TEMPORARY linked git worktree snapshotted from `workspace`'s WIP (torn down after). Gives the exercise WRITABLE scratch + provisioned deps so `npm test`/build tools run — an in-place eval stays read-only and false-blocks on scratch writes (EPERM on node_modules/.vite-temp etc.). Use whenever the evaluator will exercise the tree."),
+      keepWorktree: z
+        .boolean()
+        .optional()
+        .describe("With `worktree`: retain the temp worktree after the run (its path is printed) instead of tearing it down."),
       resumeSessionId: z
         .string()
         .optional()
@@ -130,23 +186,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
     async (args) => {
       try {
         const ctx = await loadCtxForRole(root);
-        const r = await runRole({
-          ctx,
-          roleKind: args.roleKind as RoleKind,
-          brief: args.brief,
-          briefPath: args.briefPath,
-          contractPath: args.contractPath,
-          workspace: args.workspace,
-          holdoutPath: args.holdoutPath,
-          backend: args.backend,
-          model: args.model,
-          effort: args.effort,
-          out: args.out,
-          maxBudgetUsd: args.maxBudgetUsd,
-          allowVerify: args.allowVerify,
-          resumeSessionId: args.resumeSessionId,
-          resumeBackend: args.resumeBackend,
-        });
+        const r = await runRole(toRunRoleRequest(ctx, args));
         // Never return holdout: evaluator → verdict summary only; others → result text. The
         // holdout-safe field split (incl. evaluator omitting `traceDir`) lives in buildRunRolePayload.
         const payload = buildRunRolePayload(r, ctx.config.rubric.passThreshold);

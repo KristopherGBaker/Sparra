@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildRunRolePayload } from "../src/mcp/runRoleServer.ts";
+import { buildRunRolePayload, toRunRoleRequest } from "../src/mcp/runRoleServer.ts";
+import type { Ctx } from "../src/context.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
 // The holdout-safe field split for the `run_role` MCP payload. The wall-critical invariant is that
@@ -84,5 +85,52 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       75
     );
     expect(p.hitBudget).toBe(true);
+  });
+});
+
+describe("toRunRoleRequest — MCP arg forwarding", () => {
+  const ctx = { root: "/proj" } as unknown as Ctx;
+
+  it("forwards worktree→useWorktree and keepWorktree (the drop that made evals run in-place read-only)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator", workspace: "/proj", worktree: true, keepWorktree: true });
+    expect(req.useWorktree).toBe(true);
+    expect(req.keepWorktree).toBe(true);
+    expect(req.workspace).toBe("/proj");
+    expect(req.ctx).toBe(ctx);
+  });
+
+  it("leaves useWorktree undefined when worktree is not set (default in-place)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
+    expect(req.useWorktree).toBeUndefined();
+    expect(req.keepWorktree).toBeUndefined();
+  });
+
+  it("forwards the rest of the overrides verbatim", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "generator",
+      briefPath: "b.md",
+      contractPath: "c.md",
+      backend: "codex",
+      model: "gpt-5.5",
+      effort: "xhigh",
+      out: "v.md",
+      maxBudgetUsd: 12,
+      allowVerify: true,
+      resumeSessionId: "sess-1",
+      resumeBackend: "claude",
+    });
+    expect(req).toMatchObject({
+      roleKind: "generator",
+      briefPath: "b.md",
+      contractPath: "c.md",
+      backend: "codex",
+      model: "gpt-5.5",
+      effort: "xhigh",
+      out: "v.md",
+      maxBudgetUsd: 12,
+      allowVerify: true,
+      resumeSessionId: "sess-1",
+      resumeBackend: "claude",
+    });
   });
 });
