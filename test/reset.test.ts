@@ -209,7 +209,10 @@ describe("maybeResetWorkspace — real git in a TEMP repo (never the dev tree)",
     expect(fs.readFileSync(path.join(ws, "tracked.txt"), "utf8")).toContain("MUTATED");
     fs.rmSync(parent, { recursive: true, force: true });
   });
-});
+  // Each case spawns several real `git` processes; under full-suite parallel load (esp. in a
+  // provisioned eval worktree) that can exceed Vitest's 5s default and flake, though it passes in
+  // isolation. Give the real-git suite headroom — the assertions are unchanged.
+}, 20000);
 
 describe("attempt ledger (build/attempts.ts)", () => {
   it("caps oversized approach/failure with the truncation marker", () => {
