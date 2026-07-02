@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +6,8 @@ import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
-import { roleRequestFromFlags } from "../src/phases/role.ts";
+import { cmdRoleRun, roleRequestFromFlags } from "../src/phases/role.ts";
+import type { RoleRunResult } from "../src/build/roleRun.ts";
 
 async function makeCtx(): Promise<{ ctx: Ctx; dir: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-role-"));
@@ -53,5 +54,63 @@ describe("roleRequestFromFlags — CLI --verify → allowVerify (H7 assertion 7d
     expect(req.model).toBe("m");
     expect(req.brief).toBe("build");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Item A: the `sparra role run` CLI must EMIT the new not-a-fail signals (names + values) —
+// an MCP-only surfacing would leave a scripted CLI conductor blind to "the work landed".
+describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item A)", () => {
+  function fakeResult(over: Partial<RoleRunResult>): RoleRunResult {
+    return {
+      ok: false,
+      roleKind: "generator",
+      backend: "codex",
+      model: "gpt",
+      resultText: "",
+      traceDir: "/t",
+      sessionId: "sess-cli",
+      costUsd: 0,
+      tokens: 0,
+      errors: [],
+      ...over,
+    };
+  }
+
+  async function captureRun(res: RoleRunResult): Promise<string> {
+    const { ctx, dir } = await makeCtx();
+    let buf = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      return true;
+    });
+    try {
+      await cmdRoleRun(ctx, { kind: "generator", "brief-text": "build" }, async () => res);
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    return buf;
+  }
+
+  it("an emptyCompletion result prints the flag, the filesChanged count, and the resumable sessionId", async () => {
+    const out = await captureRun(fakeResult({ emptyCompletion: true, filesChanged: 2 }));
+    expect(out).toContain("emptyCompletion: true");
+    expect(out).toContain("filesChanged: 2");
+    expect(out).toContain("sess-cli"); // the id the conductor resumes with
+    expect(out).toMatch(/NOT a behavioral fail/i);
+  });
+
+  it("a hitBudget result prints the flag with the resumable sessionId", async () => {
+    const out = await captureRun(fakeResult({ hitBudget: true, filesChanged: 0 }));
+    expect(out).toContain("hitBudget: true");
+    expect(out).toContain("filesChanged: 0");
+    expect(out).toContain("sess-cli");
+  });
+
+  it("a plain result prints none of the new signals", async () => {
+    const out = await captureRun(fakeResult({ ok: true, resultText: "done" }));
+    expect(out).not.toContain("emptyCompletion");
+    expect(out).not.toContain("hitBudget");
+    expect(out).not.toContain("filesChanged");
   });
 });

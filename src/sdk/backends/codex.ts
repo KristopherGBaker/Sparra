@@ -145,11 +145,7 @@ class CodexBackend implements AgentBackend {
       // answer; it's almost always provider unavailability or a usage/session window. Classify it
       // as a limit so the caller falls back / retries instead of mistaking it for a genuine empty
       // result (which would, e.g., parse as a bogus failing verdict and churn the loop).
-      if (isEmptyCompletion(result)) {
-        result.ok = false;
-        result.errors.push("Codex returned an empty completion (0 tokens, no output) — likely provider unavailability or a usage/session limit.");
-        result.limitHit = { kind: "session", raw: result.errors[result.errors.length - 1]! };
-      }
+      markEmptyCompletion(result);
       result.subtype = result.ok ? "success" : "error";
       // Codex gives no structured reset time — sniff the error strings; the build loop
       // then falls back to fixed-interval polling (no resetAt). (Don't clobber an empty-completion
@@ -179,6 +175,23 @@ class CodexBackend implements AgentBackend {
  */
 export function isEmptyCompletion(r: { ok: boolean; tokens: number; resultText: string }): boolean {
   return r.ok && r.tokens === 0 && !r.resultText.trim();
+}
+
+/**
+ * Promote a detected empty completion on a just-finished result: mark it failed, classify it as a
+ * session limit (so `runRole` falls back / retries), AND stamp the EXPLICIT `emptyCompletion`
+ * marker — the ORIGIN signal downstream classification keys on (never re-inferring
+ * `tokens===0 && !resultText`, which a genuine limit can also exhibit). A writer whose files DID
+ * change under this marker means the work LANDED and only the report failed to emit — `runRole`
+ * reclassifies that case as `emptyCompletion`, not a limit. Pure mutation of our own AgentResult
+ * + exported so the marker path is unit-testable without spawning the codex CLI.
+ */
+export function markEmptyCompletion(result: AgentResult): void {
+  if (!isEmptyCompletion(result)) return;
+  result.ok = false;
+  result.errors.push("Codex returned an empty completion (0 tokens, no output) — likely provider unavailability or a usage/session limit.");
+  result.limitHit = { kind: "session", raw: result.errors[result.errors.length - 1]! };
+  result.emptyCompletion = true;
 }
 
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";

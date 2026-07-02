@@ -133,10 +133,17 @@ residual as the Claude evaluator's in-process exercise). In-place runs never aut
 **Provider limits & empty completions.** A backend reports a hit window via `AgentResult.limitHit`
 (rate / usage / session). The Codex backend also classifies a **silent empty completion**
 (`tokens: 0`, no output, no error) as a limit — it's almost always unavailability or a usage
-window, and treating it as a real empty result would churn the loop with a bogus failure. Both the
-autonomous build loop (`build.autoRestart` + `roles.*.fallback`) and the interactive role-runner
-(auto-fallback in `run_role`, see [role-runner](role-runner.md)) act on `limitHit` — switch to a
-fallback backend/model or wait — rather than failing the work.
+window, and treating it as a real empty result would churn the loop with a bogus failure. When it
+does, it ALSO stamps the **explicit `AgentResult.emptyCompletion` marker**, so downstream
+classification keys on the ORIGIN rather than re-inferring from tokens/text (a genuine limit can
+also have empty text / zero tokens). That marker matters for a **writer whose files DID change**:
+the role-runner reclassifies that case as `RoleRunResult.emptyCompletion` — the work LANDED, only
+the report failed to emit — clears the ec's `limitHit`, and refuses to fall back (a second writer
+would clobber the landed work); it also surfaces `filesChanged` (always, for a writer) and
+`hitBudget` (our own `maxBudgetUsd` cap — resume via `sessionId`), see
+[role-runner](role-runner.md). Otherwise, both the autonomous build loop (`build.autoRestart` +
+`roles.*.fallback`) and the interactive role-runner (auto-fallback in `run_role`) act on
+`limitHit` — switch to a fallback backend/model or wait — rather than failing the work.
 
 ## Adding a backend
 Implement `AgentBackend` (`id`, `capabilities`, `runTask(req) → AgentResult`) in `src/sdk/backends/<id>.ts`, `registerBackend(...)` it, and import it for its side effect in `session.ts`. The engine reads `capabilities` and uses the richest path available, degrading otherwise. Nothing else changes.

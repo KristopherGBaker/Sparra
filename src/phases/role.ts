@@ -10,7 +10,7 @@ const VALID_KINDS: RoleKind[] = ["generator", "contract-generator", "contract-ev
  * (the MCP `run_role` tool is the interactive surface). Holdout is passed by PATH;
  * the runner is the only thing that reads it, and only for the evaluator.
  */
-export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolean>): Promise<void> {
+export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolean>, runRoleFn: typeof runRole = runRole): Promise<void> {
   banner("sparra role run");
   const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
   if (!VALID_KINDS.includes(kind)) {
@@ -32,7 +32,7 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
   let res;
   try {
-    res = await runRole(req);
+    res = await runRoleFn(req);
   } catch (e) {
     // A thrown error here is most often the holdout wall firing — that's a feature.
     err((e as Error).message);
@@ -46,6 +46,12 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   }
   if (res.outPath) detail(`wrote: ${res.outPath}`);
   if (res.errors.length) warn(`errors: ${res.errors.join("; ")}`);
+  // Not-a-fail signals — the same names/meanings as the MCP payload, so a scripted conductor
+  // reading CLI output gets the identical resume-or-accept guidance.
+  if (res.filesChanged !== undefined) detail(`filesChanged: ${res.filesChanged}`);
+  if (res.emptyCompletion)
+    warn(`emptyCompletion: true — work LANDED (${res.filesChanged ?? 0} file(s) changed) but the report failed to emit; resume sessionId=${res.sessionId} or accept the landed work — NOT a behavioral fail`);
+  if (res.hitBudget) warn(`hitBudget: true — stopped on the per-call budget cap; resume sessionId=${res.sessionId} (backend=${res.backend})`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
 }
 

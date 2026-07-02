@@ -64,4 +64,25 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     expect(limited.limitHit).toBeTruthy();
     expect(limited.hitMaxTurns).toBe(true);
   });
+
+  // Item A: a payload built from a result CARRYING the new signals must expose all three —
+  // adding them to RoleRunResult without surfacing them over MCP fails here.
+  it("exposes emptyCompletion / filesChanged / hitBudget on a result carrying them", () => {
+    const p = buildRunRolePayload(baseResult({ emptyCompletion: true, filesChanged: 3, hitBudget: true }), 75);
+    expect(p.emptyCompletion).toBe(true);
+    expect(p.filesChanged).toBe(3);
+    expect(p.hitBudget).toBe(true);
+  });
+
+  it("the evaluator (verdict) branch carries hitBudget too (a budget-capped eval is resumable)", () => {
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        hitBudget: true,
+        verdict: { verdict: "fail", weightedTotal: 0, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"],
+      }),
+      75
+    );
+    expect(p.hitBudget).toBe(true);
+  });
 });

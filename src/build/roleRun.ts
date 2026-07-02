@@ -161,6 +161,26 @@ export interface RoleRunResult {
    *  it left off, exactly as the build loop does, rather than re-reading the workspace or treating
    *  it as a FAIL. */
   hitMaxTurns?: boolean;
+  /** Set for a WRITER role whose run ended with an empty completion (the backend's explicit
+   *  marker) or a budget-cap death, but whose files DID change — the work LANDED; only the
+   *  completion report failed to emit. NOT a behavioral failure and NOT a limit ("nothing ran"):
+   *  the conductor should RESUME the session (`resumeSessionId` + `resumeBackend` = this result's
+   *  `sessionId`/`backend`) to re-emit the report, or accept the landed work as-is — never re-run
+   *  the item from scratch (a second generator would clobber what landed) and never feed it back
+   *  as a FAIL. */
+  emptyCompletion?: boolean;
+  /** ALWAYS populated for a WRITER role, however the run ended: the count of newly-changed paths
+   *  (present after the run that were not in the pre-run snapshot). Telemetry, not a
+   *  classification flag — >0 means work landed on disk, so the conductor can distinguish "empty
+   *  result but the work is there" from "empty and nothing happened" without a git probe of its
+   *  own. */
+  filesChanged?: number;
+  /** Set when the run stopped on OUR OWN per-call USD cap (`maxBudgetUsd` /
+   *  `build.maxBudgetUsdPerItem`) — not a provider `limitHit`, not a turn cap. Telemetry, not a
+   *  behavioral failure: the conductor should RESUME the same session via this result's
+   *  `sessionId`/`backend` (raising the cap if warranted) rather than re-running or treating it
+   *  as a FAIL. */
+  hitBudget?: boolean;
 }
 
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
@@ -497,6 +517,10 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   const chain: RoleConfig[] = [];
   for (let r: RoleConfig | undefined = role; r; r = r.fallback) chain.push(r);
   const limitedBackends = new Set<string>();
+  // Newly-changed paths for a writer, via the SAME writerBefore + changedFiles machinery as the
+  // no-progress probe (no second git-scan path). Recomputed after the final attempt below.
+  const countNewChanges = (): number =>
+    writerBefore ? listChanges(workspace).filter((p) => !writerBefore.has(p)).length : 0;
   let res!: RunResult;
   let ranRole: RoleConfig = role;
   for (let i = 0; i < chain.length; i++) {
@@ -515,6 +539,18 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
       traceSeq: (req.traceSeq ?? 1) + i,
     });
     if (!res.limitHit) break; // a real (non-limit) result — done, even if it's a failure
+    // A WRITER's empty completion (the backend's EXPLICIT marker, not re-inferred from
+    // tokens/text) whose files DID change means the work LANDED and only the report failed to
+    // emit — a fallback generator would clobber it. STOP the chain; classification below clears
+    // the ec's limitHit and surfaces `emptyCompletion` instead. A genuine limit, or an ec with
+    // zero changed files (nothing ran), still falls back as before.
+    if (isWriter && res.emptyCompletion && countNewChanges() > 0) {
+      warn(
+        `role-run-${roleKind}: ${be}/${attempt.model} returned an empty completion but files DID change — ` +
+          `work landed; NOT falling back (a second writer would clobber it).`
+      );
+      break;
+    }
     limitedBackends.add(be);
     const next = chain.slice(i + 1).find((f) => !limitedBackends.has(f.backend ?? "claude"));
     warn(
@@ -522,6 +558,12 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
         (next ? ` — falling back to ${next.backend ?? "claude"}/${next.model}.` : " — no usable fallback left; surfacing the limit.")
     );
   }
+
+  // The writer change-set probe runs REGARDLESS of how the run ended — `filesChanged` is always
+  // populated for a writer, so the conductor can tell "empty but work landed" from "empty and
+  // nothing happened" on every branch (limit, turn cap, budget death, clean).
+  const filesChanged = isWriter && writerBefore ? countNewChanges() : undefined;
+  const emptyText = !res.resultText.trim();
 
   const result: RoleRunResult = {
     ok: res.ok,
@@ -534,30 +576,52 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
     costUsd: res.costUsd,
     tokens: res.tokens,
     errors: res.errors,
-    limitHit: res.limitHit,
-    // A turn-cap stop is "unfinished", not "wrong" — surface it so the conductor resumes the
-    // session (like the build loop) instead of failing. Suppress under a limit (the cap wasn't
-    // the real reason the run stopped).
-    hitMaxTurns: res.hitMaxTurns && !res.limitHit ? true : undefined,
+    // Preserved telemetry (never suppressed by classification): the writer change count and the
+    // our-own-budget-cap stop (the conductor resumes via `sessionId` on a budget death).
+    filesChanged,
+    hitBudget: res.hitBudget ? true : undefined,
   };
 
-  // No-progress fast-fail: a writer that changed NO file (no new/edited path appeared) didn't
-  // build anything — almost always permission starvation or a blocked brief, not a real "the work
-  // is wrong" outcome. Surface it distinctly, but never over a real limit OR a turn-cap (where
-  // doing nothing yet is expected and the right move is resume, not "investigate the brief"). The
-  // conductor treats this like `limitHit`: investigate, don't feed back as a FAIL.
-  if (isWriter && writerBefore && !res.limitHit && !res.hitMaxTurns) {
-    const after = listChanges(workspace);
-    const progressed = after.some((p) => !writerBefore.has(p));
-    if (!progressed) {
-      result.noProgress = true;
-      const msg =
-        `role-run-${roleKind}: writer changed no files — likely blocked reads/Bash or an unactionable brief, ` +
-        `not a behavioral failure. Check the brief is actionable and the workspace is readable; re-run.`;
-      if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
-      warn(msg);
-    }
+  // Classification — a strict top-down matrix, FIRST match wins; at most ONE of the flags
+  // (limitHit / hitMaxTurns / emptyCompletion / noProgress) is set. An empty completion is
+  // identified ONLY by the backend's explicit `res.emptyCompletion` marker — never re-inferred
+  // from tokens/text, which a genuine limit can also exhibit.
+  if (res.limitHit && !res.emptyCompletion) {
+    // 1. A GENUINE provider limit — stays, and suppresses a co-occurring turn cap (the limit is
+    //    the real reason the run stopped; existing precedence).
+    result.limitHit = res.limitHit;
+  } else if (res.hitMaxTurns) {
+    // 2. Turn cap with no genuine limit — "unfinished", not "wrong": the conductor resumes.
+    result.hitMaxTurns = true;
+  } else if ((res.emptyCompletion || res.hitBudget) && emptyText && (filesChanged ?? 0) > 0) {
+    // 3. Empty completion OR budget death, but the writer's files DID change — the work LANDED;
+    //    only the report failed to emit. An ec's limitHit is CLEARED (this is not "nothing ran").
+    result.emptyCompletion = true;
+    const msg =
+      `role-run-${roleKind}: run ended without a usable report (${res.emptyCompletion ? "empty completion" : "budget cap"}) ` +
+      `but ${filesChanged} file(s) changed — the work LANDED. Resume the session (sessionId=${res.sessionId}) to re-emit ` +
+      `the report, or accept the landed work; do NOT re-run or treat as a FAIL.`;
+    if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+    warn(msg);
+  } else if (res.emptyCompletion) {
+    // 4. Empty completion with NO changed files — nothing ran; keep the limit classification
+    //    (retry/fall back), NOT noProgress (the brief was never really attempted).
+    result.limitHit = res.limitHit;
+  } else if (res.hitBudget) {
+    // 5. Budget death with no landed work — no classification flag; the `hitBudget` telemetry
+    //    (already set above) + `sessionId` are the resume signal.
+  } else if (isWriter && writerBefore && (filesChanged ?? 0) === 0) {
+    // 6. A CLEAN run (no limit/cap/budget) where the writer changed no files — the
+    //    permission-starved / blocked-brief signature. The conductor treats this like `limitHit`:
+    //    investigate the brief/permissions, don't feed back as a FAIL.
+    result.noProgress = true;
+    const msg =
+      `role-run-${roleKind}: writer changed no files — likely blocked reads/Bash or an unactionable brief, ` +
+      `not a behavioral failure. Check the brief is actionable and the workspace is readable; re-run.`;
+    if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+    warn(msg);
   }
+  // 7. Normal success — no classification flag.
 
   if (evaluator) {
     // Redact any holdout the evaluator quoted, so it can't reach the conductor via

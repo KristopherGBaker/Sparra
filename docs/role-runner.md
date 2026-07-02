@@ -84,12 +84,37 @@ differs, since session ids aren't portable across backends. Every result returns
 + `backend` for exactly this.
 
 **Provider limits / empty completions.** If a backend hits a rate/usage/session limit — or
-returns a **silent empty completion** (`tokens: 0`, no output, which the Codex backend now
-classifies as a limit rather than a bogus empty result) — `run_role` **auto-falls-back** down
-`roles.<role>.fallback` (skipping a fallback on an already-limited backend), mirroring the build
-loop. The result reflects the backend that actually ran; if the whole chain was limited, the
-result carries `limitHit` (and the MCP payload includes it). Treat `limitHit` as **retry/fall
-back, not a behavioral failure** — never feed it back to the generator.
+returns a **silent empty completion** (which the Codex backend detects and stamps with an
+**explicit `emptyCompletion` marker** on its result, classifying it as a limit rather than a bogus
+empty result) — `run_role` **auto-falls-back** down `roles.<role>.fallback` (skipping a fallback
+on an already-limited backend), mirroring the build loop. The result reflects the backend that
+actually ran; if the whole chain was limited, the result carries `limitHit` (and the MCP payload
+includes it). Treat `limitHit` as **retry/fall back, not a behavioral failure** — never feed it
+back to the generator. **Exception — a writer whose work already landed:** if a WRITER's attempt
+is an empty completion (the explicit marker, never re-inferred from `tokens===0 && !resultText`,
+which a genuine limit can also exhibit) **and its files DID change**, the chain **stops without
+falling back** — a second generator would clobber the landed work — and the result is
+reclassified (below) as `emptyCompletion`, with the ec's `limitHit` cleared.
+
+**Empty completion / budget death — "did the work land?" self-report.** A writer run can die at
+the per-call budget cap (`maxBudgetUsd` / `build.maxBudgetUsdPerItem`) or lose its final report
+emission even though the work fully landed on disk. So the writer **change-set probe runs however
+the run ended**, and every writer result carries:
+- **`filesChanged`** (always populated for a writer) — the count of newly-changed paths vs. the
+  pre-run snapshot; `>0` means work landed. Telemetry, never suppressed.
+- **`emptyCompletion: true`** — empty/failed result text **but files DID change**: the work
+  LANDED, only the report failed to emit. **Resume the session** (`resumeSessionId` +
+  `resumeBackend` = the result's `sessionId`/`backend`) to re-emit the report, or accept the
+  landed work — never re-run the item or feed it back as a FAIL.
+- **`hitBudget: true`** — the run stopped on **our own** budget cap (not a provider limit, not a
+  turn cap). Telemetry; resume via `sessionId` (raising the cap if warranted).
+
+Classification is a strict first-match matrix — at most ONE of `limitHit` / `hitMaxTurns` /
+`emptyCompletion` / `noProgress` is set: a genuine limit stays `limitHit` (suppressing a
+co-occurring turn cap); a turn cap stays `hitMaxTurns`; an ec/budget death **with** landed work →
+`emptyCompletion`; an ec **without** landed work stays `limitHit` (nothing ran — not
+`noProgress`); a budget death without landed work sets no flag (`hitBudget` + `sessionId` are the
+resume signal); a clean run where the writer changed nothing → `noProgress`.
 
 **Always-readable workspace + no-progress fast-fail.** Every role's workspace and granted read
 dirs are **auto-approved for reads in the guard itself** (Read/Glob/Grep with an explicit in-scope

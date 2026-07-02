@@ -973,6 +973,290 @@ describe("runRole — turn-cap (hitMaxTurns) surfacing (Item A)", () => {
   });
 });
 
+// ── Item A: empty-completion / budget-death self-report + classification matrix ──
+
+/** Scripted changedFilesFn: returns entries in order, clamping to the last (probe may run >2×). */
+function scripted(seq: string[][]) {
+  let i = 0;
+  return () => seq[Math.min(i++, seq.length - 1)]!;
+}
+
+/** A fake session returning a fixed RunResult shape (per-backend override for fallback tests). */
+function fixed(shape: Partial<RunResult>, perBackend: Record<string, Partial<RunResult>> = {}) {
+  const calls: RunSessionParams[] = [];
+  const fn = async (p: RunSessionParams): Promise<RunResult> => {
+    calls.push(p);
+    return {
+      ok: false,
+      subtype: "error",
+      resultText: "",
+      sessionId: "sess-A",
+      costUsd: 0,
+      tokens: 0,
+      numTurns: 1,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: [],
+      tracePath: "",
+      ...shape,
+      ...(perBackend[p.backend ?? "claude"] ?? {}),
+    };
+  };
+  return { calls, fn };
+}
+
+/** The Codex backend's empty-completion shape: EXPLICIT marker + the limit it promotes to. */
+const EC_SHAPE: Partial<RunResult> = {
+  ok: false,
+  resultText: "",
+  tokens: 0,
+  emptyCompletion: true,
+  limitHit: { kind: "session", raw: "empty completion" },
+  errors: ["empty completion"],
+};
+
+describe("runRole — empty-completion / budget-death classification matrix (Item A)", () => {
+  const FILE = "/ws/src/new.ts";
+
+  it("row 3 (ec + files changed): emptyCompletion set, the ec's limitHit CLEARED, sessionId preserved", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback
+    const rec = fixed({ ...EC_SHAPE, sessionId: "sess-ec" });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]), // a new path appeared → the work landed
+    });
+    expect(r.emptyCompletion).toBe(true);
+    expect(r.limitHit).toBeUndefined(); // CLEARED — this is "work landed", not "nothing ran"
+    expect(r.noProgress).toBeUndefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    expect(r.filesChanged).toBe(1);
+    expect(r.sessionId).toBe("sess-ec"); // the conductor resumes with this
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ANTI-GAMING pair: a GENUINE limit that ALSO has empty text + zero tokens + files changed keeps limitHit; emptyCompletion stays unset", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback → surfaces the limit
+    // Same observable surface as an ec (empty text, 0 tokens) but NO explicit marker — a real
+    // usage limit. Classification must key on the ORIGIN marker, not re-infer from tokens/text.
+    const rec = fixed({ ok: false, resultText: "", tokens: 0, limitHit: { kind: "usage", raw: "plan window" }, errors: ["limited"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(r.limitHit).toBeDefined(); // stays — a genuine limit
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.filesChanged).toBe(1); // …but the probe STILL populated the telemetry
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 3 (budget-cap death + files changed): emptyCompletion set, hitBudget telemetry kept, sessionId preserved", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = fixed({ ok: false, subtype: "error_max_budget_usd", resultText: "", hitBudget: true, sessionId: "sess-budget", errors: ["error_max_budget_usd"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(r.emptyCompletion).toBe(true);
+    expect(r.hitBudget).toBe(true); // telemetry preserved alongside the classification flag
+    expect(r.limitHit).toBeUndefined();
+    expect(r.noProgress).toBeUndefined();
+    expect(r.filesChanged).toBe(1);
+    expect(r.sessionId).toBe("sess-budget");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 4 (ec + ZERO files changed): limitHit STAYS (nothing ran) — not noProgress, not emptyCompletion", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback
+    const rec = fixed(EC_SHAPE);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], []]),
+    });
+    expect(r.limitHit).toBeDefined();
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.noProgress).toBeUndefined();
+    expect(r.filesChanged).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 5 (budget-cap death, empty, ZERO files): NO classification flag — hitBudget telemetry + resumable sessionId only", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = fixed({ ok: false, subtype: "error_max_budget_usd", resultText: "", hitBudget: true, sessionId: "sess-budget0", errors: ["error_max_budget_usd"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], []]),
+    });
+    expect(r.hitBudget).toBe(true);
+    expect(r.sessionId).toBe("sess-budget0");
+    expect(r.filesChanged).toBe(0);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.noProgress).toBeUndefined(); // a budget death is "resume", never "investigate the brief"
+    expect(r.limitHit).toBeUndefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 6 (clean empty + ZERO files): noProgress — no other flag", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = fixed({ ok: true, subtype: "success", resultText: "", tokens: 5 }); // spent tokens → not an ec
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], []]),
+    });
+    expect(r.noProgress).toBe(true);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.limitHit).toBeUndefined();
+    expect(r.hitBudget).toBeUndefined();
+    expect(r.filesChanged).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 2 (turn cap + empty + files changed): hitMaxTurns — not emptyCompletion", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = fixed({ ok: false, subtype: "error_max_turns", resultText: "", hitMaxTurns: true, errors: ["error_max_turns"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.noProgress).toBeUndefined();
+    expect(r.filesChanged).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 1 over row 2 (precedence preserved): genuine limit + hitMaxTurns together → limitHit set, hitMaxTurns suppressed", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "claude", model: "opus" }; // no fallback → surfaces the limit
+    const rec = fixed({ ok: false, resultText: "partial", hitMaxTurns: true, limitHit: { kind: "usage", raw: "limited" }, errors: ["limited"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(r.limitHit).toBeDefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    expect(r.filesChanged).toBe(1); // telemetry populated even under a limit
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("row 7 (normal success + files changed): no classification flag; filesChanged populated", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = fixed({ ok: true, subtype: "success", resultText: "done", tokens: 7 });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(r.ok).toBe(true);
+    expect(r.filesChanged).toBe(1);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.limitHit).toBeUndefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    expect(r.noProgress).toBeUndefined();
+    expect(r.hitBudget).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a NON-writer ec (evaluator) is untouched by the reclassification — limitHit stays, no filesChanged", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "codex", model: "gpt" }; // no fallback
+    const rec = fixed(EC_SHAPE);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn, changedFilesFn: scripted([[FILE]]) });
+    expect(r.limitHit).toBeDefined();
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.filesChanged).toBeUndefined(); // writer-only telemetry
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — fallback chain STOPS on a writer ec whose work landed (Item A, assertion 5)", () => {
+  const FILE = "/ws/src/new.ts";
+
+  it("primary (codex) ec + a changed file, fallback (claude) configured → ONLY the primary ran; emptyCompletion, limitHit unset", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = fixed(EC_SHAPE);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls).toHaveLength(1); // the fallback was NOT invoked — it would clobber the landed work
+    expect(rec.calls[0]!.backend).toBe("codex");
+    expect(r.backend).toBe("codex");
+    expect(r.emptyCompletion).toBe(true);
+    expect(r.limitHit).toBeUndefined();
+    expect(r.filesChanged).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an ec with ZERO changed files still falls back as today (nothing to clobber)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = fixed({ ok: true, subtype: "success", resultText: "done", tokens: 7 }, { codex: EC_SHAPE });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], []]),
+    });
+    expect(rec.calls.map((c) => c.backend)).toEqual(["codex", "claude"]);
+    expect(r.emptyCompletion).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a GENUINE limit with files changed still falls back as today (only the ec marker stops the chain)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = fixed(
+      { ok: true, subtype: "success", resultText: "done", tokens: 7 },
+      { codex: { ok: false, resultText: "", tokens: 0, limitHit: { kind: "usage", raw: "limited" }, errors: ["limited"] } }
+    );
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls.map((c) => c.backend)).toEqual(["codex", "claude"]);
+    expect(r.emptyCompletion).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // ── Item B: anchored functionality cap — parity with the autonomous evaluate.ts path ──
 
 /** An evaluator reply with a controllable assertion set + functionality score. */

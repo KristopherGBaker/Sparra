@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend, type AgentRequest, type AgentResult } from "../src/sdk/backend.ts";
-import { codexSandboxMode, isEmptyCompletion } from "../src/sdk/backends/codex.ts";
+import { codexSandboxMode, isEmptyCompletion, markEmptyCompletion } from "../src/sdk/backends/codex.ts";
 import { consumeQuery } from "../src/sdk/backends/claude.ts";
 import { TraceWriter } from "../src/sdk/trace.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
@@ -123,6 +123,51 @@ describe("codex backend", () => {
       expect(isEmptyCompletion({ ok: true, tokens: 0, resultText: "hi" })).toBe(false); // has text
       expect(isEmptyCompletion({ ok: true, tokens: 5, resultText: "" })).toBe(false); // spent tokens
       expect(isEmptyCompletion({ ok: false, tokens: 0, resultText: "" })).toBe(false); // already an error
+    });
+  });
+
+  // Item A: the promotion stamps the EXPLICIT `emptyCompletion` marker on our AgentResult —
+  // the ORIGIN signal runRole's classification keys on (never re-inferred from tokens/text).
+  describe("markEmptyCompletion (the explicit ec marker the Codex path sets)", () => {
+    function base(over: Partial<AgentResult>): AgentResult {
+      return {
+        ok: true,
+        subtype: "success",
+        resultText: "",
+        sessionId: "s",
+        costUsd: 0,
+        tokens: 0,
+        numTurns: 1,
+        hitMaxTurns: false,
+        hitBudget: false,
+        errors: [],
+        tracePath: "",
+        ...over,
+      };
+    }
+
+    it("stamps emptyCompletion + promotes to a session limitHit on a silent empty completion", () => {
+      const r = base({});
+      markEmptyCompletion(r);
+      expect(r.emptyCompletion).toBe(true);
+      expect(r.ok).toBe(false);
+      expect(r.limitHit?.kind).toBe("session");
+      expect(r.errors.join(" ")).toMatch(/empty completion/i);
+    });
+
+    it("does NOT stamp a genuine limit that happens to have empty text / zero tokens (already failed)", () => {
+      const r = base({ ok: false, limitHit: { kind: "usage", raw: "plan window" }, errors: ["limited"] });
+      markEmptyCompletion(r);
+      expect(r.emptyCompletion).toBeUndefined(); // origin distinguishable: not an ec
+      expect(r.limitHit?.kind).toBe("usage"); // untouched
+    });
+
+    it("does NOT stamp a real (non-empty) result", () => {
+      const r = base({ resultText: "answer", tokens: 12 });
+      markEmptyCompletion(r);
+      expect(r.emptyCompletion).toBeUndefined();
+      expect(r.ok).toBe(true);
+      expect(r.limitHit).toBeUndefined();
     });
   });
 });

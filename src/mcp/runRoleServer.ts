@@ -32,6 +32,7 @@ export function buildRunRolePayload(r: RoleRunResult, passThreshold: number): Re
         costUsd: r.costUsd,
         limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
         hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
+        hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
       }
     : {
         roleKind: r.roleKind,
@@ -50,6 +51,9 @@ export function buildRunRolePayload(r: RoleRunResult, passThreshold: number): Re
         limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
         hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
         noProgress: r.noProgress, // writer changed no files → blocked reads/brief, NOT a behavioral fail
+        emptyCompletion: r.emptyCompletion, // writer's report failed to emit but files changed → work LANDED: resume/accept, NOT a fail
+        filesChanged: r.filesChanged, // writer telemetry: newly-changed path count (>0 → work landed)
+        hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
       };
 }
 

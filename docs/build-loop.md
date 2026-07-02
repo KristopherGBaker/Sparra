@@ -106,6 +106,8 @@ Limits are tracked per **backend** (a plan window is account-wide across that pr
 
 Two stop conditions keep it sane (the loop must never run forever): each wait is bounded by `maxWaitSec`, and the whole run gives up after `maxRestarts` wait cycles — stopping **cleanly** (phase stays `build`, the item is left mid-flight, nothing marked failed). State is checkpointed to disk *before* each sleep, so a process kill mid-wait loses nothing: re-run `sparra build` to resume. `sparra status` shows a paused build as *paused on a provider limit — resumes ~HH:MM* rather than looking hung.
 
+**Role-run signals (the interactive analogue).** A `run_role` / `sparra role run` result distinguishes every "stopped but not wrong" outcome so a conductor never mistakes them for a failed round: `limitHit` (provider limit — retry/fall back), `hitMaxTurns` (turn cap — resume the session), `hitBudget` (**our own** `maxBudgetUsd` cap — resume via `sessionId`), `emptyCompletion` (a writer's report failed to emit **but its files DID change** — the work landed; resume or accept, never re-run), `filesChanged` (always populated for a writer; `>0` = work landed), and `noProgress` (clean run, no file changed — investigate the brief). See [role-runner](role-runner.md) for the full classification matrix.
+
 ## Interactive / human-in-the-loop (`sparra build --step`)
 The loop is autonomous by default. Pass **`--step=contract,round,commit,item`** (any subset; a bare `--step` enables all four) to insert **human checkpoints** — using the same checkpoint-and-exit + resume-from-disk model as the provider-limit pause, *not* blocking prompts. With no `--step` the build is byte-for-byte the autonomous loop (every interactive branch is skipped).
 

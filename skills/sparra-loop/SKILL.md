@@ -90,12 +90,24 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    autonomous loop's round feedback) back into the generator brief and repeat. Pivot
    to a fresh approach after repeated failures on the same point.
    **Limit ≠ fail:** if the summary carries a `limitHit` (a provider rate/usage/session
-   limit, or a Codex empty completion classified as one — e.g. `tokens: 0`), the role
-   never really ran. Do NOT treat it as a behavioral FAIL or feed it back to the
-   generator. `run_role` auto-falls-back to `roles.<role>.fallback` first; if the whole
-   chain was limited it surfaces `limitHit` — then switch that role to another
-   backend/model (`--backend`/`backend`) or retry later. (This is the interactive
-   analogue of the CLI loop's auto-restart/fallback.)
+   limit, or a Codex empty completion with NO landed work), the role never really ran.
+   Do NOT treat it as a behavioral FAIL or feed it back to the generator. `run_role`
+   auto-falls-back to `roles.<role>.fallback` first; if the whole chain was limited it
+   surfaces `limitHit` — then switch that role to another backend/model
+   (`--backend`/`backend`) or retry later. (This is the interactive analogue of the CLI
+   loop's auto-restart/fallback.)
+   **Empty completion + work landed ≠ fail — RESUME or ACCEPT:** if a generator summary
+   carries `emptyCompletion: true` (always with `filesChanged > 0`), the work LANDED on
+   disk and only the completion report failed to emit. Do NOT re-run the item (a second
+   generator would clobber the landed work — the fallback chain already refuses to) and
+   do NOT feed it back as a FAIL: resume the session (`resumeSessionId`/`resumeBackend`
+   = the result's `sessionId`/`backend`) to re-emit the report, or verify the tree
+   (typecheck/test) and accept the landed work, then evaluate as normal. `filesChanged`
+   is always populated for a generator — `>0` means work landed, whatever the flags say.
+   **Budget cap ≠ fail — RESUME:** if a summary carries `hitBudget: true`, the run
+   stopped on OUR per-call USD cap (not a provider limit). Resume the same session via
+   `resumeSessionId` (+ a raised `maxBudgetUsd`) to finish; if `filesChanged > 0`, the
+   work may already be complete — check before spending more.
    **No progress ≠ fail:** if a generator summary carries `noProgress: true`, the writer
    changed no files — a blocked brief or a starved permission path, not "the work is
    wrong." Don't feed it back as a behavioral FAIL; check the brief is actionable and the

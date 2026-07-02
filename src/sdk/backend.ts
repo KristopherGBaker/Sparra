@@ -159,6 +159,14 @@ export interface AgentResult {
   hitBudget: boolean;
   /** Set when the run failed on a provider rate/usage/session limit (vs. our own caps). */
   limitHit?: LimitHit;
+  /**
+   * EXPLICIT empty-completion marker: the backend reported success but produced zero tokens and
+   * no result text (the Codex `isEmptyCompletion` path sets this alongside promoting the run to
+   * `limitHit`). Downstream classification MUST key on this marker — never re-infer
+   * `tokens===0 && !resultText` — so a GENUINE provider limit that happens to have empty text is
+   * distinguishable from a silent empty completion (whose work may have landed on disk).
+   */
+  emptyCompletion?: boolean;
   errors: string[];
   tracePath: string;
 }
