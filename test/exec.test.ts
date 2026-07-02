@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { runVerifyCommand, extractVerifyCommands, classifyExec, rerunVerifyCommands, type ExecOutcome } from "../src/build/exec.ts";
 
@@ -46,6 +47,66 @@ describe("runVerifyCommand — safety rules (shared with the self-verify allow-p
       expect(o.timedOut).toBe(false);
     }
     expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a BARE `rm` (argv[0] basename deny, not substring) without spawning", async () => {
+    const spawnFn = spySpawn();
+    for (const cmd of ["rm", "/bin/rm", "git", "npx vitest run x.ts", "sh -c true", "bash", "sudo ls", "node -e 1+1", "node --eval 1+1"]) {
+      const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
+      expect(o.ran, cmd).toBe(false);
+      if (!o.ran) expect(o.unsafeReason).toBeTruthy();
+    }
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("rejects shell-expansion forms pre-spawn: rm${IFS}victim.txt never runs and the file survives (real fs)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-exec-ifs-"));
+    const victim = path.join(ws, "victim.txt");
+    fs.writeFileSync(victim, "still here");
+    const spawnFn = spySpawn();
+    // NOT a template literal — the executor receives the literal ${IFS} expansion token.
+    const o = await runVerifyCommand(ws, "rm${IFS}victim.txt", { spawnFn });
+    expect(o.ran).toBe(false);
+    if (!o.ran) expect(o.unsafeReason).toContain("$");
+    expect(spawnFn).not.toHaveBeenCalled(); // never spawned…
+    expect(fs.existsSync(victim)).toBe(true); // …and the workspace file survives
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("rejects command-substitution / chaining / backtick forms pre-spawn", async () => {
+    const spawnFn = spySpawn();
+    for (const cmd of ["echo $(whoami)", "npm test; rm x", "echo `whoami`", "echo ~/x", "echo a\\ b", 'echo "hi"', "echo {a,b}"]) {
+      const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
+      expect(o.ran, cmd).toBe(false);
+    }
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  /** Fake spawn: an EventEmitter child that exits 0 — proves WHAT would be spawned without running it. */
+  const fakeSpawn = () =>
+    vi.fn((..._args: unknown[]) => {
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from("ok"));
+        child.emit("close", 0);
+      });
+      return child;
+    }) as unknown as typeof spawn & { mock: { calls: any[][] } };
+
+  it("spawns argv DIRECTLY (no shell): `npm test` / `tsc --noEmit` pass the gate and spawn tokenized", async () => {
+    const spawnFn = fakeSpawn();
+    const npm = await runVerifyCommand("/ws", "npm test", { spawnFn });
+    expect(npm.ran && npm.exitCode === 0).toBe(true);
+    const tsc = await runVerifyCommand("/ws", "tsc --noEmit", { spawnFn });
+    expect(tsc.ran && tsc.exitCode === 0).toBe(true);
+    expect(spawnFn.mock.calls[0]![0]).toBe("npm");
+    expect(spawnFn.mock.calls[0]![1]).toEqual(["test"]);
+    expect(spawnFn.mock.calls[1]![0]).toBe("tsc");
+    expect(spawnFn.mock.calls[1]![1]).toEqual(["--noEmit"]);
+    for (const call of spawnFn.mock.calls) expect(call[2]).not.toHaveProperty("shell"); // no shell, ever
   });
 
   it("captures a nonzero exit (`false`) without throwing", async () => {

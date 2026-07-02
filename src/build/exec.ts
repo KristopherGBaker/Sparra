@@ -1,12 +1,16 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 
 /**
  * Harness-side (NO-model) command executor + the pure helpers around it:
  *   - `runVerifyCommand` — run ONE contract verify command with cwd=workspace, bounded
- *     output and a timeout. It inherits the generator self-verify SAFETY rule
- *     (`unsafeVerifyCommandReason` in src/sdk/scoping.ts — shared, not duplicated): a
- *     command that fails the rule is REPORTED as unsafe and never spawned.
+ *     output and a timeout. NO SHELL: the command is tokenized (whitespace split after
+ *     validation) and spawned as argv directly, so shell expansion (`rm${IFS}x`, `$(…)`,
+ *     backticks) never executes. It inherits the generator self-verify SAFETY rule
+ *     (`unsafeVerifyCommandReason` in src/sdk/scoping.ts — shared, not duplicated) PLUS
+ *     executor-only rejections (shell metacharacters; argv[0]-basename deny): a command
+ *     that fails any rule is REPORTED as unsafe and never spawned.
  *   - `extractVerifyCommands` — pull the commands out of a contract's
  *     "## I will verify by" section (backticked or plain list items), bounded to that
  *     section (stops at the next heading).
@@ -29,21 +33,63 @@ export const EXEC_OUTPUT_CAP = 8_000;
 /** Default per-command timeout. Verify commands are typecheck/test-sized, not builds-of-the-world. */
 export const EXEC_TIMEOUT_MS = 300_000;
 
-/** The real executor. Safety rule first (never spawn an unsafe command), then a shell child
- *  process with cwd=workspace — the disqualifier list guarantees the string is a single,
- *  self-contained command, so `shell: true` cannot chain/redirect. */
+/**
+ * Shell metacharacters / expansion tokens. The executor spawns argv DIRECTLY (no shell), so any
+ * command that NEEDS shell syntax is not a safe contracted verify command (npm test, tsc --noEmit,
+ * vitest run x.ts are all plain invocations) — reject it pre-spawn rather than pass it through
+ * where a shell somewhere might interpret it. `rm${IFS}victim.txt` dies here on the `$`.
+ */
+const SHELL_METACHARS = /[$`;&|><(){}'"~\\\n\r]/;
+
+/**
+ * argv[0] basenames that never qualify as a contracted verify command — mutation, escalation,
+ * network, VCS, package-runner, and shell/eval escapes (`sh -c …` or `node -e …` would reintroduce
+ * the very interpretation dropping `shell: true` removes). BASENAME match, not substring: bare
+ * `rm` and `/bin/rm` both hit; `rmdir-check-tool` does not.
+ */
+const DENY_ARGV0 = new Set([
+  "rm", "rmdir", "mv", "cp", "dd", "chmod", "chown", "ln", "kill", "sudo",
+  "curl", "wget", "git", "npx", "sh", "bash", "zsh", "env", "xargs",
+]);
+
+/**
+ * The executor's full pre-spawn safety rule: the shared self-verify disqualifiers
+ * ({@link unsafeVerifyCommandReason}) PLUS the executor-only rejections that exist because this
+ * runner tokenizes and spawns argv itself — shell metacharacters/expansion tokens, denied argv[0]
+ * basenames, and `node -e/--eval`. Returns the human-readable reason, or null when safe to spawn.
+ */
+export function unsafeExecReason(cmd: string): string | null {
+  if (!cmd) return "empty command";
+  const shared = unsafeVerifyCommandReason(cmd);
+  if (shared) return shared;
+  const meta = cmd.match(SHELL_METACHARS);
+  if (meta) return `contains shell metacharacter "${meta[0]}" — the executor spawns argv directly (no shell), so shell syntax/expansion is never interpreted`;
+  const argv = cmd.split(/\s+/);
+  const base = path.basename(argv[0]!);
+  if (DENY_ARGV0.has(base)) return `argv[0] "${base}" is denied for the harness executor (mutation/network/VCS/shell escape)`;
+  if (base === "node" && argv.some((a) => a === "-e" || a === "--eval")) {
+    return `"node -e/--eval" is an eval escape — denied for the harness executor`;
+  }
+  return null;
+}
+
+/** The real executor. Safety rule first (never spawn an unsafe command — see
+ *  {@link unsafeExecReason}), then a NO-SHELL child process: the validated command is
+ *  whitespace-tokenized and spawned as argv with cwd=workspace, so nothing is ever
+ *  shell-interpreted (no chaining, no redirect, no `${IFS}`/`$(…)` expansion). */
 export async function runVerifyCommand(
   workspace: string,
   command: string,
   opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn } = {}
 ): Promise<ExecOutcome> {
   const cmd = command.trim();
-  const unsafe = cmd ? unsafeVerifyCommandReason(cmd) : "empty command";
+  const unsafe = unsafeExecReason(cmd);
   if (unsafe) return { ran: false, command: cmd, unsafeReason: unsafe };
   const cap = opts.outputCap ?? EXEC_OUTPUT_CAP;
   const spawnFn = opts.spawnFn ?? spawn; // injectable so tests can PROVE an unsafe command never spawns
+  const argv = cmd.split(/\s+/); // safe: SHELL_METACHARS already rejected anything quote/expansion-shaped
   return await new Promise<ExecOutcome>((resolve) => {
-    const child = spawnFn(cmd, { shell: true, cwd: workspace, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnFn(argv[0]!, argv.slice(1), { cwd: workspace, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -58,7 +104,7 @@ export async function runVerifyCommand(
       resolve({ ran: true, command: cmd, exitCode, stdout: stdout.slice(0, cap), stderr: stderr.slice(0, cap), timedOut });
     };
     child.on("error", (e) => {
-      // Spawn-level failure (e.g. no shell) — treat like "command not found".
+      // Spawn-level failure (ENOENT — argv[0] not on PATH) — treat like "command not found".
       clearTimeout(timer);
       resolve({ ran: true, command: cmd, exitCode: 127, stdout: "", stderr: String(e.message ?? e).slice(0, cap), timedOut });
     });
