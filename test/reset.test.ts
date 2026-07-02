@@ -33,6 +33,7 @@ const gateInput = (over: Partial<ResetGateInput> = {}): ResetGateInput => ({
   workspaceDir: "/ws",
   persistedWorkspaceDir: "/ws",
   recordedBranch: "sparra/run",
+  branchPrefix: "sparra/",
   resetWorkspaceEnabled: true,
   autoCommit: true,
   ...over,
@@ -90,8 +91,40 @@ describe("maybeResetWorkspace — safety gates (each refuses with NO reset op)",
   });
 });
 
+describe("maybeResetWorkspace — branch OWNERSHIP gate (git.branchPrefix)", () => {
+  it("recorded branch without the Sparra prefix refuses — even when the live branch MATCHES it", () => {
+    // The corrupted-state.json attack: state records "main", the workspace IS on "main",
+    // every other gate holds. Ownership must still refuse.
+    const { deps, calls } = fakeResetDeps({ currentBranch: () => "main" });
+    const r = maybeResetWorkspace(gateInput({ recordedBranch: "main" }), deps);
+    expect(r.reset).toBe(false);
+    if (!r.reset) expect(r.reason).toMatch(/not Sparra-owned/);
+    expect(calls).toEqual({ restore: 0, clean: 0 });
+  });
+  it("honors the CONFIGURED prefix, not a literal: prefix \"bot/\" accepts bot/x…", () => {
+    const { deps, calls } = fakeResetDeps({ currentBranch: () => "bot/x" });
+    const r = maybeResetWorkspace(gateInput({ recordedBranch: "bot/x", branchPrefix: "bot/" }), deps);
+    expect(r.reset).toBe(true);
+    expect(calls).toEqual({ restore: 1, clean: 1 });
+  });
+  it("…and prefix \"bot/\" refuses sparra/x (no hardcoded \"sparra/\")", () => {
+    const { deps, calls } = fakeResetDeps({ currentBranch: () => "sparra/x" });
+    const r = maybeResetWorkspace(gateInput({ recordedBranch: "sparra/x", branchPrefix: "bot/" }), deps);
+    expect(r.reset).toBe(false);
+    if (!r.reset) expect(r.reason).toMatch(/not Sparra-owned.*bot\//);
+    expect(calls).toEqual({ restore: 0, clean: 0 });
+  });
+  it("empty prefix refuses (ownership is unverifiable)", () => {
+    const { deps, calls } = fakeResetDeps({ currentBranch: () => "main" });
+    const r = maybeResetWorkspace(gateInput({ recordedBranch: "main", branchPrefix: "" }), deps);
+    expect(r.reset).toBe(false);
+    if (!r.reset) expect(r.reason).toMatch(/no Sparra branch prefix/);
+    expect(calls).toEqual({ restore: 0, clean: 0 });
+  });
+});
+
 describe("maybeResetWorkspace — real git in a TEMP repo (never the dev tree)", () => {
-  function tmpRepo(): { ws: string; outside: string; parent: string } {
+  function tmpRepo(branch = "sparra/run"): { ws: string; outside: string; parent: string } {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-reset-"));
     const ws = path.join(parent, "repo");
     const outside = path.join(parent, "outside.txt");
@@ -104,7 +137,7 @@ describe("maybeResetWorkspace — real git in a TEMP repo (never the dev tree)",
     fs.writeFileSync(path.join(ws, ".gitignore"), "scratch.log\n");
     g(ws, ["add", "-A"]);
     g(ws, ["commit", "-q", "-m", "item-start"]);
-    g(ws, ["checkout", "-q", "-b", "sparra/run"]);
+    g(ws, ["checkout", "-q", "-B", branch]); // -B: "main" may already be the init default
     return { ws, outside, parent };
   }
   const dirty = (ws: string) => {
@@ -147,6 +180,21 @@ describe("maybeResetWorkspace — real git in a TEMP repo (never the dev tree)",
     );
     expect(r.reset).toBe(false);
     expect(fs.existsSync(path.join(ws, "untracked.txt"))).toBe(true); // nothing was reset
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
+  it("real ownership refusal: repo ON \"main\" with recordedBranch \"main\" (prefix \"sparra/\") does NOT reset; dirty files untouched", () => {
+    // The round-1 live probe, now closed: a matching-but-user-owned branch must refuse.
+    const { ws, parent } = tmpRepo("main");
+    dirty(ws);
+    const r = maybeResetWorkspace(
+      gateInput({ workspaceDir: ws, persistedWorkspaceDir: ws, recordedBranch: "main" }),
+      realResetDeps()
+    );
+    expect(r.reset).toBe(false);
+    if (!r.reset) expect(r.reason).toMatch(/not Sparra-owned/);
+    expect(fs.readFileSync(path.join(ws, "tracked.txt"), "utf8")).toContain("MUTATED"); // untouched
+    expect(fs.existsSync(path.join(ws, "untracked.txt"))).toBe(true); // not cleaned
     fs.rmSync(parent, { recursive: true, force: true });
   });
 

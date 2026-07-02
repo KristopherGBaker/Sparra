@@ -667,6 +667,7 @@ export async function cmdBuild(
             workspaceDir,
             persistedWorkspaceDir: b.build.workspaceDir,
             recordedBranch: b.build.branch,
+            branchPrefix: ctx.config.git.branchPrefix, // ownership gate: never reset a non-Sparra branch
             resetWorkspaceEnabled: ctx.config.pivot.resetWorkspace,
             autoCommit: ctx.config.git.autoCommit,
           });

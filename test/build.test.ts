@@ -779,6 +779,7 @@ describe("cmdBuild — pivot workspace reset + attempt ledger (Q6)", () => {
       workspaceDir: dir,
       persistedWorkspaceDir: dir,
       recordedBranch: "sparra/test",
+      branchPrefix: "sparra/", // ownership gate threaded from ctx.config.git.branchPrefix
       resetWorkspaceEnabled: true,
       autoCommit: true,
     });

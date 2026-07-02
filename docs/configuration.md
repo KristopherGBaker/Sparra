@@ -62,9 +62,11 @@ pivot:
                               #   scratch survives — clean WITHOUT -x) so the fresh generator can't
                               #   re-anchor on the failed attempt's files. Default true but INERT
                               #   unless an exact Sparra-owned anchor holds at reset time:
-                              #   git.autoCommit on (HEAD == item-start), a recorded Sparra branch,
-                              #   and the workspace's live git branch matching it (no-git, detached
-                              #   HEAD, branch mismatch all refuse). In-place runs never reset.
+                              #   git.autoCommit on (HEAD == item-start), a recorded Sparra branch
+                              #   that carries git.branchPrefix (a recorded "main" refuses — the
+                              #   reset only ever targets Sparra-owned branches), and the
+                              #   workspace's live git branch matching it (no-git, detached HEAD,
+                              #   branch mismatch all refuse). In-place runs never reset.
                               #   The pivot's attempt LEDGER (see build-loop.md) is unaffected.
 
 contract:

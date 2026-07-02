@@ -12,6 +12,9 @@ import { spawnSync } from "node:child_process";
  *   - `pivot.resetWorkspace` (config, default true)
  *   - `git.autoCommit` on — accepted prior items are committed, so HEAD == item-start exactly
  *   - a recorded Sparra branch (`state.build.branch`) — never an in-place run
+ *   - the recorded branch is SPARRA-OWNED — it carries the project's `git.branchPrefix`
+ *     (default "sparra/"). A corrupted/hand-edited state.json recording `main` must never
+ *     aim the destructive reset at a user's branch, even when the live branch "matches"
  *   - the workspace IS the persisted build workspace
  *   - a live git anchor at reset time: the workspace is a git tree with a HEAD, and its
  *     CURRENT branch matches the recorded Sparra branch (no-git, detached-HEAD,
@@ -45,6 +48,12 @@ export interface ResetGateInput {
   persistedWorkspaceDir: string | undefined;
   /** The recorded Sparra branch (`state.build.branch`); unset on in-place runs. */
   recordedBranch: string | undefined;
+  /**
+   * The project's Sparra branch prefix (`git.branchPrefix`, default "sparra/"). Ownership
+   * gate: both the recorded and the live branch must START WITH this — never a hardcoded
+   * literal, so non-default prefixes keep working.
+   */
+  branchPrefix: string;
   /** `pivot.resetWorkspace` (config). */
   resetWorkspaceEnabled: boolean;
   /** `git.autoCommit` (config) — required so HEAD is exactly the item-start state. */
@@ -63,6 +72,16 @@ export function maybeResetWorkspace(input: ResetGateInput, deps: ResetDeps = rea
   if (!input.resetWorkspaceEnabled) return { reset: false, reason: "pivot.resetWorkspace is off" };
   if (!input.autoCommit) return { reset: false, reason: "git.autoCommit is off (HEAD is not the item-start state)" };
   if (!input.recordedBranch) return { reset: false, reason: "no recorded Sparra branch (in-place run)" };
+  // Ownership: the recorded branch must be Sparra's own (git.branchPrefix). A matching live
+  // branch is NOT enough — a corrupted state.json recording "main" would otherwise pass every
+  // other gate and reset the user's branch.
+  if (!input.branchPrefix) return { reset: false, reason: "no Sparra branch prefix configured (cannot verify branch ownership)" };
+  if (!input.recordedBranch.startsWith(input.branchPrefix)) {
+    return {
+      reset: false,
+      reason: `recorded branch "${input.recordedBranch}" is not Sparra-owned (missing branch prefix "${input.branchPrefix}")`,
+    };
+  }
   const ws = input.workspaceDir;
   if (!ws || ws !== input.persistedWorkspaceDir) {
     return { reset: false, reason: "workspace is not the persisted build workspace" };
@@ -73,6 +92,11 @@ export function maybeResetWorkspace(input: ResetGateInput, deps: ResetDeps = rea
   if (!deps.hasHead(ws)) return { reset: false, reason: "workspace has no HEAD" };
   const cur = deps.currentBranch(ws);
   if (cur === null || cur === "HEAD") return { reset: false, reason: "workspace HEAD is detached" };
+  // Belt-and-braces ownership on the LIVE branch too (the equality check below makes this
+  // implied by the recorded-branch gate, but the destructive path states it explicitly).
+  if (!cur.startsWith(input.branchPrefix)) {
+    return { reset: false, reason: `workspace branch "${cur}" is not Sparra-owned (missing branch prefix "${input.branchPrefix}")` };
+  }
   if (cur !== input.recordedBranch) {
     return { reset: false, reason: `workspace branch "${cur}" ≠ recorded Sparra branch "${input.recordedBranch}"` };
   }

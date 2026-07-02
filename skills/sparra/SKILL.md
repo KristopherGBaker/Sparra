@@ -127,7 +127,8 @@ The few that matter most:
   threshold, scoring weights + pass threshold. `pivot.resetWorkspace` (default true) resets
   the workspace to the item-start state on a pivot (revert tracked + clean non-ignored
   untracked, never `-x`) so the fresh generator can't re-anchor on the failed attempt —
-  gated to `git.autoCommit` + a recorded Sparra branch whose live git state matches
+  gated to `git.autoCommit` + a recorded Sparra-OWNED branch (it must carry
+  `git.branchPrefix`; a recorded `main` refuses) whose live git state matches
   (in-place runs never reset); each pivot also appends a per-item attempt ledger that fresh
   restarts see as a "PRIOR ATTEMPTS — do not repeat these approaches" section. `rubric.anchorFunctionality` (default true)
   caps the functionality score at `round(100 × passed/total)` when any assertion failed
