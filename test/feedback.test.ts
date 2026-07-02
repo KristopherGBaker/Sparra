@@ -95,6 +95,40 @@ describe("renderBlockedFeedback — inconclusive framing + evidence when present
   });
 });
 
+describe("calibration nudge — claimMismatches surfaced once via the shared body (Item C)", () => {
+  const cm = { count: 2, ids: [3, 5] };
+
+  it("patch, pivot, and blocked feedback all name the contradicted ids + the verify nudge", () => {
+    const fbs = [
+      renderPatchFeedback(mixedVerdict({ claimMismatches: cm })),
+      renderPivotFeedback(mixedVerdict({ claimMismatches: cm }), { criterion: "craft", threshold: 50, rounds: 3 }),
+      renderBlockedFeedback(mixedVerdict({ claimMismatches: cm, exerciseStatus: "blocked" })),
+    ];
+    for (const fb of fbs) {
+      expect(fb).toContain("#3, #5");
+      expect(fb).toContain("VERIFY those assertions before claiming pass");
+    }
+  });
+
+  it("absent claimMismatches → feedback identical to today (no calibration line)", () => {
+    const fb = renderPatchFeedback(mixedVerdict());
+    expect(fb).not.toContain("Calibration");
+    expect(renderBlockedFeedback(mixedVerdict({ exerciseStatus: "blocked" }))).not.toContain("Calibration");
+  });
+
+  it("count: 0 renders byte-identical to no claimMismatches at all", () => {
+    expect(renderPatchFeedback(mixedVerdict({ claimMismatches: { count: 0, ids: [] } }))).toBe(
+      renderPatchFeedback(mixedVerdict())
+    );
+  });
+
+  it("carries ids + count only — never evaluator text beyond the verdict (redaction wall)", () => {
+    const fb = renderPatchFeedback(mixedVerdict({ claimMismatches: cm }));
+    // The line is built solely from ids; the ids named are NOT echoes of assertion evidence.
+    expect(fb).toContain("you claimed pass on #3, #5");
+  });
+});
+
 // ── Wiring: the build loop threads helper-rendered feedback into the NEXT generator round ──
 
 function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {

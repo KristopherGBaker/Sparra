@@ -12,6 +12,7 @@ import type { Verdict } from "./types.ts";
  * Each failed assertion contributes a `#<id>: <evidence>` line (evidence capped per
  * assertion so one verbose failure can't flood the prompt); passed assertions are
  * omitted — the generator only needs to see why it failed and what was observed.
+ * A round's `claimMismatches` (ids + count only) adds ONE calibration nudge.
  */
 
 /** Per-assertion evidence cap (chars) — roughly a few lines of observed output. */
@@ -36,13 +37,23 @@ function failedAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): str
     });
 }
 
+/** ONE calibration nudge when the round's `claimMismatches` (assertion ids + count only,
+ *  set by the build loop from build/claims.ts) contradicted the verdict; "" otherwise.
+ *  Stated once here — the renderers share it, never restate it. */
+function calibrationLine(verdict: Verdict): string {
+  const cm = verdict.claimMismatches;
+  if (!cm || cm.count <= 0) return "";
+  return `\nCalibration: you claimed pass on ${cm.ids.map((id) => `#${id}`).join(", ")} but the evaluator graded otherwise — VERIFY those assertions before claiming pass.`;
+}
+
 /** Blocking items + per-failed-assertion evidence — the shared body of every feedback kind. */
 function verdictBody(verdict: Verdict, opts: FeedbackOptions = {}): string {
   const failed = failedAssertionLines(verdict, opts);
   const blocking = verdict.blocking.map((x) => `- ${x}`).join("\n");
   return (
     `blocking issues from the evaluator:\n${blocking || verdict.notes || "- (none listed — see failed assertions)"}` +
-    `\nFailed assertions (id: observed evidence):\n${failed.join("\n") || "(see verdict)"}`
+    `\nFailed assertions (id: observed evidence):\n${failed.join("\n") || "(see verdict)"}` +
+    calibrationLine(verdict)
   );
 }
 
@@ -71,6 +82,7 @@ export function renderBlockedFeedback(verdict: Verdict, opts: FeedbackOptions = 
   const why = (verdict.blocking.slice(0, 3).join("; ") || verdict.notes).slice(0, 300);
   return (
     `The exercise could NOT run (blocked): ${why}. This is NOT a behavioral failure — ensure the artifact is exercisable (its tests/build can actually run) so it can be verified.` +
-    (failed.length ? `\nWhat the evaluator observed (id: evidence):\n${failed.join("\n")}` : "")
+    (failed.length ? `\nWhat the evaluator observed (id: evidence):\n${failed.join("\n")}` : "") +
+    calibrationLine(verdict)
   );
 }

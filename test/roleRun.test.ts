@@ -972,3 +972,86 @@ describe("runRole — turn-cap (hitMaxTurns) surfacing (Item A)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// ── Item B: anchored functionality cap — parity with the autonomous evaluate.ts path ──
+
+/** An evaluator reply with a controllable assertion set + functionality score. */
+function anchorEvalJson(assertions: { id: number; pass: boolean }[], functionality: number): string {
+  return (
+    "```json\n" +
+    JSON.stringify({
+      assertions: assertions.map((a) => ({ ...a, evidence: "e" })),
+      scores: { design: 90, originality: 80, craft: 90, functionality },
+      verdict: "pass",
+      blocking: [],
+      notes: "model notes",
+    }) +
+    "\n```"
+  );
+}
+
+const MIXED_ASSERTS = [
+  { id: 1, pass: true },
+  { id: 2, pass: false },
+];
+
+describe("runRole evaluator — anchored functionality cap (parity with evaluate.ts)", () => {
+  it("caps functionality at round(100×passed/total) on a failed assertion, BEFORE the weighted total", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder(anchorEvalJson(MIXED_ASSERTS, 90));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.scores.functionality).toBe(50); // 1/2 passed → cap 50
+    // Weights 0.25/0.15/0.3/0.3: 22.5 + 12 + 27 + 15 — NOT the uncapped 88.5.
+    expect(r.verdict?.weightedTotal).toBe(76.5);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("surfaces the cap in notes: cap value, the model's original score, and passed/total", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder(anchorEvalJson(MIXED_ASSERTS, 90));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.notes).toContain("functionality capped at 50");
+    expect(r.verdict?.notes).toContain("model scored 90");
+    expect(r.verdict?.notes).toContain("1/2 assertions passed");
+    expect(r.verdict?.notes).toContain("model notes"); // the model's own notes survive the append
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("anchorFunctionality OFF → uncapped, no note", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.rubric.anchorFunctionality = false;
+    const ev = recorder(anchorEvalJson(MIXED_ASSERTS, 90));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.scores.functionality).toBe(90);
+    expect(r.verdict?.weightedTotal).toBe(88.5);
+    expect(r.verdict?.notes).not.toContain("capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("all assertions passing → uncapped", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder(anchorEvalJson([{ id: 1, pass: true }, { id: 2, pass: true }], 90));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.scores.functionality).toBe(90);
+    expect(r.verdict?.notes).not.toContain("capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("zero assertions → no cap (and no division blow-up)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder(anchorEvalJson([], 90));
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.scores.functionality).toBe(90);
+    expect(r.verdict?.notes).not.toContain("capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a below-cap functionality score is untouched (the cap only LOWERS)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const ev = recorder(anchorEvalJson(MIXED_ASSERTS, 30)); // cap would be 50; 30 stands
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
+    expect(r.verdict?.scores.functionality).toBe(30);
+    expect(r.verdict?.notes).not.toContain("capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

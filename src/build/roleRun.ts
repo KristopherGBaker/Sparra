@@ -253,6 +253,25 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
     const v = Number(parsed.scores[c] ?? 0);
     parsed.scores[c] = Math.max(0, Math.min(100, isFinite(v) ? v : 0));
   }
+  // Anchor functionality to the assertion outcomes (rubric.anchorFunctionality) — the SAME cap
+  // the autonomous evaluator applies (evaluate.ts), so an interactive eval scores an artifact
+  // identically: with any FAILED assertion, functionality is CEILINGED at
+  // round(100 × passed/total) — a cap only lowers, never raises, so an already-low score
+  // stands. Zero assertions → no cap (nothing to anchor to; also guards the division). Applied
+  // BEFORE computeWeighted so the weighted total reflects it; the interactive Verdict has no
+  // capNote channel, so the note is appended to `notes` below.
+  let capNote = "";
+  if (ctx.config.rubric.anchorFunctionality) {
+    const asserts = Array.isArray(parsed.assertions) ? parsed.assertions : [];
+    const passed = asserts.filter((a) => Boolean((a as { pass?: unknown })?.pass)).length;
+    if (asserts.length > 0 && passed < asserts.length) {
+      const cap = Math.round((100 * passed) / asserts.length);
+      if (parsed.scores.functionality > cap) {
+        capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${asserts.length} assertions passed — rubric.anchorFunctionality)`;
+        parsed.scores.functionality = cap;
+      }
+    }
+  }
   const weighted = computeWeighted(ctx, parsed.scores);
   const finalStatus = decide(parsed.exerciseStatus === "blocked" ? "blocked" : "ran");
   // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), regardless of
@@ -276,7 +295,7 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
     verdict: meets ? "pass" : "fail",
     exerciseStatus: finalStatus,
     blocking: (Array.isArray(parsed.blocking) ? parsed.blocking : []).map((b) => String(b)),
-    notes: String(parsed.notes ?? ""),
+    notes: [String(parsed.notes ?? ""), capNote].filter(Boolean).join(" | "),
   };
 }
 
