@@ -106,6 +106,11 @@ The few that matter most:
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by
   default. Bounded by `maxWaitSec`/`maxRestarts`; checkpoints before sleeping (resume via
   `sparra build`); `sparra status` shows it *paused … resumes ~HH:MM*. See `docs/build-loop.md`.
+- **`build.escalateAfterRounds`** + **`roles.<generator>.escalation`** — opt-in **quality**
+  escalation (vs the *limit*-triggered `fallback`): after N FAILED rounds on an item, its
+  generator switches to the stronger `escalation` role for the remaining rounds — per-item,
+  one-way, new session on the switch, memory note appended. Blocked and limit-retried rounds
+  don't count; the escalated role's own `fallback` still applies on a limit. `0` = off (default).
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
   to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Only single,

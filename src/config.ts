@@ -43,6 +43,16 @@ export interface RoleConfig {
    * on the same, also-limited backend is skipped. Unset → the loop waits out the window.
    */
   fallback?: RoleConfig;
+  /**
+   * QUALITY-triggered escalation for a GENERATOR role (same shape as `fallback`, one level) —
+   * distinct from `fallback`, which is LIMIT-triggered. When `build.escalateAfterRounds` > 0
+   * and an item accumulates that many FAILED rounds, the build loop switches the item's
+   * generator to this (stronger) role for its remaining rounds: per-item (the next item starts
+   * back on the primary), one-way (no de-escalation), new session on the switch. Blocked
+   * (inconclusive) and limit-retried rounds don't count toward the threshold. The escalated
+   * role's own `fallback` chain still applies when its backend hits a provider limit.
+   */
+  escalation?: RoleConfig;
 }
 
 export type ExerciseMechanism = "cli" | "web" | "ios" | "computer-use" | "custom";
@@ -165,6 +175,14 @@ export interface SparraConfig {
     maxRoundsPerItem: number;
     /** Per-SDK-session turn cap; sessions that hit it are resumed. */
     maxTurnsPerSession: number;
+    /**
+     * Quality-escalation threshold: after this many FAILED rounds on one item, switch that
+     * item's generator to its configured `roles.<generator>.escalation` role for the remaining
+     * rounds (see RoleConfig.escalation — quality-triggered, vs the limit-triggered `fallback`).
+     * Blocked rounds and limit-retried rounds don't count. 0 (default) = off; escalation also
+     * requires the generator role to carry an `escalation`.
+     */
+    escalateAfterRounds: number;
     /**
      * Per-item cumulative USD budget guard. The loop "starts closed": when an
      * item's accumulated cost crosses this cap it halts as BUDGET_EXCEEDED and the
@@ -382,6 +400,8 @@ export function defaultConfig(): SparraConfig {
     build: {
       maxRoundsPerItem: 6,
       maxTurnsPerSession: 60,
+      // Quality escalation is off by default; pair a >0 value with roles.generator.escalation.
+      escalateAfterRounds: 0,
       maxBudgetUsdPerItem: 5,
       maxTokensPerItem: 0,
       // Off by default: opting in lets an unattended build sleep for hours waiting out a limit.

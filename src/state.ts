@@ -29,6 +29,11 @@ export interface ItemState {
   /** Backend the stored generatorSessionId belongs to — a session id isn't portable across
    *  providers, so on a fallback to another backend we must start fresh, not resume. */
   generatorBackend?: string;
+  /** FAILED rounds accumulated toward quality escalation (`build.escalateAfterRounds`).
+   *  Blocked (inconclusive) rounds and limit-fallback rounds don't count. */
+  failedRounds?: number;
+  /** This item's generator switched to its `escalation` role (per-item, one-way). */
+  escalated?: boolean;
 
   // ── Interactive (`sparra build --step`) — unused in autonomous builds ──
   /** Round whose verdict a `--step=round` pause is waiting on (so resume applies the

@@ -18,7 +18,7 @@ Two backends ship today:
 The Codex SDK is **optional**: install only if you use it — `npm i @openai/codex-sdk` plus the `codex` CLI on PATH (auth comes from `~/.codex`). Absent, the backend no-ops with a clear message; the rest of the harness runs fine.
 
 ## Per-role backend
-Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, baseUrl?, apiKey?, skills? }` (backend defaults to `claude`; `baseUrl` targets an OpenAI-compatible endpoint (OpenRouter or local) — see [OpenAI-compatible endpoints](#openai-compatible-endpoints-openrouter-lm-studio-ollama)):
+Pick the backend **per role** in `config.yaml`. Each role is `{ backend?, model, effort?, baseUrl?, apiKey?, skills?, sandbox?, fallback?, escalation? }` (backend defaults to `claude`; `baseUrl` targets an OpenAI-compatible endpoint (OpenRouter or local) — see [OpenAI-compatible endpoints](#openai-compatible-endpoints-openrouter-lm-studio-ollama); `fallback` is a limit-triggered backup RoleConfig and `escalation` a quality-triggered stronger one for generator roles — see [configuration](configuration.md#notes-on-a-few-knobs)):
 
 ```yaml
 roles:

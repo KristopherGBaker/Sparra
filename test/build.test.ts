@@ -8,8 +8,10 @@ import { StateStore } from "../src/state.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
-import type { GenerateOutput } from "../src/build/generate.ts";
+import { generateItem, type GenerateOutput } from "../src/build/generate.ts";
 import type { EvalOutput } from "../src/build/evaluate.ts";
+import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
+import type { LimitHit } from "../src/sdk/backend.ts";
 
 function makeVerdict(pass: boolean, scores: Partial<Verdict["scores"]> = {}): Verdict {
   return {
@@ -501,6 +503,230 @@ describe("cmdBuild — flakiness RERUN gate (Q3)", () => {
     await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
     expect(exec.calls).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — quality escalation routing (Q5)", () => {
+  /** Per-SDK-call capture through the REAL generateItem: model/backend/resume as actually sent. */
+  type Call = { role: string; model?: string; backend?: string; resume?: string };
+  const makeRun =
+    (calls: Call[], limitWhen?: (p: RunSessionParams, n: number) => LimitHit | undefined) =>
+    async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push({ role: p.role, model: p.model, backend: p.backend, resume: p.resume });
+      return {
+        ok: true, subtype: "success", resultText: "{}", sessionId: `s${calls.length}`,
+        costUsd: 0, tokens: 10, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+        limitHit: limitWhen?.(p, calls.length),
+      };
+    };
+  /** BuildDeps.generateItem that runs the real generator with an injected runSessionFn. */
+  const realGen = (
+    calls: Call[],
+    limitWhen?: (p: RunSessionParams, n: number) => LimitHit | undefined
+  ): BuildDeps["generateItem"] => {
+    const run = makeRun(calls, limitWhen);
+    return (args) => generateItem({ ...args, runSessionFn: run });
+  };
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  const RATE: LimitHit = { kind: "rate", raw: "429" };
+
+  it("defaults OFF: defaultConfig sets build.escalateAfterRounds to 0", () => {
+    expect(defaultConfig().build.escalateAfterRounds).toBe(0);
+  });
+
+  it("escalates after N FAILED rounds: rounds 1-2 on the primary, 3+ on the escalation role; memory notes the switch", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 2 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(false), // fails every round
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "strong-model", "strong-model"]);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/NOTE: escalated generator to strong-model after 2 failed round/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("contrast: a pass before the threshold means the escalation model is never used", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 2 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    let evals = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(++evals >= 2), // fail round 1, pass round 2
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model"]); // no strong-model, ever
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(fs.readFileSync(ctx.paths.memory, "utf8")).not.toMatch(/escalated/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("blocked rounds don't count: fail, BLOCKED, fail → escalation fires after the second FAIL (round 4), not round 3", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 2 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    let evals = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () =>
+        ++evals === 2
+          ? evalOut(false, { verdict: { ...makeVerdict(false), exerciseStatus: "blocked" } }) // round 2: inconclusive
+          : evalOut(false),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    // Round 3 is still on the primary (the blocked round 2 did NOT advance the counter);
+    // round 3's FAIL is the second counted failure, so round 4 escalates.
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "mid-model", "strong-model"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("per-item reset: after item-1 escalates, item-2's first generate is back on the primary", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, escalateAfterRounds: 1 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => items, // item-001 + item-002
+      generateItem: realGen(calls),
+      evaluateItem: async (args) => evalOut(args.item.id === "item-002"), // item-001 always fails
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const byItem = (id: string) => calls.filter((c) => c.role === `generator-${id}`).map((c) => c.model);
+    expect(byItem("item-001")).toEqual(["mid-model", "strong-model"]); // escalated
+    expect(byItem("item-002")).toEqual(["mid-model"]); // next item starts on the primary
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no-resume-on-switch: pre-switch rounds resume; the first escalated call starts a NEW session; later escalated rounds resume it", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 2 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(false),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.resume)).toEqual([
+      undefined, // round 1: first session
+      "s1", // round 2: pre-switch patch round resumes as today
+      undefined, // round 3: escalation switch → NEW session (no resume)
+      "s3", // round 4: the escalated session resumes normally
+    ]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("escalateAfterRounds: 0 never switches even with an escalation configured (existing routing/resume unchanged)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3, escalateAfterRounds: 0 });
+    ctx.config.roles.generator = { model: "mid-model", escalation: { model: "strong-model" } };
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(false),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "mid-model"]);
+    expect(calls.map((c) => c.resume)).toEqual([undefined, "s1", "s2"]); // plain resume chain, no reset
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a missing role.escalation never switches even with a threshold set", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3, escalateAfterRounds: 1 });
+    ctx.config.roles.generator = { model: "mid-model" }; // no escalation configured
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(false),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "mid-model"]);
+    expect(calls.map((c) => c.resume)).toEqual([undefined, "s1", "s2"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("generatorLocal items escalate via THEIR role's escalation", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, escalateAfterRounds: 1 });
+    ctx.config.roles.generatorLocal = { backend: "codex", model: "local-qwen", escalation: { model: "strong-model" } };
+    const local: WorkItem[] = [{ id: "item-001", title: "t", summary: "", dependsOn: [], rationale: "", gen: "local" }];
+    const calls: Call[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => local,
+      generateItem: realGen(calls),
+      evaluateItem: async () => evalOut(false),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(calls.map((c) => c.model)).toEqual(["local-qwen", "strong-model"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("limit interplay: a limitHit on the ESCALATED role still routes through its own fallback chain", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 6, escalateAfterRounds: 1 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 20 };
+    ctx.config.roles.generator = {
+      backend: "codex", model: "mid-model",
+      escalation: { backend: "codex", model: "strong-model", fallback: { backend: "claude", model: "opus" } },
+    };
+    const calls: Call[] = [];
+    let evals = 0;
+    let waited = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: realGen(calls, (p) => (p.model === "strong-model" ? RATE : undefined)),
+      evaluateItem: async () => evalOut(++evals >= 2), // round 1 fails (→ escalate), then passes
+      waitForLimit: async () => {
+        waited++;
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    // mid fails → escalate to strong; strong hits a limit → the ESCALATED role's fallback (opus).
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "strong-model", "opus"]);
+    expect(waited).toBe(0); // fell back, never slept
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("limit interplay: a limit-triggered fallback round does NOT advance the escalation counter", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 2 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 20 };
+    ctx.config.roles.generator = {
+      backend: "codex", model: "mid-model",
+      fallback: { backend: "claude", model: "fb-model" },
+      escalation: { model: "strong-model" },
+    };
+    const calls: Call[] = [];
+    let midCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      // The SECOND primary call hits a limit (the first fails normally → counter = 1).
+      generateItem: realGen(calls, (p) => (p.model === "mid-model" && ++midCalls === 2 ? RATE : undefined)),
+      evaluateItem: async () => evalOut(false), // every evaluated round fails
+      waitForLimit: async () => {},
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    // Rounds 2-4 ran on the limit-fallback (fb-model) and their fails did NOT count, so the
+    // threshold (2) is never crossed: strong-model never appears.
+    expect(calls.map((c) => c.model)).toEqual(["mid-model", "mid-model", "fb-model", "fb-model", "fb-model"]);
+    expect(ctx.store.data.build.items["item-001"]!.failedRounds).toBe(1); // only round 1's primary fail counted
+    expect(fs.readFileSync(ctx.paths.memory, "utf8")).not.toMatch(/escalated/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

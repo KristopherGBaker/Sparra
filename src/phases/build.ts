@@ -611,11 +611,39 @@ export async function cmdBuild(
         break;
       }
       st.round += 1;
+      // Quality escalation (per-item, one-way): once the item has accumulated
+      // `build.escalateAfterRounds` FAILED rounds, switch its generator to the role's configured
+      // `escalation` for the remaining rounds. Quality-triggered — distinct from the
+      // limit-triggered `fallback` below, which applies unchanged to the escalated role too.
+      const escalateAfter = ctx.config.build.escalateAfterRounds;
+      if (!st.escalated && genRole.escalation && escalateAfter > 0 && (st.failedRounds ?? 0) >= escalateAfter) {
+        st.escalated = true;
+        // New session for the new role (round feedback carries the context) — same rule as a
+        // backend switch: never resume the pre-escalation session into the escalated model.
+        st.generatorSessionId = undefined;
+        st.generatorBackend = undefined;
+        info(`${item.id}: escalating generator to ${genRole.escalation.model} after ${st.failedRounds} failed round(s).`);
+        await d.appendLearning(ctx.paths, {
+          item: item.id,
+          kind: "note",
+          detail: `escalated generator to ${genRole.escalation.model} after ${st.failedRounds} failed round(s) (quality escalation).`,
+          at: stamp(),
+        });
+        await ctx.store.save();
+      }
+      const activeGenRole = st.escalated && genRole.escalation ? genRole.escalation : genRole;
       // Pick the generator role, swapping to a fallback model when the primary's backend is in
-      // a limit window. genRole is the (possibly local) primary; pickRole applies the fallback chain.
-      const genPick = pickRole(genRole, limitedUntil, Date.now());
+      // a limit window. activeGenRole is the (possibly local, possibly escalated) primary;
+      // pickRole applies that role's own fallback chain.
+      const genPick = pickRole(activeGenRole, limitedUntil, Date.now());
       const genKey = backendKey(genPick.role);
-      if (genPick.usedFallback) info(`${item.id}: ${backendKey(genRole)} limited — generating with fallback ${genPick.role.model}.`);
+      if (genPick.usedFallback) info(`${item.id}: ${backendKey(activeGenRole)} limited — generating with fallback ${genPick.role.model}.`);
+      // A FAILED round advances the escalation counter — but not when this round's generation ran
+      // on a limit-triggered fallback (a limit isn't a quality signal about the primary), and
+      // never for blocked rounds (which take a different branch below).
+      const noteFailedRound = () => {
+        if (!genPick.usedFallback) st.failedRounds = (st.failedRounds ?? 0) + 1;
+      };
       const gen = await d.generateItem({
         ctx,
         item,
@@ -741,6 +769,7 @@ export async function cmdBuild(
             (r) => `- \`${r.command}\` is ${describe(r)}${r.exitCodes.length ? ` [exits: ${r.exitCodes.join(", ")}]` : ""}\n${r.detail}`
           );
           warn(`${item.id}: pass demoted by the rerun gate — ${rerunBad.length} verify command(s) did not stay green over ${reruns} rerun(s).`);
+          noteFailedRound();
           await d.appendLearning(ctx.paths, {
             item: item.id,
             kind: "failed",
@@ -798,6 +827,7 @@ export async function cmdBuild(
 
         // Behaviorally passing but code review blocked → fail the round with review feedback.
         warn(`${item.id}: exercise passed but code review found ${review.blocking.length} blocking issue(s) in round ${st.round}.`);
+        noteFailedRound();
         await d.appendLearning(ctx.paths, {
           item: item.id,
           kind: "failed",
@@ -837,6 +867,7 @@ export async function cmdBuild(
         continue;
       }
 
+      noteFailedRound();
       const decision = updateStreaksAndDecide(st, ev.verdict, ctx.config);
       st.criterionFailStreak = decision.streaks;
       await ctx.store.save();
