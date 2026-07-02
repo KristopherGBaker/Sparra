@@ -143,14 +143,19 @@ function topLevelJsonObjects(text: string): unknown[] {
  */
 export function parseMetrics(stdout: string, defaultGoal: Goal): Metrics | null {
   const objs = topLevelJsonObjects(stdout);
-  let raw: Record<string, unknown> | null = null;
+  // The LAST top-level object carrying a `metrics` FIELD is authoritative — a later run's malformed
+  // `metrics` (e.g. `[]` / non-object) must be treated as a parse failure, NOT silently fall back to
+  // an earlier good object (that would mask a broken measurement run with a stale-looking pass).
+  let last: unknown;
+  let found = false;
   for (const o of objs) {
     if (o && typeof o === "object" && "metrics" in o) {
-      const m = (o as { metrics: unknown }).metrics;
-      if (m && typeof m === "object" && !Array.isArray(m)) raw = m as Record<string, unknown>; // LAST wins
+      last = (o as { metrics: unknown }).metrics;
+      found = true;
     }
   }
-  if (!raw) return null;
+  if (!found || !last || typeof last !== "object" || Array.isArray(last)) return null;
+  const raw = last as Record<string, unknown>;
   const metrics: Metrics = {};
   for (const [name, v] of Object.entries(raw)) {
     const m = coerceMetric(v, defaultGoal);

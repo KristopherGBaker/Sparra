@@ -85,11 +85,18 @@ export async function cmdMeasure(ctx: Ctx, opts: MeasureCmdOptions = {}, deps: M
     warn(`measure flagged ${result.regressions.length} regression(s): ${result.regressions.map((d) => d.name).join(", ")}`);
   else ok(`measure: no regressions across ${Object.keys(result.metrics).length} metric(s)${result.baselineUpdated ? "; baseline updated" : ""}.`);
 
-  for (const d of result.deltas) {
-    const change = d.isNew ? "new" : d.pct === undefined ? "—" : `${d.pct >= 0 ? "+" : ""}${Math.round(d.pct * 100)}%`;
-    detail(`${d.regressed ? "REGRESSED " : d.isNew ? "new       " : "ok        "}${d.name}: ${d.current}${d.unit ? ` ${d.unit}` : ""} (${change}, goal ${d.goal})`);
+  // Print the RENDERED report body (the markdown table runMeasure wrote), not just a per-metric
+  // digest — `sparra measure` surfaces the same artifact the build loop records.
+  if (result.reportPath) {
+    const body = (await measureDeps.readFile(result.reportPath)) ?? "";
+    if (body.trim()) process.stdout.write("\n" + body.trimEnd() + "\n\n");
+    info(`report: ${path.relative(ctx.root, result.reportPath)}`);
+  } else {
+    for (const d of result.deltas) {
+      const change = d.isNew ? "new" : d.pct === undefined ? "—" : `${d.pct >= 0 ? "+" : ""}${Math.round(d.pct * 100)}%`;
+      detail(`${d.regressed ? "REGRESSED " : d.isNew ? "new       " : "ok        "}${d.name}: ${d.current}${d.unit ? ` ${d.unit}` : ""} (${change}, goal ${d.goal})`);
+    }
   }
-  if (result.reportPath) info(`report: ${path.relative(ctx.root, result.reportPath)}`);
 
   if (opts.out && result.reportPath) {
     // Re-emit the rendered artifact to the requested path (read from what runMeasure wrote).

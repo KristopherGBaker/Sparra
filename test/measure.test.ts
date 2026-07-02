@@ -50,6 +50,16 @@ describe("parseMetrics", () => {
     expect(parseMetrics(`{"metrics": {"broken": {"value": "NaN"}}}`, "min")).toBeNull(); // unusable entry dropped
     expect(parseMetrics("{ not valid json", "min")).toBeNull();
   });
+
+  it("a LATER malformed metrics object does NOT fall back to an earlier good one (last-with-field wins)", () => {
+    // A good run followed by a broken run's `metrics: []` — the LAST object carrying a `metrics`
+    // field is authoritative, so this is a parse failure, not a stale pass on the earlier metrics.
+    const stdout = [`{"metrics": {"p50_ms": 12.3}}`, "rerun failed:", `{"metrics": []}`].join("\n");
+    expect(parseMetrics(stdout, "min")).toBeNull();
+    // A trailing NON-metrics object, by contrast, leaves the last good metrics object authoritative.
+    const trailing = [`{"metrics": {"p50_ms": 12.3}}`, `{"note": "done"}`].join("\n");
+    expect(parseMetrics(trailing, "min")).toEqual({ p50_ms: { value: 12.3, goal: "min" } });
+  });
 });
 
 // ── computeDeltas ─────────────────────────────────────────────────────────────
