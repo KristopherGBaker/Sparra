@@ -252,7 +252,10 @@ export interface SparraConfig {
      * Codex confines these to its workspace-write sandbox
      * (no network); Claude has no OS sandbox, so for Claude these run with the worktree + "never
      * commit to main" + the disqualifier list as the only guarantees (like the evaluator's
-     * exercise). Set to `[]` to disable generator self-verification.
+     * exercise). Set to `[]` to disable generator self-verification. These prefixes are ALSO
+     * the explicit opt-in past the harness executor's argv[0] allowlist (contract verify-probe
+     * + flakiness rerun gate, src/build/exec.ts): unknown tools are rejected by default —
+     * declaring a command here lets the harness run it.
      */
     verifyCommands: string[];
     /**

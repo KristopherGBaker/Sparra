@@ -49,7 +49,7 @@ describe("runVerifyCommand — safety rules (shared with the self-verify allow-p
     expect(spawnFn).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a BARE `rm` (argv[0] basename deny, not substring) without spawning", async () => {
+  it("rejects a BARE `rm` (argv[0] basename allowlist, not substring) without spawning", async () => {
     const spawnFn = spySpawn();
     for (const cmd of ["rm", "/bin/rm", "git", "npx vitest run x.ts", "sh -c true", "bash", "sudo ls", "node -e 1+1", "node --eval 1+1"]) {
       const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
@@ -57,6 +57,57 @@ describe("runVerifyCommand — safety rules (shared with the self-verify allow-p
       if (!o.ran) expect(o.unsafeReason).toBeTruthy();
     }
     expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWLIST posture: mutating commands with clean argv0s are unsafe pre-spawn and the fs is untouched (real fs)", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-exec-allow-"));
+    const victim = path.join(ws, "victim.txt");
+    fs.writeFileSync(victim, "still here");
+    const spawnFn = spySpawn();
+    const find = await runVerifyCommand(ws, "find victim.txt -delete", { spawnFn });
+    expect(find.ran).toBe(false); // find is not a build/test runner — never spawned…
+    expect(fs.existsSync(victim)).toBe(true); // …and the victim survives
+    const touch = await runVerifyCommand(ws, "touch created.txt", { spawnFn });
+    expect(touch.ran).toBe(false);
+    expect(fs.existsSync(path.join(ws, "created.txt"))).toBe(false); // no file created
+    const perl = await runVerifyCommand(ws, "perl -e unlink victim.txt", { spawnFn });
+    expect(perl.ran).toBe(false);
+    expect(fs.existsSync(victim)).toBe(true);
+    expect(spawnFn).not.toHaveBeenCalled(); // the spy proves NONE of them ever spawned
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("rejects interpreter eval escapes and unknown tools pre-spawn; `python -m <module>` passes the gate", async () => {
+    const spawnFn = spySpawn();
+    for (const cmd of ["python -c pass", "python3 -c pass", "python script.py", "tsx -e 1", "bun --eval 1", "mycooltool test", "awk -f x.awk", "sed -n 1p file", "ruby x.rb", "npm exec rm -rf x", "pnpm dlx cowsay hi"]) {
+      const o = await runVerifyCommand(os.tmpdir(), cmd, { spawnFn });
+      expect(o.ran, cmd).toBe(false);
+      if (!o.ran) expect(o.unsafeReason).toBeTruthy();
+    }
+    expect(spawnFn).not.toHaveBeenCalled();
+    // python ONLY with -m <module> as the first args — allowed and spawned tokenized (fake spawn).
+    const fake = fakeSpawn();
+    const py = await runVerifyCommand("/ws", "python -m pytest", { spawnFn: fake });
+    expect(py.ran && py.exitCode === 0).toBe(true);
+    expect(fake.mock.calls[0]![0]).toBe("python");
+    expect(fake.mock.calls[0]![1]).toEqual(["-m", "pytest"]);
+  });
+
+  it("build.verifyCommands opt-in: the SAME unknown tool becomes allowed when the user declared it (prefix semantics)", async () => {
+    const fake = fakeSpawn();
+    const denied = await runVerifyCommand("/ws", "mycooltool test", { spawnFn: fake });
+    expect(denied.ran).toBe(false); // unknown tool → unsafe by default…
+    const optedIn = await runVerifyCommand("/ws", "mycooltool test --fast", { spawnFn: fake, allowPrefixes: ["mycooltool test"] });
+    expect(optedIn.ran && optedIn.exitCode === 0).toBe(true); // …explicit opt-in allows it
+    expect(fake.mock.calls).toHaveLength(1);
+    expect(fake.mock.calls[0]![0]).toBe("mycooltool");
+    // Prefix match is word-boundary shaped: "mycooltool testx" does NOT match "mycooltool test".
+    const nearMiss = await runVerifyCommand("/ws", "mycooltool testx", { spawnFn: fake, allowPrefixes: ["mycooltool test"] });
+    expect(nearMiss.ran).toBe(false);
+    // The opt-in never bypasses the shared/metachar rules — a declared prefix still can't chain.
+    const chained = await runVerifyCommand("/ws", "mycooltool test && rm -rf x", { spawnFn: fake, allowPrefixes: ["mycooltool test"] });
+    expect(chained.ran).toBe(false);
+    expect(fake.mock.calls).toHaveLength(1); // still only the opted-in spawn
   });
 
   it("rejects shell-expansion forms pre-spawn: rm${IFS}victim.txt never runs and the file survives (real fs)", async () => {
@@ -118,9 +169,12 @@ describe("runVerifyCommand — safety rules (shared with the self-verify allow-p
   it("runs with cwd=workspace: a relative path resolves against the workspace (7b)", async () => {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-exec-ws-"));
     fs.writeFileSync(path.join(ws, "only-here.txt"), "x");
-    const inWs = await runVerifyCommand(ws, "ls only-here.txt");
+    // `ls` is not a build/test runner — opt it in via allowPrefixes (build.verifyCommands),
+    // which also exercises the escape hatch against a REAL spawn.
+    const allowPrefixes = ["ls"];
+    const inWs = await runVerifyCommand(ws, "ls only-here.txt", { allowPrefixes });
     expect(inWs.ran && inWs.exitCode === 0).toBe(true);
-    const elsewhere = await runVerifyCommand(os.tmpdir(), "ls only-here.txt");
+    const elsewhere = await runVerifyCommand(os.tmpdir(), "ls only-here.txt", { allowPrefixes });
     expect(elsewhere.ran && elsewhere.exitCode !== 0).toBe(true);
     fs.rmSync(ws, { recursive: true, force: true });
   });

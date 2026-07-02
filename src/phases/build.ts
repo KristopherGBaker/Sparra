@@ -796,9 +796,15 @@ export async function cmdBuild(
         const reruns = ctx.config.build.flakinessReruns;
         const rerunBad =
           reruns > 0
-            ? (await rerunVerifyCommands(workspaceDir, extractVerifyCommands(contract.text), reruns, d.execVerifyCommand)).filter(
-                (r) => r.status !== "ok"
-              )
+            ? (
+                await rerunVerifyCommands(
+                  workspaceDir,
+                  extractVerifyCommands(contract.text),
+                  reruns,
+                  d.execVerifyCommand,
+                  ctx.config.build.verifyCommands // explicit opt-in past the executor's argv[0] allowlist
+                )
+              ).filter((r) => r.status !== "ok")
             : [];
         if (rerunBad.length) {
           const holdout = await readHoldout(ctx);

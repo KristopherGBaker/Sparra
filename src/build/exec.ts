@@ -9,8 +9,9 @@ import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
  *     validation) and spawned as argv directly, so shell expansion (`rm${IFS}x`, `$(…)`,
  *     backticks) never executes. It inherits the generator self-verify SAFETY rule
  *     (`unsafeVerifyCommandReason` in src/sdk/scoping.ts — shared, not duplicated) PLUS
- *     executor-only rejections (shell metacharacters; argv[0]-basename deny): a command
- *     that fails any rule is REPORTED as unsafe and never spawned.
+ *     executor-only rejections (shell metacharacters; argv[0] ALLOWLIST — unknown tools
+ *     are rejected by default): a command that fails any rule is REPORTED as unsafe and
+ *     never spawned.
  *   - `extractVerifyCommands` — pull the commands out of a contract's
  *     "## I will verify by" section (backticked or plain list items), bounded to that
  *     section (stops at the next heading).
@@ -25,8 +26,14 @@ export type ExecOutcome =
   | { ran: false; command: string; unsafeReason: string }
   | { ran: true; command: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean };
 
-/** The injectable executor seam shared by the probe and the rerun gate. */
-export type CommandExecutor = (workspace: string, command: string) => Promise<ExecOutcome>;
+/** The injectable executor seam shared by the probe and the rerun gate. `opts.allowPrefixes`
+ *  carries the project's `build.verifyCommands` — the explicit opt-in past the argv[0]
+ *  allowlist (fakes in tests may ignore it). */
+export type CommandExecutor = (
+  workspace: string,
+  command: string,
+  opts?: { allowPrefixes?: string[] }
+) => Promise<ExecOutcome>;
 
 /** Per-stream output cap (chars) — enough to diagnose, small enough for a prompt. */
 export const EXEC_OUTPUT_CAP = 8_000;
@@ -42,33 +49,71 @@ export const EXEC_TIMEOUT_MS = 300_000;
 const SHELL_METACHARS = /[$`;&|><(){}'"~\\\n\r]/;
 
 /**
- * argv[0] basenames that never qualify as a contracted verify command — mutation, escalation,
- * network, VCS, package-runner, and shell/eval escapes (`sh -c …` or `node -e …` would reintroduce
- * the very interpretation dropping `shell: true` removes). BASENAME match, not substring: bare
- * `rm` and `/bin/rm` both hit; `rmdir-check-tool` does not.
+ * argv[0] basenames ALLOWED by default — known build/test runners only. A deny list here is
+ * unwinnable: `find x -delete`, `perl -e unlink`, `touch pwned` all mutate the tree with clean
+ * argv0s, and there is always one more tool. So the posture is ALLOWLIST-BY-DEFAULT: anything
+ * not on this list (find, touch, perl, ruby, awk, sed, ANY unknown tool) is unsafe pre-spawn.
+ * BASENAME match, not substring: `./node_modules/.bin/vitest` hits `vitest`; `rm` never matches.
+ *
+ * Escape hatch: a command that string-prefix-matches an entry in the project's
+ * `build.verifyCommands` is also allowed — the user explicitly declared it a verify command
+ * (same prefix semantics as the self-verify guard), so exotic toolchains stay workable
+ * without weakening the default.
+ *
+ * Allowed runners may legitimately write scratch (`npm test` creates .vite-temp, cargo writes
+ * target/) — containment for THAT is the worktree/scratch boundary. What this allowlist
+ * prevents is direct file-manipulation/interpreter-eval commands as the contracted verify
+ * command itself.
  */
-const DENY_ARGV0 = new Set([
-  "rm", "rmdir", "mv", "cp", "dd", "chmod", "chown", "ln", "kill", "sudo",
-  "curl", "wget", "git", "npx", "sh", "bash", "zsh", "env", "xargs",
+const ALLOW_ARGV0 = new Set([
+  "npm", "yarn", "pnpm", "bun", "node", "tsc", "tsx", "vitest", "jest", "mocha", "pytest",
+  "python", "python3", "go", "cargo", "rustc", "swift", "swiftc", "xcodebuild", "xcrun",
+  "make", "cmake", "gradle", "gradlew", "mvn", "dotnet", "echo", "true", "false",
 ]);
+
+/** Interpreters on the allowlist whose inline-code flags (`-e/--eval`) are eval escapes —
+ *  `node -e "…"` would reintroduce the very interpretation dropping `shell: true` removes. */
+const INTERPRETER_ARGV0 = new Set(["node", "bun", "tsx", "python", "python3"]);
+
+/** Package-runner subcommands that resolve-and-execute ARBITRARY packages (npx-shaped) —
+ *  `npm exec rm …` would tunnel an unknown tool through an allowed argv[0]. */
+const RUNNER_ESCAPE_SUBCOMMANDS = new Set(["exec", "x", "dlx", "create", "init"]);
 
 /**
  * The executor's full pre-spawn safety rule: the shared self-verify disqualifiers
  * ({@link unsafeVerifyCommandReason}) PLUS the executor-only rejections that exist because this
- * runner tokenizes and spawns argv itself — shell metacharacters/expansion tokens, denied argv[0]
- * basenames, and `node -e/--eval`. Returns the human-readable reason, or null when safe to spawn.
+ * runner tokenizes and spawns argv itself — shell metacharacters/expansion tokens, then
+ * ALLOWLIST-BY-DEFAULT on the argv[0] basename ({@link ALLOW_ARGV0}) with interpreter-eval and
+ * package-runner escapes closed. `allowPrefixes` (the project's `build.verifyCommands`) is the
+ * explicit opt-in past the allowlist — prefix match, applied AFTER the shared + metachar rules
+ * so an opted-in prefix still can't chain/redirect/expand. Returns the human-readable reason,
+ * or null when safe to spawn.
  */
-export function unsafeExecReason(cmd: string): string | null {
+export function unsafeExecReason(cmd: string, allowPrefixes: string[] = []): string | null {
   if (!cmd) return "empty command";
   const shared = unsafeVerifyCommandReason(cmd);
   if (shared) return shared;
   const meta = cmd.match(SHELL_METACHARS);
   if (meta) return `contains shell metacharacter "${meta[0]}" — the executor spawns argv directly (no shell), so shell syntax/expansion is never interpreted`;
+  // Explicit opt-in: the user declared this exact command shape in build.verifyCommands
+  // (same prefix semantics as the self-verify guard) — allowed past the argv[0] allowlist.
+  if (allowPrefixes.some((p) => p && (cmd === p || cmd.startsWith(p + " ")))) return null;
   const argv = cmd.split(/\s+/);
   const base = path.basename(argv[0]!);
-  if (DENY_ARGV0.has(base)) return `argv[0] "${base}" is denied for the harness executor (mutation/network/VCS/shell escape)`;
-  if (base === "node" && argv.some((a) => a === "-e" || a === "--eval")) {
-    return `"node -e/--eval" is an eval escape — denied for the harness executor`;
+  if (!ALLOW_ARGV0.has(base)) {
+    return `argv[0] "${base}" is not a known build/test runner — the harness executor rejects unknown tools by default (declare the command in build.verifyCommands to opt in)`;
+  }
+  if (INTERPRETER_ARGV0.has(base)) {
+    const evalFlag = argv.find(
+      (a) => a === "-e" || a === "--eval" || ((base === "python" || base === "python3") && a === "-c")
+    );
+    if (evalFlag) return `"${base} ${evalFlag}" is an interpreter eval escape — denied for the harness executor`;
+  }
+  if ((base === "python" || base === "python3") && (argv[1] !== "-m" || !argv[2])) {
+    return `"${base}" is only allowed as "${base} -m <module>" (e.g. python -m pytest) for the harness executor`;
+  }
+  if ((base === "npm" || base === "yarn" || base === "pnpm" || base === "bun") && RUNNER_ESCAPE_SUBCOMMANDS.has(argv[1] ?? "")) {
+    return `"${base} ${argv[1]}" resolves and runs arbitrary packages — denied for the harness executor`;
   }
   return null;
 }
@@ -80,10 +125,10 @@ export function unsafeExecReason(cmd: string): string | null {
 export async function runVerifyCommand(
   workspace: string,
   command: string,
-  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn } = {}
+  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn; allowPrefixes?: string[] } = {}
 ): Promise<ExecOutcome> {
   const cmd = command.trim();
-  const unsafe = unsafeExecReason(cmd);
+  const unsafe = unsafeExecReason(cmd, opts.allowPrefixes ?? []);
   if (unsafe) return { ran: false, command: cmd, unsafeReason: unsafe };
   const cap = opts.outputCap ?? EXEC_OUTPUT_CAP;
   const spawnFn = opts.spawnFn ?? spawn; // injectable so tests can PROVE an unsafe command never spawns
@@ -197,7 +242,9 @@ export async function rerunVerifyCommands(
   workspace: string,
   commands: string[],
   reruns: number,
-  exec: CommandExecutor
+  exec: CommandExecutor,
+  /** Project `build.verifyCommands` — the explicit opt-in past the executor's argv[0] allowlist. */
+  allowPrefixes: string[] = []
 ): Promise<RerunResult[]> {
   const results: RerunResult[] = [];
   for (const command of commands) {
@@ -205,7 +252,7 @@ export async function rerunVerifyCommands(
     let detail = "";
     let unsafe = false;
     for (let i = 0; i < reruns; i++) {
-      const o = await exec(workspace, command);
+      const o = await exec(workspace, command, { allowPrefixes });
       if (!o.ran) {
         unsafe = true;
         detail = renderExecOutcome(o);

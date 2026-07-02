@@ -75,7 +75,9 @@ contract:
                               #   (no model, safe executor, cwd=workspace); a USAGE error (command not
                               #   found / unknown flag / usage text) or an UNSAFE command (safety-rule-
                               #   rejected — the harness can never run it) bounces the contract back
-                              #   into negotiation with the probe output; false skips the probe
+                              #   into negotiation with the probe output; false skips the probe.
+                              #   The executor is allowlist-by-default: unknown tools are rejected —
+                              #   declare them in build.verifyCommands to opt in
 
 build:
   maxRoundsPerItem: 6
@@ -94,7 +96,9 @@ build:
                               # (per-role override: roles.<role>.skills)
   verifyCommands:             # commands the GENERATOR may self-run (typecheck/test/build) to stop
     [npm test, tsc, ...]      #   writing blind — auto-approved on a worktree boundary, or in-place via
-                              #   run_role `allowVerify` / `--verify`; [] disables
+                              #   run_role `allowVerify` / `--verify`; [] disables. Also the explicit
+                              #   opt-in for the harness executor's argv[0] allowlist (probe/rerun gate):
+                              #   unknown tools are rejected by default; a prefix match here allows them
   flakinessReruns: 2          # after a PASSING verdict the harness re-runs the contract's verify
                               #   commands this many times; ANY non-ok result demotes the pass to a
                               #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped,

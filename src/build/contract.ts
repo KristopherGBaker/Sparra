@@ -140,7 +140,8 @@ export async function negotiateContract(
       const brokenCommands: string[] = [];
       if (ctx.config.contract.probeVerifyCommands) {
         for (const cmd of extractVerifyCommands(proposal)) {
-          const o = await exec(workspaceDir ?? ctx.root, cmd);
+          // build.verifyCommands = the explicit opt-in past the executor's argv[0] allowlist.
+          const o = await exec(workspaceDir ?? ctx.root, cmd, { allowPrefixes: ctx.config.build.verifyCommands });
           if (!o.ran || classifyExec(o) === "usage") brokenCommands.push(renderExecOutcome(o));
         }
       }
