@@ -24,6 +24,7 @@ import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from 
 import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
+import { measureAcceptedItem, renderMeasureLearning } from "../build/measure.ts";
 import { diffClaims, renderClaimGap } from "../build/claims.ts";
 import { assertNoHoldoutLeak, readHoldout, redactHoldout } from "../build/holdout.ts";
 import { extractVerifyCommands, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
@@ -65,6 +66,8 @@ export interface BuildDeps {
   maybeResetWorkspace: typeof maybeResetWorkspace;
   /** No-model safe executor for the contract verify-probe + flakiness rerun gate. */
   execVerifyCommand: CommandExecutor;
+  /** Config-gated post-accept measure step (injectable so build.test.ts can fake the whole run). */
+  measureAccepted: typeof measureAcceptedItem;
 }
 
 const defaultDeps: BuildDeps = {
@@ -84,6 +87,7 @@ const defaultDeps: BuildDeps = {
   provisionWorkspaceDeps,
   maybeResetWorkspace,
   execVerifyCommand: runVerifyCommand,
+  measureAccepted: measureAcceptedItem,
 };
 
 /** Provider account a role runs against — the granularity a rate/usage limit applies to.
@@ -327,6 +331,34 @@ export async function cmdBuild(
     if (!acc.reconciled) {
       await d.reconcilePlan(ctx, item, deviations, traceDir, nextSeq());
       acc.reconciled = true;
+      await ctx.store.save();
+    }
+
+    // 1.5) measure — OPTIONAL, config-gated, exactly once (guarded by `!acc.measured`), positioned
+    //      AFTER reconcile and BEFORE the commit. NON-BLOCKING by design: it never changes `status`
+    //      and never prevents the commit — a regression is a SIGNAL (artifact + memory line + reflect
+    //      feed), not a gate. Runs the command with cwd = the WORKTREE holding the accepted artifact
+    //      (`workspaceDir`); the baseline lives under the MAIN repo `.sparra` so it survives worktree
+    //      teardown (see build/measure.ts). `measured` is NOT in `acceptanceComplete` (a disabled
+    //      project must still complete acceptance), and is persisted the instant it flips.
+    if (!acc.measured && ctx.config.measure.enabled && ctx.config.measure.command) {
+      try {
+        const mr = await d.measureAccepted(ctx, workspaceDir);
+        const summary = renderMeasureLearning(mr);
+        await d.appendLearning(ctx.paths, { item: item.id, kind: "measure", detail: summary, at: stamp() });
+        if (mr.regressions.length) {
+          warn(
+            `${item.id}: measure flagged ${mr.regressions.length} regression(s) — SIGNAL only, commit proceeds` +
+              (mr.reportPath ? ` (report: ${path.relative(ctx.root, mr.reportPath)})` : "") + "."
+          );
+        } else {
+          detail(`${item.id}: ${summary}`);
+        }
+      } catch (e) {
+        // Measure is a signal; a failure here must never block the commit or reopen the item.
+        warn(`${item.id}: measure step errored (non-fatal, commit proceeds): ${(e as Error).message}`);
+      }
+      acc.measured = true;
       await ctx.store.save();
     }
 

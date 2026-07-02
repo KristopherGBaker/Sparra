@@ -299,6 +299,33 @@ export interface SparraConfig {
     autodetect: boolean;
   };
 
+  /**
+   * Post-accept MEASURE step (opt-in). After an item is accepted, run the project's OWN
+   * measurement/QA harness, parse structured metrics, diff them against a stored baseline, and
+   * flag regressions. NON-BLOCKING by design: measure is a *signal* — it records an artifact +
+   * a memory line and feeds reflect, but NEVER blocks the commit or reopens the item. Also a
+   * standalone `sparra measure [dir]`. See docs/build-loop.md for the metric-emission contract.
+   */
+  measure: {
+    /** Off by default; a config-less run is unaffected. */
+    enabled: boolean;
+    /**
+     * The measurement command Sparra runs. Executed via the SAME no-shell, argv-tokenized safe
+     * executor as `build.verifyCommands` (its own value is the explicit opt-in past the argv[0]
+     * allowlist), so it must be a SINGLE argv command (e.g. `npm run qa:metrics`), NOT a pipe or
+     * `&&`-chain. It prints a JSON object with a `metrics` field on stdout (see build-loop.md).
+     */
+    command: string;
+    /** Baseline JSON path (relative to the repo root). Empty → `<.sparra>/measure/baseline.json`.
+     *  Always read/written from the MAIN repo `.sparra` so it survives an isolated worktree build. */
+    baselineFile: string;
+    /** A metric is flagged regressed when it worsens (per its goal direction) by MORE than this
+     *  fraction of the baseline (default 0.05 = 5%). A change within ±threshold is not a regression. */
+    regressionThreshold: number;
+    /** Goal direction for a bare-number metric with no explicit `goal` ("min" = lower is better). */
+    defaultGoal: "min" | "max";
+  };
+
   exercise: {
     /** How the evaluator actually EXERCISES the artifact (not a diff reader). */
     mechanism: ExerciseMechanism;
@@ -445,6 +472,8 @@ export function defaultConfig(): SparraConfig {
       flakinessReruns: 2,
     },
     format: { enabled: true, command: "", autodetect: true },
+    // Off by default: measure runs the project's OWN QA harness after accept (signal, non-blocking).
+    measure: { enabled: false, command: "", baselineFile: "", regressionThreshold: 0.05, defaultGoal: "min" },
     exercise: {
       mechanism: "cli",
       runExistingTests: true,

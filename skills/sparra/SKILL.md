@@ -53,6 +53,7 @@ sparra plan            # collaborative interview → PLAN.md
 sparra prototype "…"   # optional throwaway spike → FINDINGS.md
 sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOUT) as build input
 sparra build           # the autonomous generator↔evaluator loop
+sparra measure [dir]   # run measure.command → parse JSON metrics → diff vs baseline (compare-only; --set-baseline; --worktree)
 sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
 sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage per-finding harness reflections in ~/.sparra/reflections (SPARRA_HOME); --clear archives ALL
 sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
@@ -133,6 +134,18 @@ The few that matter most:
   restarts see as a "PRIOR ATTEMPTS — do not repeat these approaches" section. `rubric.anchorFunctionality` (default true)
   caps the functionality score at `round(100 × passed/total)` when any assertion failed
   (ceiling only, noted in the verdict).
+- **`measure: { enabled, command, baselineFile, regressionThreshold, defaultGoal }`** — opt-in
+  **post-accept QA step** (off by default). After an item is accepted, `measure.command` (a SINGLE
+  argv command — no pipe/chain; its own value is the executor argv[0]-allowlist opt-in, like
+  `verifyCommands`) prints a JSON `metrics` object; Sparra parses the **last** such object (leading
+  logs tolerated), diffs each metric against `baselineFile` (default `.sparra/measure/baseline.json`,
+  always under the MAIN repo `.sparra` so it survives a worktree build), flags a metric regressed
+  when it worsens past `regressionThreshold` per its goal (`defaultGoal` for a bare number), records
+  a report under `.sparra/measure/`, and appends a `MEASURE` memory line reflect reads. **Non-blocking
+  by design** — a regression is a signal, never a gate (item stays passed, commit proceeds). Runs with
+  cwd = the worktree holding the artifact; guarded by a durable `acceptance.measured` flag (not part
+  of `acceptanceComplete`). Standalone: `sparra measure [dir] [--worktree] [--set-baseline] [--out f]`
+  (default compare-only — baseline written only with `--set-baseline`).
 - **`review: { enabled, blockOn }`** — opt-in **code-review gate** (off by default). After
   an item passes the evaluator, a `reviewer` role reads the diff for what the exerciser
   can't see (security, dead/vestigial code, conventions). `blockOn`: `high` (security/

@@ -981,6 +981,161 @@ describe("cmdBuild — pivot workspace reset + attempt ledger (Q6)", () => {
   });
 });
 
+// ───────────────────────────── post-accept MEASURE step (non-blocking, config-gated) ─────────────────────────────
+
+describe("cmdBuild — post-accept measure step", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  const okMeasure = (regressions = 0) => ({
+    ran: true as const,
+    ok: true as const,
+    metrics: { p50_ms: { value: 12.3, goal: "min" as const } },
+    deltas: [],
+    regressions: Array.from({ length: regressions }, (_, i) => ({
+      name: `m${i}`,
+      current: 2,
+      baseline: 1,
+      goal: "min" as const,
+      isNew: false,
+      regressed: true,
+      pct: 1,
+    })),
+    baselineUpdated: true,
+  });
+
+  it("(a) runs the measure hook between reconcile and commit when enabled", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.measure = { ...ctx.config.measure, enabled: true, command: "npm run qa:metrics" };
+    ctx.config.git.autoCommit = true;
+    const order: string[] = [];
+    let measuredWith: string | undefined;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      reconcilePlan: async () => {
+        order.push("reconcile");
+      },
+      measureAccepted: async (_ctx, workspaceDir) => {
+        order.push("measure");
+        measuredWith = workspaceDir;
+        return okMeasure();
+      },
+      commitItem: async () => {
+        order.push("commit");
+        return { ok: true, commits: 1 };
+      },
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps); // prepareWorkspace → branch set, so autoCommit commits
+    expect(order).toEqual(["reconcile", "measure", "commit"]);
+    expect(measuredWith).toBe(dir); // cwd = the workspace holding the accepted artifact
+    expect(ctx.store.data.build.items["item-001"]!.acceptance!.measured).toBe(true);
+    // a measure learning line landed in memory
+    expect(fs.readFileSync(ctx.paths.memory, "utf8")).toMatch(/MEASURE:/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(b) skips the measure hook when disabled (default)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    let called = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      measureAccepted: async () => {
+        called = true;
+        return okMeasure();
+      },
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(called).toBe(false);
+    expect(ctx.store.data.build.items["item-001"]!.acceptance!.measured).toBeUndefined();
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(c) is idempotent via acc.measured — a resumed acceptance does not re-measure", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.measure = { ...ctx.config.measure, enabled: true, command: "npm run qa:metrics" };
+    // Seed a passed item whose acceptance already measured + reconciled, but memory not appended.
+    ctx.store.data.build.runId = "build-x";
+    ctx.store.data.build.workspaceDir = dir;
+    ctx.store.data.build.items["item-001"] = {
+      status: "passed",
+      round: 1,
+      pivots: 0,
+      criterionFailStreak: {},
+      acceptance: { reconciled: true, measured: true, committed: true, memoryAppended: false },
+    };
+    await ctx.store.save();
+    let measureCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      measureAccepted: async () => {
+        measureCalls++;
+        return okMeasure();
+      },
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(measureCalls).toBe(0); // acc.measured already set → never re-run
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(d) still commits (non-blocking) when a regression is reported", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.measure = { ...ctx.config.measure, enabled: true, command: "npm run qa:metrics" };
+    ctx.config.git.autoCommit = true;
+    let committed = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      measureAccepted: async () => okMeasure(3), // 3 regressions
+      commitItem: async () => {
+        committed = true;
+        return { ok: true, commits: 1 };
+      },
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(committed).toBe(true); // a regression NEVER blocks the commit
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed"); // stays passed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(e) a measure hook that THROWS is non-fatal — item stays passed and the commit proceeds", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.measure = { ...ctx.config.measure, enabled: true, command: "npm run qa:metrics" };
+    ctx.config.git.autoCommit = true;
+    let committed = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      measureAccepted: async () => {
+        throw new Error("measure blew up");
+      },
+      commitItem: async () => {
+        committed = true;
+        return { ok: true, commits: 1 };
+      },
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(committed).toBe(true);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(ctx.store.data.build.items["item-001"]!.acceptance!.measured).toBe(true); // flag still flips
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // ───────────────────────────── Q7a: decompose — prompt via loadPrompt + build.maxItems clamp ─────────────────────────────
 
 describe("decompose — DEFAULT_PROMPTS prompt + build.maxItems clamp (Q7a)", () => {

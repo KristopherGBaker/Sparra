@@ -170,6 +170,7 @@ READ:
 - Traces from this run: ${path.relative(ctx.root, traceDir)}/ (every agent's full transcript)
 - Verdicts: ${path.relative(ctx.root, ctx.paths.verdicts)}/
 - Contracts: ${path.relative(ctx.root, ctx.paths.contracts)}/
+- Measure reports (post-accept metrics vs. baseline — regressions a code-reading evaluator can't see): ${path.relative(ctx.root, ctx.paths.measure)}/
 - Current role prompts: ${path.relative(ctx.root, ctx.paths.prompts)}/
 
 Find where the EVALUATOR was too lenient/harsh or diverged from the rubric, where CONTRACTS were too weak, or where calibration drifted.

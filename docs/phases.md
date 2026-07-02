@@ -33,7 +33,7 @@ Resumable across restarts (the session id is persisted): quit and re-run `sparra
 There is **no automated "plan is done" check.** When satisfied, run `sparra freeze`. It snapshots `PLAN.md` (and `CODEBASE_MAP.md`, and an optional `HOLDOUT.md`) into `.sparra/frozen/` as build input. **The frozen plan is a strong _prior_, not a literal contract.**
 
 ## Phase C — AUTONOMOUS BUILD
-`sparra build` runs the long-horizon generator ↔ adversarial-evaluator loop against the frozen plan. See **[the build loop](build-loop.md)** for the full mechanics (contract negotiation, exercising, GAN pivots, budgets, holdout, safety).
+`sparra build` runs the long-horizon generator ↔ adversarial-evaluator loop against the frozen plan. See **[the build loop](build-loop.md)** for the full mechanics (contract negotiation, exercising, GAN pivots, budgets, holdout, safety). On accept, an optional **[measure step](build-loop.md#measure)** (opt-in `measure.enabled`) runs the project's own QA harness between reconcile and commit — a non-blocking signal that records metric regressions vs. a baseline. It's also available standalone: `sparra measure [dir] [--worktree] [--set-baseline] [--out f]` (mirrors `sparra eval`).
 
 ## Self-improvement (outer loop)
 - Every agent's **full transcript** is written to `.sparra/traces/<run>/` as readable markdown.

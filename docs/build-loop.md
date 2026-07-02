@@ -27,7 +27,7 @@
 
    **Quality escalation** (opt-in, [`build.escalateAfterRounds`](configuration.md) + `roles.<generator>.escalation`). A different lever than the pivot: instead of retrying the same capability, once an item has accumulated **N FAILED rounds** the loop switches its generator to the configured stronger `escalation` role for the item's **remaining rounds**. Quality-triggered — distinct from the **limit**-triggered `fallback` (untouched: the escalated role's own `fallback` chain still applies on a provider limit). Per-item (the next item starts back on the primary), one level, one-way; the switch starts a **new** generator session (round feedback carries the context, like a backend change), is stated in the run log, and appends a memory note. Blocked rounds and limit-retried/limit-fallback rounds don't advance the counter; `gen: "local"` items escalate via `generatorLocal`'s own `escalation` (or never, absent one).
 
-6. **Accept → reconcile → commit** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory. If `git.autoCommit` is on (and the build is on a Sparra-created branch/worktree), the item is committed — incremental, revertable history, never on your main branch. In-place / non-git builds are never auto-committed. Two authoring modes (`git.agentCommits`):
+6. **Accept → reconcile → measure → commit** — on pass, deviations are reconciled into `PLAN.md` so the plan never goes stale, and a learning is appended to memory. If [`measure.enabled`](configuration.md) is on, the optional [**measure step**](#measure) runs next (between reconcile and commit) — a non-blocking signal. If `git.autoCommit` is on (and the build is on a Sparra-created branch/worktree), the item is committed — incremental, revertable history, never on your main branch. In-place / non-git builds are never auto-committed. Two authoring modes (`git.agentCommits`):
    - **`agent`** (default) — the cheap **`committer`** role reads the diff and proposes **one or more atomic Conventional Commits**, split by logical change (a refactor, the feature, a docs tweak become separate commits). The harness *executes* the plan (the model never runs git), appends a `Sparra-Item: <id>` trailer to each, and sweeps anything the plan misses into a final commit so nothing is lost. On any failure it falls back to `template`. The committer is read-only, confined to the workspace, and never sees the holdout. Configure its model/backend via `roles.committer` (defaults to a cheap model — e.g. Haiku).
    - **`template`** — one deterministic commit per item from the item title/summary (`feat: <item> … Sparra-Item: <id>`), no model call.
 
@@ -130,6 +130,13 @@ The conductor in the `/sparra-loop` skill drives this for you. Today's steps are
 ## Format on write
 A `PostToolUse` hook formats/lints each file the generator writes **before** the evaluator exercises it, so trivial formatting never costs an evaluator round. Greenfield defaults to a prettier-style formatter by file type; existing repos auto-detect from `CODEBASE_MAP.md` (e.g. `swiftformat`/`swiftlint`). Missing formatter → no-op + warning, never a failure. Configure via `format` (see [configuration](configuration.md)).
 
+## Measure
+An optional **post-accept measurement step** (opt-in via [`measure.enabled`](configuration.md)) that runs the project's **own QA/benchmark harness** on the accepted artifact — catching regressions a code-reading evaluator can't see (a perf cliff, a silently-disabled tier). It slots into the acceptance finisher **between reconcile and commit** (`accept → reconcile → measure → commit`) and is **NON-BLOCKING by design**: a regression is a *signal*, never a gate — the item stays `passed`, the commit proceeds, and the run moves on.
+
+It runs `measure.command` (a single argv command, no-shell — its own value is the executor's argv[0]-allowlist opt-in, same as `build.verifyCommands`) with **cwd = the worktree** holding the accepted artifact, parses the JSON `metrics` object it prints (the [metric-emission contract](configuration.md)), diffs each metric against a stored **baseline** with a per-goal **regression threshold**, records a rendered report under `.sparra/measure/`, and appends a `MEASURE` learning line (regression count / "no baseline") that **reflect reads**. The **baseline JSON** lives under the **main-repo `.sparra/measure/`** (default `baseline.json`), *not* the worktree — so it survives an isolated worktree build's teardown. In the build loop the baseline is updated to the current metrics on each accept; an **unparseable / no-metrics / non-zero-exit / unsafe** run is a non-fatal note that leaves the baseline untouched (a parse failure never clobbers a good baseline). The step is guarded by a durable `acceptance.measured` flag (persisted the instant it flips) so a crash/resume never re-measures; it is deliberately **excluded from `acceptanceComplete`** so a measure-disabled project still completes acceptance.
+
+**Standalone:** `sparra measure [dir] [--worktree] [--set-baseline] [--out f]` runs the same machinery by hand — default **compare-only** (baseline not written unless `--set-baseline`); `--worktree` grades a WIP snapshot in a temporary linked worktree (torn down after), exactly like `sparra eval --worktree`.
+
 ## Cross-run memory
 `.sparra/memory.md` is a durable, append-only log of short learnings (what was tried, and whether it passed / failed / pivoted / ran out of budget). Every autonomous role reads it at the start of each item so prior failures inform new work; `sparra reflect` appends to it. It's capped — oldest entries collapse into a one-line summary so it never grows unbounded.
 
@@ -154,7 +161,10 @@ through a single idempotent finisher backed by a durable ledger on the item stat
 
 The `committed` flag marks the commit **step** resolved — actually committed, human-skipped (commit
 gate), or N/A (`autoCommit` off / no branch) — so it neither repeats nor is silently dropped.
-`--fresh` clears the ledger along with the rest of the run state.
+`--fresh` clears the ledger along with the rest of the run state. The optional [measure](#measure)
+step adds a fifth durable flag (`measured`) with the same persist-on-flip discipline, but it is
+**config-gated and excluded from acceptance completeness** — a measure-disabled project completes
+acceptance on the three core effects exactly as before.
 
 ## Calibration (matching your taste)
 Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparra/calibration/slop/` (avoid this). With `rubric.useCalibration` on, the evaluator reads them before scoring originality/craft.

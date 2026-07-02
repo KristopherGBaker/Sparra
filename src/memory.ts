@@ -8,7 +8,7 @@ import type { Paths } from "./paths.ts";
  * entries collapse into a single summary line so it never grows unbounded.
  */
 
-export type LearningKind = "pivot" | "budget_exceeded" | "passed" | "failed" | "note";
+export type LearningKind = "pivot" | "budget_exceeded" | "passed" | "failed" | "note" | "measure";
 
 export interface Learning {
   /** Work-item id this learning is about (e.g. "item-002"). */
@@ -36,10 +36,10 @@ The autonomous roles read this at the start of each item so prior failures infor
 `;
 
 const SUMMARY_PREFIX = "> older learnings summarized —";
-const KINDS: LearningKind[] = ["pivot", "budget_exceeded", "passed", "failed", "note"];
+const KINDS: LearningKind[] = ["pivot", "budget_exceeded", "passed", "failed", "note", "measure"];
 
 type Counts = Record<LearningKind, number>;
-const emptyCounts = (): Counts => ({ pivot: 0, budget_exceeded: 0, passed: 0, failed: 0, note: 0 });
+const emptyCounts = (): Counts => ({ pivot: 0, budget_exceeded: 0, passed: 0, failed: 0, note: 0, measure: 0 });
 
 /** Render a single learning as one compact line. */
 export function formatLearning(l: Learning): string {

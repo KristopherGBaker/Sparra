@@ -49,7 +49,12 @@ From the project root (the dir you ran `sparra` in):
    verdict/contract summary isn't enough — e.g. to see what the generator actually did, or
    how the evaluator exercised the artifact. `ls -lt .sparra/traces/*/ | head`.
 
-6. **`.sparra/memory.md`** — durable cross-run learnings (pivots, budget halts, pass/fail).
+   **`.sparra/measure/`** — if `measure.enabled`, the post-accept QA step's `baseline.json`
+   (metrics keyed by name) + a rendered `measure-<stamp>.md` report per accept (metrics vs.
+   baseline, regressions flagged). A `MEASURE` line in `memory.md` summarizes each run. Reflect
+   reads this dir, so measured regressions inform prompt improvement.
+
+6. **`.sparra/memory.md`** — durable cross-run learnings (pivots, budget halts, pass/fail, measure).
    Roles read this each item; a wrong/misleading entry can bias new work.
 
 7. **`CHANGELOG.md`** / **`.sparra/proposals/`** — recorded deviations (in-scope) and
@@ -100,6 +105,8 @@ check the latest trace and the contract file for an error (often a session-level
 | **A previously-green required check now fails / passes only on rerun** | Determinism gate: the evaluator reruns gating checks and an artifact-caused flake is a defect, not "environmental" | Fix the *artifact* (stabilize the race / debounce / isolate state) — rerun-to-green won't pass it. See the verdict's notes for the diagnosed cause. |
 | **Generator keeps over-claiming passes (verdict artifacts carry `claimMismatches`)** | Calibration gap: the generator's `assertionsClaimed` self-report contradicts the graded verdict round after round | Now surfaced automatically: the next round's feedback carries one calibration line naming the contradicted ids + a verify-before-claiming-pass nudge, and item completion logs a memory note. If it still persists, `sparra reflect` is the escalation path. |
 | **`git.autoCommit: true` but no commits appear** | Not on a Sparra branch — `inplace` strategy or a non-git / no-history dir never auto-commits (safety) | Use `git.strategy: worktree` (or `branch`) on a real repo; commits land on `sparra/<runId>`, never main. |
+| **`measure.enabled` but memory says "measure produced no usable metrics" / "no parseable metrics" and `baseline.json` is unchanged** | The `measure.command` printed no JSON object with a `metrics` field (or emitted a non-zero exit / an unsafe command the executor refused). Parse failure is a non-fatal note — the item stays passed and the good baseline is NOT overwritten | Read the latest `.sparra/measure/measure-<stamp>.md` report for the reason. Fix the command to print `{ "metrics": { … } }` on stdout as the LAST top-level JSON object (leading logs are fine); ensure it's a SINGLE argv command (no pipe/`&&`) and exits 0. Nothing blocks — measure is a signal. |
+| **Measure flagged a regression (memory `MEASURE:` line, report shows `REGRESSED`) but the item still committed** | Working as intended: measure is **non-blocking** by design — a regression records an artifact + memory line + feeds reflect, but never blocks the commit or reopens the item | Read `.sparra/measure/measure-<stamp>.md` for the metric(s) + delta vs. baseline. Investigate the artifact (perf cliff, disabled tier). To reset the baseline after an intentional change: `sparra measure --set-baseline`. Tighten/loosen `measure.regressionThreshold` if the flag is noisy. |
 | **A configured skill has no effect / "skill … not found" warning** | The name didn't resolve, or the role doesn't receive it | Check the name matches a `SKILL.md` dir under repo `skills/`, `~/.claude/skills`, or `~/.agents/skills`; builder roles inherit `build.skills`, others need `roles.<role>.skills`. |
 | **A Sparra prompt fix you expected isn't taking effect** (build still does the old behavior); or build logs "N role prompt(s) differ from the built-in defaults" | `.sparra/prompts/` was seeded at `init` and is now **stale** vs the improved defaults (the build reads the local copies). Or the drift is your/`reflect`'s intentional edits | `sparra prompts status` to see which drifted; `sparra prompts sync` (or `--role <r>`) to adopt the current defaults. Skip if the drift is intentional. Mid-run is fine — prompts are read per role invocation. |
 

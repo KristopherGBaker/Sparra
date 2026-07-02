@@ -62,8 +62,11 @@ export interface ItemState {
    *  mid-finish and re-drives only the unfinished ones. `committed` marks the commit STEP
    *  *resolved* — actually committed, human-skipped (commit gate), or N/A (autoCommit off / no
    *  branch) — so it never repeats and is never silently dropped. (A legacy passed item from
-   *  before this field existed has no `acceptance` and is treated as already-finished.) */
-  acceptance?: { reconciled?: boolean; committed?: boolean; memoryAppended?: boolean };
+   *  before this field existed has no `acceptance` and is treated as already-finished.)
+   *  `measured` gates the OPTIONAL, config-gated post-accept measure step (see phases/build.ts);
+   *  it is deliberately NOT part of `acceptanceComplete`, so a measure-disabled project still
+   *  completes acceptance and resumes correctly. */
+  acceptance?: { reconciled?: boolean; committed?: boolean; memoryAppended?: boolean; measured?: boolean };
 }
 
 export interface SparraState {

@@ -94,6 +94,14 @@ export class Paths {
   get reflect() {
     return path.join(this.dir, "reflect");
   }
+  /** Post-accept measure artifacts (rendered reports) + the default baseline location. Lives under
+   *  the MAIN repo `.sparra` so a baseline survives an isolated worktree build's teardown. */
+  get measure() {
+    return path.join(this.dir, "measure");
+  }
+  get measureBaseline() {
+    return path.join(this.measure, "baseline.json");
+  }
   get traces() {
     return path.join(this.dir, "traces");
   }
@@ -139,6 +147,7 @@ export class Paths {
       ensureDir(path.join(this.calibration, "good")),
       ensureDir(path.join(this.calibration, "slop")),
       ensureDir(this.reflect),
+      ensureDir(this.measure),
       ensureDir(this.traces),
       ensureDir(this.runs),
       ensureDir(this.cycles),
