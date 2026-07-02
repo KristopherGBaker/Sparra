@@ -64,6 +64,15 @@ const SHELL_METACHARS = /[$`;&|><(){}'"~\\\n\r]/;
  * target/) — containment for THAT is the worktree/scratch boundary. What this allowlist
  * prevents is direct file-manipulation/interpreter-eval commands as the contracted verify
  * command itself.
+ *
+ * SCOPE BOUNDARY (deliberate): this guard vets the SHAPE of the command it is handed, not the
+ * CONTENTS of a project-defined recipe an allowlisted runner dispatches to — `npm run <script>`,
+ * `make <target>`, `gradle <task>` all execute whatever the workspace's own package.json/
+ * Makefile/build.gradle defines. Policing every recipe would be unbounded (make → rake → just →
+ * a shipped shell script) and is not this layer's job: a recipe's mutations are contained by the
+ * same worktree + source-integrity guard that reverts any exercise write. So a destructive
+ * `make <target>` is out of scope here exactly as a destructive `npm run <script>` is — the
+ * executor blocks unsafe *invocations*, the boundary contains unsafe *recipes*.
  */
 const ALLOW_ARGV0 = new Set([
   "npm", "yarn", "pnpm", "bun", "node", "tsc", "tsx", "vitest", "jest", "mocha", "pytest",
