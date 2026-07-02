@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deepMerge, defaultConfig, type SparraConfig } from "../src/config.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { deepMerge, defaultConfig, writeDefaultConfig, type SparraConfig } from "../src/config.ts";
 import { allowVerifyBash } from "../src/sdk/scoping.ts";
+import { Paths } from "../src/paths.ts";
 
 describe("deepMerge", () => {
   it("scalar override: {a:1} + {a:2} → {a:2}", () => {
@@ -77,5 +81,27 @@ describe("build.verifyCommands knob", () => {
     const merged = deepMerge<SparraConfig>(defaultConfig(), { build: { verifyCommands: ["npm test"] } });
     expect(merged.build.verifyCommands).toEqual(["npm test"]);
     expect(merged.build.maxRoundsPerItem).toBe(defaultConfig().build.maxRoundsPerItem); // sibling survives
+  });
+});
+
+describe("rubric.anchorFunctionality knob (Q4)", () => {
+  it("defaults to true", () => {
+    expect(defaultConfig().rubric.anchorFunctionality).toBe(true);
+  });
+
+  it("appears in the seeded config output (writeDefaultConfig YAML)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-config-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    await writeDefaultConfig(paths, "existing");
+    const yaml = fs.readFileSync(paths.config, "utf8");
+    expect(yaml).toContain("anchorFunctionality: true");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a YAML override of false merges over the default, rubric siblings preserved", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { rubric: { anchorFunctionality: false } });
+    expect(merged.rubric.anchorFunctionality).toBe(false);
+    expect(merged.rubric.passThreshold).toBe(defaultConfig().rubric.passThreshold); // sibling survives
   });
 });

@@ -47,6 +47,9 @@ rubric:
   weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 }
   passThreshold: 75
   useCalibration: true        # read .sparra/calibration/{good,slop}/ to match your taste
+  anchorFunctionality: true   # with any FAILED contract assertion, cap the functionality score
+                              #   at round(100 × passed/total) — a ceiling only (never a boost),
+                              #   noted in the verdict; no assertions → no cap; false disables
 
 pivot: { N: 3, threshold: 50 }             # GAN restart after N rounds below threshold on one criterion
 

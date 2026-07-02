@@ -60,13 +60,17 @@ export function deviationPolicy(ctx: Ctx): string {
   return `${constrained}\n${escalate}\n${byStrict}\nRecord EVERY deviation in CHANGELOG.md with a rationale.`;
 }
 
+/** Anchored rubric: one-line criterion definitions + a generic band scale, so scores are
+ *  grounded rather than free-floating model judgment. Rendered into every evaluator prompt —
+ *  keep it terse. */
 export function rubricText(ctx: Ctx): string {
   const w = ctx.config.rubric.weights;
   return [
-    `- design (weight ${w.design})`,
-    `- originality (weight ${w.originality})`,
-    `- craft (weight ${w.craft})`,
-    `- functionality (weight ${w.functionality})`,
+    `- design (weight ${w.design}): architecture/API/UX fit the problem — right-sized, coherent, no needless complexity.`,
+    `- originality (weight ${w.originality}): real judgment, not boilerplate/AI-slop — approach fits THIS problem.`,
+    `- craft (weight ${w.craft}): code quality — naming, structure, error handling, tests, conventions.`,
+    `- functionality (weight ${w.functionality}): works when exercised — contract assertions hold with evidence.`,
+    `Bands (each criterion): 90+ exemplary, no substantive flaw; 70-89 solid, minor issues; 50-69 notable gaps; <50 broken/deficient.`,
     `Pass threshold: weighted total ≥ ${ctx.config.rubric.passThreshold}.`,
   ].join("\n");
 }

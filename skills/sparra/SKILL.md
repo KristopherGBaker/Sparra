@@ -119,7 +119,9 @@ The few that matter most:
   artifact-source write). `read-only` is the strict pre-fix behavior. The Claude evaluator
   exercises via the in-process runner regardless.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
-  threshold, scoring weights + pass threshold.
+  threshold, scoring weights + pass threshold. `rubric.anchorFunctionality` (default true)
+  caps the functionality score at `round(100 × passed/total)` when any assertion failed
+  (ceiling only, noted in the verdict).
 - **`review: { enabled, blockOn }`** — opt-in **code-review gate** (off by default). After
   an item passes the evaluator, a `reviewer` role reads the diff for what the exerciser
   can't see (security, dead/vestigial code, conventions). `blockOn`: `high` (security/

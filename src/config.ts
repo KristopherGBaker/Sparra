@@ -130,6 +130,10 @@ export interface SparraConfig {
     passThreshold: number;
     /** Use calibration/ good-vs-slop references to anchor taste. */
     useCalibration: boolean;
+    /** Cap the functionality score at round(100 × passed/total) when any contract assertion
+     *  FAILED — a conservative ceiling only (never a boost), so functionality can't contradict
+     *  the assertion outcomes. No assertions listed → no cap. */
+    anchorFunctionality: boolean;
   };
 
   pivot: {
@@ -363,6 +367,7 @@ export function defaultConfig(): SparraConfig {
       weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 },
       passThreshold: 75,
       useCalibration: true,
+      anchorFunctionality: true,
     },
     pivot: { N: 3, threshold: 50 },
     // Range is an upper guide, scaled down per item — small items use far fewer.

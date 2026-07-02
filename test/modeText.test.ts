@@ -5,7 +5,7 @@ import path from "node:path";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
-import { contractModeClauses, selfVerifyGuidance } from "../src/build/modeText.ts";
+import { contractModeClauses, rubricText, selfVerifyGuidance } from "../src/build/modeText.ts";
 import type { Ctx } from "../src/context.ts";
 
 async function makeCtx(mode: "existing" | "greenfield"): Promise<{ ctx: Ctx; dir: string }> {
@@ -106,6 +106,40 @@ describe("selfVerifyGuidance — in-place opt-in ungating (H7 assertion 7e)", ()
     const { ctx, dir } = await makeCtx("existing");
     ctx.config.build.verifyCommands = [];
     expect(selfVerifyGuidance(ctx, true)).toBe("");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("rubricText — anchored criterion definitions + band scale (Q4)", () => {
+  it("names each criterion WITH its definition phrase (not bare weight lines)", async () => {
+    const { ctx, dir } = await makeCtx("greenfield");
+    const out = rubricText(ctx);
+    expect(out).toContain("design (weight 0.25): architecture/API/UX fit the problem");
+    expect(out).toContain("originality (weight 0.15): real judgment, not boilerplate/AI-slop");
+    expect(out).toContain("craft (weight 0.3): code quality — naming, structure, error handling");
+    expect(out).toContain("functionality (weight 0.3): works when exercised — contract assertions hold with evidence");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("carries the generic band scale with all four boundaries + the pass threshold", async () => {
+    const { ctx, dir } = await makeCtx("greenfield");
+    const out = rubricText(ctx);
+    expect(out).toContain("Bands (each criterion):");
+    expect(out).toContain("90+ exemplary");
+    expect(out).toContain("70-89 solid");
+    expect(out).toContain("50-69 notable gaps");
+    expect(out).toContain("<50 broken/deficient");
+    expect(out).toContain(`Pass threshold: weighted total ≥ ${ctx.config.rubric.passThreshold}.`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reflects configured weights/threshold (rendered, not hardcoded)", async () => {
+    const { ctx, dir } = await makeCtx("greenfield");
+    ctx.config.rubric.weights = { design: 0.4, originality: 0.1, craft: 0.2, functionality: 0.3 };
+    ctx.config.rubric.passThreshold = 80;
+    const out = rubricText(ctx);
+    expect(out).toContain("design (weight 0.4)");
+    expect(out).toContain("≥ 80");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

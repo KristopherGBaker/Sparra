@@ -141,6 +141,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     (v) => v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v)
   );
   let verdict: Verdict;
+  let capNote = ""; // set when the anchor cap actually lowered the functionality score
   if (!parsed || !parsed.scores) {
     warn(`Evaluator for ${item.id} returned no parseable verdict — treating as FAIL.`);
     verdict = {
@@ -159,6 +160,21 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     for (const c of RUBRIC_CRITERIA) {
       const v = Number(parsed.scores[c] ?? 0);
       parsed.scores[c] = Math.max(0, Math.min(100, isFinite(v) ? v : 0));
+    }
+    // Anchor functionality to the assertion outcomes (rubric.anchorFunctionality): with any
+    // FAILED assertion, functionality is CEILINGED at round(100 × passed/total) — a cap only
+    // lowers, never raises, so an already-low score stands. Zero assertions → no cap (nothing
+    // to anchor to; also guards the division).
+    if (ctx.config.rubric.anchorFunctionality) {
+      const asserts = Array.isArray(parsed.assertions) ? parsed.assertions : [];
+      const passed = asserts.filter((a) => Boolean((a as { pass?: unknown })?.pass)).length;
+      if (asserts.length > 0 && passed < asserts.length) {
+        const cap = Math.round((100 * passed) / asserts.length);
+        if (parsed.scores.functionality > cap) {
+          capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${asserts.length} assertions passed — rubric.anchorFunctionality)`;
+          parsed.scores.functionality = cap;
+        }
+      }
     }
     const weighted = computeWeighted(ctx, parsed.scores);
     const modelSaidPass = parsed.verdict === "pass";
@@ -227,7 +243,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   const failedAssertions = verdict.assertions.filter((a) => !a.pass);
   await writeText(
     ctx.paths.verdictFile(item.id, round),
-    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n\n## Failed assertions (${failedAssertions.length}/${verdict.assertions.length})\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
+    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${verdict.assertions.length})\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
   );
 
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);

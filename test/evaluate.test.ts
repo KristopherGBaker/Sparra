@@ -334,6 +334,19 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("the evaluator's assembled system prompt carries the anchored rubric (definitions + bands) (Q4)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    const sys = rec.calls[0]!.systemPrompt ?? "";
+    expect(sys).toContain("functionality (weight 0.3): works when exercised");
+    expect(sys).toContain("90+ exemplary");
+    expect(sys).toContain("70-89 solid");
+    expect(sys).toContain("50-69 notable gaps");
+    expect(sys).toContain("<50 broken/deficient");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("a blocked exercise can NEVER pass, even if the model claims pass with a high score (H3)", async () => {
     // Contradictory verdict: model says pass + 90s but admits the exercise was blocked.
     const blockedButPass =
@@ -344,6 +357,90 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     const out = await run(ctx, dir, recorder(blockedButPass), cleanIntegrityDeps);
     expect(out.verdict.exerciseStatus).toBe("blocked");
     expect(out.verdict.verdict).toBe("fail"); // never accepted — unverified
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("evaluateItem — assertion-anchored functionality cap (Q4, rubric.anchorFunctionality)", () => {
+  // Verdict JSON with a chosen assertion pass/fail mix + a chosen functionality score.
+  const verdictJson = (passes: boolean[], functionality: number, others = 90) =>
+    "```json\n" +
+    JSON.stringify({
+      assertions: passes.map((pass, i) => ({ id: i + 1, pass, evidence: pass ? "ok" : "broken" })),
+      scores: { design: others, originality: others, craft: others, functionality },
+      verdict: "fail",
+      blocking: [],
+      notes: "n",
+    }) +
+    "\n```";
+
+  it("2 of 4 assertions failed + model functionality 95 ⇒ capped to 50, weightedTotal recomputed, cap noted in the verdict markdown", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(verdictJson([true, true, false, false], 95)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(50); // round(100 × 2/4)
+    // Recomputed from the CAPPED score: 90×(0.25+0.15+0.3) + 50×0.3 = 78 (uncapped would be 91.5).
+    expect(out.verdict.weightedTotal).toBe(78);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toContain("functionality capped at 50");
+    expect(written).toContain("2/4 assertions passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("1 of 3 assertions passed + model functionality 90 ⇒ capped to 33 (distinct fixture — not a hardcoded cap), noted in the markdown", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(verdictJson([true, false, false], 90, 80)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(33); // round(100 × 1/3)
+    // Recomputed from the CAPPED score: 80×0.7 + 33×0.3 = 65.9.
+    expect(out.verdict.weightedTotal).toBe(65.9);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toContain("functionality capped at 33");
+    expect(written).toContain("1/3 assertions passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("contrast: ALL assertions passed + functionality 95 ⇒ unchanged, no cap note", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(verdictJson([true, true, true], 95)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(95);
+    expect(out.verdict.weightedTotal).toBe(91.5); // 90×0.7 + 95×0.3 — untouched
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).not.toContain("functionality capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("contrast: failures present but functionality already BELOW the ceiling (30 < 50) ⇒ unchanged (a cap never raises)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(verdictJson([true, true, false, false], 30)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(30);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).not.toContain("functionality capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("opt-out: rubric.anchorFunctionality=false ⇒ no cap even with failures", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.rubric.anchorFunctionality = false;
+    const out = await run(ctx, dir, recorder(verdictJson([true, true, false, false], 95)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(95);
+    expect(out.verdict.weightedTotal).toBe(91.5);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("zero assertions listed ⇒ no cap (division guard), existing behavior preserved", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await run(ctx, dir, recorder(verdictJson([], 95)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(95);
+    expect(out.verdict.weightedTotal).toBe(91.5);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).not.toContain("functionality capped");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the knob defaults ON: a fresh defaultConfig applies the cap with no config edits", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(ctx.config.rubric.anchorFunctionality).toBe(true); // default
+    const out = await run(ctx, dir, recorder(verdictJson([false], 100)), cleanIntegrityDeps);
+    expect(out.verdict.scores.functionality).toBe(0); // 0/1 passed
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
