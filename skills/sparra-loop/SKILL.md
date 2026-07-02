@@ -203,6 +203,12 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
   when MCP isn't reachable: `sparra role run --kind evaluator --backend codex --brief
   brief.md --contract contract.md --holdout .sparra/HOLDOUT.md --out v.md` (or
   `sparra eval …`) via Bash.
+- **Dogfooding the runner itself?** The `sparra-run` MCP server is a **persistent process that
+  loads Sparra's code once at startup** — so a fix you just made to `run_role`/`src/` will NOT be
+  live for `run_role` calls until that server restarts (a new session). If this cycle EDITS the
+  harness runner and you want to validate the change live, **use the CLI path** (`sparra eval …` /
+  `sparra role run …` via Bash) — it spawns a fresh process per call and runs your current code;
+  the MCP tool would keep exhibiting the pre-fix behavior and mislead you.
 - **What comes back to you (summary only):** evaluator → the **verdict** (pass/fail,
   total vs. threshold, blocking points to feed back as the next brief);
   generator/reviewer/contract-* → a **one-paragraph digest**. The raw diff, the full
