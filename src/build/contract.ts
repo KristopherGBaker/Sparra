@@ -23,8 +23,10 @@ const SECTION = "## AGREED CONTRACT";
 // session re-reviews from scratch each round — reversing its own prior positions and promoting
 // nits to blockers — so re-critique rounds must be scoped to the delta: confirm prior points are
 // resolved, don't reopen settled ground, don't reverse without citing the round. The distinctive
-// `RE-CRITIQUE:` marker is asserted by the round-shape tests.
-const RE_CRITIQUE_INSTRUCTION =
+// `RE-CRITIQUE:` marker is asserted by the round-shape tests. Exported so the interactive
+// role-runner (`roleRun.ts`) reuses the EXACT same instruction when a conductor drives re-critique
+// rounds via `priorCritiquePaths` — the two paths must not drift.
+export const RE_CRITIQUE_INSTRUCTION =
   `RE-CRITIQUE: this is a revision of a contract you already critiqued (your prior critiques are below, labeled by round). Verify each prior point is resolved; do NOT raise new points outside the changed text unless correctness-critical; do NOT reverse a position you took in a prior round unless you name the round and why; style/conciseness nits are non-blocking on re-critique.`;
 
 export interface ContractResult {

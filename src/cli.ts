@@ -21,12 +21,14 @@ import { cmdMeasure } from "./phases/measure.ts";
 
 interface Args {
   positionals: string[];
-  flags: Record<string, string | boolean>;
+  // A flag repeated on the command line (e.g. `--prior-critique a --prior-critique b`) accumulates
+  // its string values into an array; single flags stay `string | boolean` as before.
+  flags: Record<string, string | boolean | string[]>;
 }
 
 function parse(argv: string[]): Args {
   const positionals: string[] = [];
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "-k") {
@@ -34,11 +36,18 @@ function parse(argv: string[]): Args {
     } else if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
+      let value: string | boolean = true;
       if (next !== undefined && !next.startsWith("-")) {
-        flags[key] = next;
+        value = next;
         i++;
+      }
+      const prior = flags[key];
+      if (prior === undefined || typeof value !== "string") {
+        flags[key] = value; // first occurrence, or a bare boolean flag
       } else {
-        flags[key] = true;
+        // Repeated with a value → accumulate into an array (a first string becomes a 2-element array),
+        // so a repeatable flag like `--prior-critique` collects every path in given order.
+        flags[key] = Array.isArray(prior) ? [...prior, value] : typeof prior === "string" ? [prior, value] : value;
       }
     } else {
       positionals.push(a);
@@ -74,8 +83,8 @@ ${color.bold("Commands")}
   finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   clean [--yes] [--force]                       prune stale sparra worktrees/branches (dry-run by default)
-  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify] [--worktree [--keep-worktree]]
-                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands; --worktree runs an evaluator/reviewer in a temp WIP-snapshot worktree, torn down after — --keep-worktree retains it)
+  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--prior-critique f]… [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify] [--worktree [--keep-worktree]]
+                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands; --worktree runs an evaluator/reviewer in a temp WIP-snapshot worktree, torn down after — --keep-worktree retains it; repeatable --prior-critique inlines prior-round critique files into a contract-evaluator re-critique, .sparra/ paths OK)
   eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f] [--budget <usd>] [--worktree [--keep-worktree]]
                                                 grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator; --worktree gives the exercise writable scratch in a temp worktree that mirrors your WIP)
   measure [dir] [--worktree [--keep-worktree]] [--set-baseline] [--out f]
@@ -130,7 +139,7 @@ async function main(): Promise<void> {
     } else {
       // alias: `sparra eval [dir] [--contract f] [--holdout f] [--backend b] [--out f]`
       // — a standalone evaluator on a WIP tree (defaults the brief).
-      const evalFlags: Record<string, string | boolean> = { ...flags, kind: "evaluator" };
+      const evalFlags: Record<string, string | boolean | string[]> = { ...flags, kind: "evaluator" };
       if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
       await cmdRoleRun(roleCtx, evalFlags);
     }
@@ -160,7 +169,7 @@ async function main(): Promise<void> {
       await cmdFreeze(ctx);
       break;
     case "build":
-      await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined, step: flags.step != null ? parseSteps(flags.step) : undefined });
+      await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined, step: flags.step != null ? parseSteps(flags.step as string | boolean | undefined) : undefined });
       break;
     case "reflect":
       await cmdReflect(ctx, {

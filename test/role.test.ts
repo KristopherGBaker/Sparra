@@ -57,6 +57,30 @@ describe("roleRequestFromFlags — CLI --verify → allowVerify (H7 assertion 7d
   });
 });
 
+// U3: repeatable `--prior-critique <path>` → priorCritiquePaths (order preserved).
+describe("roleRequestFromFlags — --prior-critique → priorCritiquePaths (U3)", () => {
+  it("a single --prior-critique (parser yields a string) → a one-element array", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "contract-evaluator", { "prior-critique": "a.md" }, {});
+    expect(req.priorCritiquePaths).toEqual(["a.md"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("repeated --prior-critique (parser yields a string[]) → paths in the GIVEN order", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "contract-evaluator", { "prior-critique": ["a.md", "b.md"] }, {});
+    expect(req.priorCritiquePaths).toEqual(["a.md", "b.md"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent → undefined; a value-less boolean --prior-critique contributes no path", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(roleRequestFromFlags(ctx, "contract-evaluator", {}, {}).priorCritiquePaths).toBeUndefined();
+    expect(roleRequestFromFlags(ctx, "contract-evaluator", { "prior-critique": true }, {}).priorCritiquePaths).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // Item D: `--worktree` / `--keep-worktree` → the request's INTENT flags (useWorktree/keepWorktree).
 // Pure mapping only — whether the run actually lands in a worktree is runtime (evalWorktree.test.ts).
 describe("roleRequestFromFlags — --worktree / --keep-worktree (Item D)", () => {

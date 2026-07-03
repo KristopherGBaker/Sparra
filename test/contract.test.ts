@@ -406,7 +406,7 @@ describe("U-B delta-critique — prompt + skill + docs", () => {
     expect(skill).toMatch(/delta instruction/i); // …and state the delta instruction
     expect(skill).toMatch(/inline/i); // forbid role can't read .sparra/ — inline it
     const mkt = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".claude-plugin/marketplace.json"), "utf8"));
-    expect(mkt.metadata.version).toBe("2026.7.3.8");
+    expect(mkt.metadata.version).toBe("2026.7.3.9");
   });
 
   it("docs/build-loop.md documents the delta-critique protocol (assertion 7)", () => {

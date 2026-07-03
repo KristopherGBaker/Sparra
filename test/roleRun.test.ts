@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runRole, makeHoldoutReadDecider, parseVerdict, type RoleKind } from "../src/build/roleRun.ts";
+import { RE_CRITIQUE_INSTRUCTION } from "../src/build/contract.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -1402,6 +1403,115 @@ const MIXED_ASSERTS = [
   { id: 1, pass: true },
   { id: 2, pass: false },
 ];
+
+// ── U3: runner-side prior-critique inlining for contract-evaluator re-critique rounds ──
+describe("runRole — contract-evaluator prior-critique inlining (U3)", () => {
+  const CONTRACT_TEXT = "Assertion 1: the widget renders and the export is lossless.";
+  const ROUND1 = "ROUND-ONE-SENTINEL: assertion 3 is unsatisfiable as written.";
+  const ROUND2 = "ROUND-TWO-SENTINEL: the verify command uses a nonexistent --flag.";
+
+  it("(#2/#7) inlines RE_CRITIQUE_INSTRUCTION + each critique labeled in GIVEN order, all before the contract text", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const p1 = path.join(dir, "r1.md");
+    const p2 = path.join(dir, "r2.md");
+    fs.writeFileSync(p1, ROUND1);
+    fs.writeFileSync(p2, ROUND2);
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "contract-evaluator",
+      contract: CONTRACT_TEXT,
+      priorCritiquePaths: [p1, p2], // given order — NOT mtime/filename
+      runSessionFn: rec.fn,
+    });
+    const prompt = rec.calls[0]!.prompt;
+    // (a) the shared instruction is present (imported from contract.ts, not a duplicated string).
+    expect(prompt).toContain(RE_CRITIQUE_INSTRUCTION);
+    const iInstr = prompt.indexOf(RE_CRITIQUE_INSTRUCTION);
+    const iR1Label = prompt.indexOf("--- Round 1 critique ---");
+    const iR1 = prompt.indexOf(ROUND1);
+    const iR2Label = prompt.indexOf("--- Round 2 critique ---");
+    const iR2 = prompt.indexOf(ROUND2);
+    const iContract = prompt.indexOf(CONTRACT_TEXT);
+    // (b) instruction → round-1 label → round-1 text → round-2 label → round-2 text (the GIVEN order).
+    expect(iInstr).toBeGreaterThanOrEqual(0);
+    expect(iR1Label).toBeGreaterThan(iInstr);
+    expect(iR1).toBeGreaterThan(iR1Label);
+    expect(iR2Label).toBeGreaterThan(iR1);
+    expect(iR2).toBeGreaterThan(iR2Label);
+    // (c) BOTH critiques land before the contract text (a single-file "contains" check fails this).
+    expect(iContract).toBeGreaterThan(iR2);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(anti-no-op) with the option ABSENT, no RE-CRITIQUE marker or round labels are injected", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "contract-evaluator", contract: CONTRACT_TEXT, runSessionFn: rec.fn });
+    expect(rec.calls[0]!.prompt).not.toContain("RE-CRITIQUE");
+    expect(rec.calls[0]!.prompt).not.toContain("--- Round 1 critique ---");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#3) reads a prior-critique file UNDER .sparra/ (runner read isn't subject to the role readscope; the role still can't)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    // A path inside the holdout-bearing .sparra dir — exactly the collision this feature fixes.
+    const sparraCritique = path.join(ctx.paths.dir, "loop-x", "ua.contract.eval.md");
+    fs.mkdirSync(path.dirname(sparraCritique), { recursive: true });
+    const SENTINEL = "SPARRA-RESIDENT-CRITIQUE: assertion 2 needs a concrete verify command.";
+    fs.writeFileSync(sparraCritique, SENTINEL);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "contract-evaluator", contract: CONTRACT_TEXT, priorCritiquePaths: [sparraCritique], runSessionFn: rec.fn });
+    expect(rec.calls[0]!.prompt).toContain(SENTINEL); // the runner inlined it fine
+    expect(rec.calls[0]!.prompt).toContain("--- Round 1 critique ---");
+    // …but the guard is UNCHANGED: the ROLE itself is still denied a read of that .sparra/ path.
+    const deny = makeHoldoutReadDecider(ctx, dir);
+    expect(deny("Read", { file_path: sparraCritique })).toBeTruthy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) a prior-critique file carrying a holdout line THROWS before any backend call, sanitized", async () => {
+    const { ctx, dir } = await makeCtx(); // holdout present (HOLDOUT_LINE)
+    const leaky = path.join(dir, "leak.md");
+    fs.writeFileSync(leaky, `Round 1 notes.\n${HOLDOUT_LINE}\n`);
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "contract-evaluator", contract: CONTRACT_TEXT, priorCritiquePaths: [leaky], runSessionFn: rec.fn })
+    ).rejects.toThrow(/holdout/i);
+    expect(rec.calls).toHaveLength(0); // wall fired before the model call
+    try {
+      await runRole({ ctx, roleKind: "contract-evaluator", contract: CONTRACT_TEXT, priorCritiquePaths: [leaky], runSessionFn: rec.fn });
+    } catch (e) {
+      expect((e as Error).message).not.toContain("byte-identical"); // no holdout text echoed
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#5a) a missing/unreadable prior-critique path fails immediately, naming the path", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const missing = path.join(dir, "does-not-exist.md");
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "contract-evaluator", contract: CONTRACT_TEXT, priorCritiquePaths: [missing], runSessionFn: rec.fn })
+    ).rejects.toThrow(new RegExp(missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#5b) supplying priorCritiquePaths to a NON-contract-evaluator role is a hard error (documented reject)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const p1 = path.join(dir, "r1.md");
+    fs.writeFileSync(p1, "some prior critique");
+    const rec = recorder();
+    for (const kind of ["generator", "evaluator", "reviewer", "contract-generator"] as RoleKind[]) {
+      await expect(
+        runRole({ ctx, roleKind: kind, brief: "do the thing", contract: CONTRACT_TEXT, priorCritiquePaths: [p1], runSessionFn: rec.fn })
+      ).rejects.toThrow(/priorCritiquePaths|contract-evaluator/i);
+    }
+    expect(rec.calls).toHaveLength(0); // rejected before any backend call, for every kind
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
 
 describe("runRole evaluator — anchored functionality cap (parity with evaluate.ts)", () => {
   it("caps functionality at round(100×passed/total) on a failed assertion, BEFORE the weighted total", async () => {

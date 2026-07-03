@@ -78,16 +78,21 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    wants quick — say so when you skip it.
    **Re-critique rounds are DELTA reviews, not fresh reviews.** A fresh contract-evaluator
    session re-reviews from scratch each round — reversing its own prior positions and
-   promoting nits to blockers — so past round 1 you MUST carry the **prior critique text**
-   into the brief and state the delta instruction: *"RE-CRITIQUE — verify each prior point is
-   resolved; raise nothing new outside the changed text unless correctness-critical; don't
-   reverse a prior-round position without naming the round and why; style/conciseness nits are
-   non-blocking."* Round 1 stays full-scope adversarial (that's where every blocking issue
-   belongs). IMPORTANT — the contract-evaluator is a forbid role whose read scope **excludes
-   `.sparra/`** (holdout-bearing), so a critique file saved under `.sparra/` is **unreadable**
-   by it: **inline** the prior critique text (or its gist) directly in the brief, or keep the
-   prior-critique file(s) **outside** any holdout-bearing dir and pass those — never just hand
-   it a `.sparra/…` path.
+   promoting nits to blockers — so past round 1 the evaluator MUST see its **prior-round
+   critiques** plus a delta instruction (*"verify each prior point is resolved; raise nothing new
+   outside the changed text unless correctness-critical; don't reverse a prior-round position
+   without naming the round and why; style/conciseness nits are non-blocking"*). Round 1 stays
+   full-scope adversarial (that's where every blocking issue belongs). **Pass the prior critiques
+   with `priorCritiquePaths`** — an array of the prior-round critique files in round order (Round 1
+   first): the **runner reads them itself and inlines them** (labeled `--- Round N critique ---`,
+   prefixed with the shared RE-CRITIQUE instruction) ahead of the contract, so you don't hand-write
+   the delta framing. Because the *runner* does the read (it's trusted; the role is not), **files
+   under `.sparra/` work** — e.g. `priorCritiquePaths: [".sparra/loop-x/ua.contract.eval.md"]` (CLI:
+   repeat `--prior-critique <path>`). A missing path fails the run; passing the option to any other
+   role is an error. *Fallback for an older Sparra without the option:* manually **inline** the
+   prior critique text into the brief, or keep the critique file(s) **outside** any holdout-bearing
+   dir and reference those — never hand a forbid role a `.sparra/…` path to read itself (its
+   readscope excludes `.sparra/`, so the read is blocked).
 2. **Generate.** `run_role(roleKind="generator", briefPath=…, contractPath=…,
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",

@@ -10,7 +10,7 @@ const VALID_KINDS: RoleKind[] = ["generator", "contract-generator", "contract-ev
  * (the MCP `run_role` tool is the interactive surface). Holdout is passed by PATH;
  * the runner is the only thing that reads it, and only for the evaluator.
  */
-export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolean>, runRoleFn: typeof runRole = runRole): Promise<void> {
+export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolean | string[]>, runRoleFn: typeof runRole = runRole): Promise<void> {
   banner("sparra role run");
   const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
   if (!VALID_KINDS.includes(kind)) {
@@ -63,7 +63,7 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
 export function roleRequestFromFlags(
   ctx: Ctx,
   kind: RoleKind,
-  flags: Record<string, string | boolean>,
+  flags: Record<string, string | boolean | string[]>,
   brief: { briefText?: string; briefPath?: string }
 ): RoleRunRequest {
   return {
@@ -73,6 +73,10 @@ export function roleRequestFromFlags(
     brief: brief.briefText,
     briefPath: brief.briefPath,
     contractPath: typeof flags.contract === "string" ? (flags.contract as string) : undefined,
+    // `--prior-critique <path>` (repeatable) → prior-round critique files for a contract-evaluator
+    // re-critique. The parser collapses a single occurrence to a string and repeats to an array, so
+    // normalize both to a string[] (a bare `--prior-critique` with no value is dropped).
+    priorCritiquePaths: priorCritiquePathsFromFlag(flags["prior-critique"]),
     holdoutPath: typeof flags.holdout === "string" ? (flags.holdout as string) : undefined,
     out: typeof flags.out === "string" ? (flags.out as string) : undefined,
     backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,
@@ -91,9 +95,18 @@ export function roleRequestFromFlags(
   };
 }
 
+/** Normalize the repeatable `--prior-critique` flag into a `priorCritiquePaths` array (given order
+ *  preserved), or undefined when absent. The generic CLI parser yields a bare string for one
+ *  occurrence and a string[] for several; a value-less `--prior-critique` (parsed as boolean `true`)
+ *  contributes no path. */
+function priorCritiquePathsFromFlag(flag: string | boolean | string[] | undefined): string[] | undefined {
+  const paths = (Array.isArray(flag) ? flag : [flag]).filter((v): v is string => typeof v === "string");
+  return paths.length ? paths : undefined;
+}
+
 /** Parse a `--budget <usd>` flag into a per-call USD cap, or undefined (use the config default).
  *  `0` is preserved (it means unlimited per budget.ts); a non-numeric value is ignored. */
-function parseBudget(flag: string | boolean | undefined): number | undefined {
+function parseBudget(flag: string | boolean | string[] | undefined): number | undefined {
   if (typeof flag !== "string") return undefined;
   const n = Number(flag);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
@@ -101,7 +114,7 @@ function parseBudget(flag: string | boolean | undefined): number | undefined {
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 /** Parse a `--effort` flag into a valid RoleConfig effort, or undefined (use the role's config). */
-function parseEffort(flag: string | boolean | undefined): RoleRunRequest["effort"] {
+function parseEffort(flag: string | boolean | string[] | undefined): RoleRunRequest["effort"] {
   if (typeof flag !== "string") return undefined;
   return (EFFORTS as readonly string[]).includes(flag) ? (flag as RoleRunRequest["effort"]) : undefined;
 }

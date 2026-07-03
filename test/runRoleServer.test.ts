@@ -105,6 +105,20 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     expect(req.keepWorktree).toBeUndefined();
   });
 
+  it("forwards priorCritiquePaths verbatim (contract-evaluator re-critique; .sparra/ paths OK)", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "contract-evaluator",
+      contractPath: "c.md",
+      priorCritiquePaths: [".sparra/loop-x/r1.md", ".sparra/loop-x/r2.md"],
+    });
+    expect(req.priorCritiquePaths).toEqual([".sparra/loop-x/r1.md", ".sparra/loop-x/r2.md"]);
+  });
+
+  it("leaves priorCritiquePaths undefined when not supplied", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "contract-evaluator", contractPath: "c.md" });
+    expect(req.priorCritiquePaths).toBeUndefined();
+  });
+
   it("forwards the rest of the overrides verbatim", () => {
     const req = toRunRoleRequest(ctx, {
       roleKind: "generator",

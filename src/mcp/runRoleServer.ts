@@ -13,6 +13,7 @@ export interface RunRoleToolArgs {
   brief?: string;
   briefPath?: string;
   contractPath?: string;
+  priorCritiquePaths?: string[];
   workspace?: string;
   holdoutPath?: string;
   backend?: string;
@@ -40,6 +41,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     brief: args.brief,
     briefPath: args.briefPath,
     contractPath: args.contractPath,
+    priorCritiquePaths: args.priorCritiquePaths,
     workspace: args.workspace,
     holdoutPath: args.holdoutPath,
     backend: args.backend,
@@ -149,6 +151,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
       brief: z.string().optional().describe("Task brief (inline). Provide this or briefPath."),
       briefPath: z.string().optional().describe("Path to a task-brief file."),
       contractPath: z.string().optional().describe("Path to the agreed contract."),
+      priorCritiquePaths: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "contract-evaluator re-critique ONLY: paths to this contract's prior-round critiques, in round order (Round 1 first). The runner reads them itself and inlines them (labeled by round, prefixed with the RE-CRITIQUE instruction) ahead of the contract — so a fresh evaluator grades the DELTA, not from scratch. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to another role is an error."
+        ),
       workspace: z.string().optional().describe("Working dir / artifact dir (default: project root)."),
       holdoutPath: z.string().optional().describe("Holdout file PATH (evaluator-only). Contents are never returned."),
       backend: z.string().optional().describe("Backend override: claude | codex | … (default: the role's config)."),
