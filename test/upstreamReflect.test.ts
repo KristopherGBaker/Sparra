@@ -219,10 +219,9 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(13);
-    // Regenerated 2026-07-02 (E1): the "contract-evaluator" prompt was intentionally edited — its
-    // ANCHOR/FIDELITY clauses now PERMIT cross-checking an explicitly NAMED plan doc + existing cwd
-    // behavior while STILL forbidding unrelated-project plans. No other prompt changed; expected drift.
-    expect(h.digest("hex")).toBe("5bf84f6d4ca7d770491e7343cbe5c02ccf2d5cf60e10710b2f62b435a9395f80");
+    // Regenerated 2026-07-03 (U1): the "contract-generator" prompt was intentionally edited to
+    // start captured artifacts at the first markdown heading with no conversational preamble.
+    expect(h.digest("hex")).toBe("136e41cf99297c0a70dfc5686816045561db8341da9751a66d4d8c64b4c91935");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

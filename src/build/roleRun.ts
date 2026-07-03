@@ -27,6 +27,7 @@ import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } fro
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
+import { normalizeOutCapture } from "./outCapture.ts";
 import { info, warn } from "../util/log.ts";
 
 /**
@@ -751,7 +752,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       result.outPath = req.out;
     }
   } else if (req.out) {
-    await writeText(req.out, res.resultText);
+    await writeText(req.out, normalizeOutCapture(res.resultText).text);
     result.outPath = req.out;
   }
 

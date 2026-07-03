@@ -104,6 +104,9 @@ The few that matter most:
   `maxTokensPerItem` is off. The standalone role surfaces override the USD cap per call:
   `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s `--budget <usd>` (omit = config cap;
   `0` = unlimited).
+- **`run_role` / `role run` `out` capture** — non-evaluator artifacts are normalized from the
+  first markdown heading (heading-less output is trimmed + warned); evaluator `out` remains the
+  harness verdict template. See `docs/role-runner.md`.
 - **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
   rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by

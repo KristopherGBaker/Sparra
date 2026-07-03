@@ -200,6 +200,13 @@ plan→freeze→build.
 one. Writers/proposers (`generator`, `contract-generator`) still require an explicit `--brief`, and
 `contract-evaluator` needs at least a `--contract` (nothing to critique otherwise).
 
+When `--out` / `out` captures a non-evaluator role's markdown artifact, the runner writes
+from the first real markdown heading (`#` through `######`) and drops any conversational
+preamble before it; headings inside fenced code blocks are ignored. If no heading is found,
+the raw completion is trimmed, written with a trailing newline, and a warning is emitted so
+the conductor never gets an accidental empty artifact. Evaluator `--out` is unchanged: it
+writes the harness-built verdict template, not the raw model text.
+
 ## What the runner enforces (the holdout wall)
 - **Only the evaluator** ever sees holdout contents — they're injected into its prompt
   by the runner. Every other ("forbid") role's brief is checked with

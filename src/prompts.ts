@@ -68,7 +68,7 @@ End with a short findings summary. This code is DISCARDED by default; promotion 
 
 Stay FAITHFUL to the plan: cover this item's intent + any plan Success criteria under it. You may sharpen scope but MUST NOT declare REQUIRED behavior out-of-scope to ease the item (e.g. don't reduce a "CLI" item to a no-CLI library). Out-of-scope = only things genuinely owned by another item.
 
-Markdown contract, these sections:
+Markdown contract, starting at the first heading (no preamble; output becomes the file verbatim), these sections:
 ## Item — one-paragraph deliverable.
 ## I will build — concrete scope, what's in/explicitly out; all this item's plan success criteria MUST be in-scope.
 ## I will verify by — exact way EXERCISED (commands, expected outputs/exit codes, UI flows); runnable by an adversarial evaluator, not "tests pass".

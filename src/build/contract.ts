@@ -11,6 +11,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider, redactHoldout } from "./holdout.ts";
 import { classifyExec, extractVerifyCommands, renderExecOutcome, runVerifyCommand, type CommandExecutor } from "./exec.ts";
 import { contractModeClauses } from "./modeText.ts";
+import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
 
 const AGREED = "CONTRACT: AGREED";
@@ -107,7 +108,7 @@ export async function negotiateContract(
       traceDir,
       traceSeq: seq++,
     });
-    proposal = genRes.resultText.trim();
+    proposal = normalizeOutCapture(genRes.resultText).text.trim();
     await appendText(file, `### Round ${round} — proposal\n\n${proposal}\n\n`);
 
     const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\nPROPOSED CONTRACT:\n${proposal}`;
