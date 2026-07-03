@@ -2,134 +2,107 @@
 
 [![CI](https://github.com/KristopherGBaker/Sparra/actions/workflows/ci.yml/badge.svg)](https://github.com/KristopherGBaker/Sparra/actions/workflows/ci.yml)
 
-A long-running **adversarial build harness**. It builds software one work item at a time: each item is negotiated into a checkable "done" contract, implemented by a generator, then graded by an adversarial evaluator that *actually runs the artifact*, with **cross-model judging** (Claude builds while Codex judges, or vice versa) and an optional **holdout wall** the builder can't overfit to. It works on **new and existing codebases**, over pluggable agent backends (**Claude and Codex** today).
+An **adversarial build harness**. Sparra builds software one work item at a time: each item is negotiated into a checkable "done" contract, implemented by a generator, then graded by an adversarial evaluator that **actually runs the artifact** — with **cross-model judging** (Claude builds while Codex judges, or vice versa) and an optional **holdout wall** of evaluator-only checks the builder can't overfit to.
 
-> **Status:** young and still finding its form, but already earning its keep on real projects (and on Sparra itself). Inspired by the Anthropic workshop [Build Agents That Run for Hours](https://youtu.be/mR-WAvEPRwE) (Ash Prabaker & Andrew Wilson).
-
-**Two ways to drive it:**
-
-1. **Interactively, from a Claude Code session** (how most sessions go). The **`/sparra-loop` skill** puts *you* on the wheel: **contract → generate → cross-model adversarial evaluate → pivot/accept**, with the holdout wall enforced by the runner. You choose how hands-on to be — steer at every step, or let Claude Code run it in **auto mode** and step in only when you see the need (the adversarial evaluator already plays the "catch it going sideways" role, so light-touch steering is enough for most runs). Same rigor as the autonomous loop, your hand as near or far from the wheel as you like.
-2. **Fully autonomous, as CLI phases**: `plan → freeze → build → reflect`. You hand off and the loop runs unattended, item by item. (See [Autonomous CLI phases](#autonomous-cli-phases).)
-
-The guiding principle: **the filesystem is the source of truth and the only shared state.** Every step reads its inputs from disk and writes its outputs to disk, so the whole thing is inspectable, diffable, and **resumable from any point**, and both modes share the same on-disk state and the same role-runner seam.
-
-The end-to-end lifecycle (the interactive loop drives the **build** step by hand; autonomous runs the whole column):
-
+```mermaid
+flowchart LR
+    contract["Negotiate a<br>'done' contract"] --> generate[Generator<br>implements]
+    generate --> exercise["Evaluator <b>exercises</b><br>the artifact for real"]
+    exercise --> grade{Grade}
+    grade -->|pass| accept[Accept &<br>commit]
+    grade -->|fail: feedback| generate
+    grade -->|stuck| pivot[Pivot: discard,<br>restart fresh]
+    pivot --> generate
 ```
- sparra init                      detect greenfield vs existing; scaffold .sparra/
-   ├─(existing)→ orient           map the repo → CODEBASE_MAP.md
-   ▼
- plan  (interactive)  ⇄  prototype (throwaway, for learning)
-   │   co-edit PLAN.md in a relentless one-question-at-a-time interview
-   │   ← you decide, nothing automated →
-   ▼
- freeze                           snapshot the plan as build input (your call)
-   ▼
- build (autonomous)               per item: negotiate a "done" contract → generate →
-   │                              evaluator EXERCISES it → grade → (code review) → pivot/accept → (measure) → commit
-   ▼
- reflect                          read the run's traces → propose prompt edits you approve
-   ▼
- new                              next feature, same project: archive this cycle, fresh plan
-```
+
+Works on new and existing codebases, over pluggable agent backends (**Claude and Codex** today — the Codex backend also fronts any OpenAI-compatible endpoint). Everything reads and writes the filesystem, so every run is inspectable, diffable, and resumable.
+
+> **Status:** young and still finding its form, but already earning its keep on real projects (and on Sparra itself). Inspired by the Anthropic workshop [Build Agents That Run for Hours](https://youtu.be/mR-WAvEPRwE).
 
 ## Quick start: drive it from Claude Code
 
-```bash
-# 1. From the Sparra repo, once: install + put the CLI/MCP server on PATH
-npm install                       # installs the Claude Agent SDK + deps
-npm link                          # put `sparra` / `sparra-run-mcp` on your PATH
-npm i @openai/codex-sdk           # optional: only if you want a Codex backend (also: `codex` CLI authed at ~/.codex)
-# auth: set ANTHROPIC_API_KEY, or be logged in via Claude Code
+The most common way to use Sparra: the **`/sparra-loop`** skill runs the loop above *inside an interactive Claude Code session*, with you on the wheel — steer every step, or let it run in auto mode and step in only when needed.
 
-# 2. Register the role-runner MCP server + install the driving skill (a Claude Code plugin)
-claude mcp add sparra-run --scope user -- sparra-run-mcp        # launch `claude` from the project (cwd = project root)
-claude plugin marketplace add "$PWD"                            # assumes you're in the Sparra repo; else use the clone path, e.g. ~/code/Sparra
-claude plugin install sparra@sparra-skills                      # gives you /sparra-loop and /sparra
+One-time setup, from a clone of this repo:
+
+```bash
+npm install && npm link           # puts `sparra` + `sparra-run-mcp` on your PATH
+npm i @openai/codex-sdk           # optional: only for a Codex backend (also needs the `codex` CLI authed)
+
+claude mcp add sparra-run --scope user -- sparra-run-mcp   # the role-runner MCP tool
+claude plugin marketplace add "$PWD"
+claude plugin install sparra@sparra-skills                 # gives you /sparra-loop and /sparra
 ```
 
-Then, from a Claude Code session in your project, invoke the **`/sparra-loop`** skill. *You* drive the loop, **contract → generate → cross-model adversarial evaluate → pivot/accept**, with the **holdout wall** enforced by the runner — steering every step or letting it run in auto mode and stepping in only when needed. It's the interactive analogue of the autonomous build loop: same rigor, your hand as near or far from the wheel as you like.
+Then open Claude Code **in your project** and type `/sparra-loop`. It sets the project up (`sparra init`, per-role backend/model split, optional holdout) and drives the loop:
 
-Both the **`/sparra-loop`** skill (drive the loop) and the **`/sparra`** skill (drive + debug Sparra) ship in that plugin, alongside a `sparra-role` subagent the conductor delegates role-runs to.
-
-**The seam under both modes is the role-runner**: run ONE Sparra role once, on a backend you pick.
-
-- The **`run_role` MCP tool** (server `sparra-run`) for an interactive session, and the `sparra role run` / `sparra eval` CLI for scripts and headless use.
-- Roles: `generator` · `contract-generator` · `contract-evaluator` · `evaluator` · `reviewer`.
-- The **holdout is passed BY PATH**: only the evaluator ever sees its contents; the parsed **verdict** comes back (never raw output).
-- Per-call **`--backend` / `--model` / `--effort`** (`low|medium|high|xhigh|max`) override the role's configured defaults for that one call.
-
-```bash
-# A Codex evaluator grading a Claude generator's WIP tree, against a contract + holdout:
-sparra eval . --contract contract.md --backend codex \
-  --holdout .sparra/HOLDOUT.md --out .sparra/verdicts/r1.md
-# (alias for: sparra role run --kind evaluator …)
+```mermaid
+sequenceDiagram
+    participant You
+    participant CC as Claude Code<br>(/sparra-loop)
+    participant R as Sparra role-runner
+    You->>CC: /sparra-loop "add feature X"
+    CC->>R: run_role contract-generator
+    CC->>R: run_role generator (e.g. Claude)
+    CC->>R: run_role evaluator (e.g. Codex) — sees the holdout, exercises the work
+    R-->>CC: verdict only (holdout stays redacted)
+    CC->>You: round summary — accept, iterate, or pivot?
 ```
 
-**Why this is the point:** **cross-model on tap** (Claude builds while Codex judges, or vice versa) gives a genuine independent second opinion. Use it for a one-off review of a round, or run **standalone `sparra eval <dir>`** to grade a work-in-progress tree against a contract (and an optional holdout): Sparra-grade adversarial rigor without the full plan→freeze→build loop. No `.sparra/` is required for an ad-hoc eval; it synthesizes a default-backed context. Add **`--worktree`** to run the evaluator in a **temporary linked git worktree** snapshotted from your WIP (uncommitted edits, untracked files, deletions — exactly what you see) — the exercise gets writable scratch there (no in-place EPERM on `node_modules/.vite-temp` etc.), your real tree is never written to, and the worktree is torn down afterwards (`--keep-worktree` retains it and prints its path).
+The holdout is passed **by path** and only the evaluator ever sees it; the runner returns the parsed verdict, never raw output. Details, guarantees, and the CLI equivalents (`sparra role run`, `sparra eval`): **[docs/role-runner.md](docs/role-runner.md)**.
 
-See **[docs/role-runner.md](docs/role-runner.md)** for install, the MCP wiring, and exactly what the holdout wall does (and doesn't) guarantee.
+**Just want a second opinion?** `sparra eval <dir> --contract contract.md --backend codex` grades any work-in-progress tree against a contract — no `.sparra/` setup required. Add `--worktree` to evaluate a snapshot without touching your tree.
 
-## How it works
+## Fully autonomous: the CLI phases
 
-- **Plan → freeze → build.** A relentless, human-led planning interview co-edits `PLAN.md`; nothing advances to building until *you* run `freeze`. → [docs/phases.md](docs/phases.md)
-- **Adversarial build loop.** Each work item gets a negotiated, proportionate "done" contract (a handful of checkable assertions, not a wishlist), is implemented by a generator, then **exercised for real** by an adversarial evaluator that grades it with evidence (and won't pass a flaky artifact, one that only "passes" via a degenerate/gamed input, or one whose own shipped tests crash as delivered). Stuck items **GAN-pivot**: discard and restart from scratch. An optional **code-review gate** adds a second lens on the diff (security, dead code, conventions) before acceptance. *Exercising the artifact for real, over rounds, is inherently **token-heavy** — that cost buys the rigor; the per-item budgets below bound it.* → [docs/build-loop.md](docs/build-loop.md#bounded-by-default-budgets)
-- **Pluggable agent backends.** Every model step runs through one interface, so you choose the backend **per role** (Claude *or* Codex, the latter also fronting any **OpenAI-compatible endpoint**: OpenRouter, or local LM Studio/Ollama) and can even have one family **build** while another **judges**, or route **per work item** (local for trivial/sensitive items, cloud for the hard ones). Roles can be handed **agent skills** (SKILL.md), loaded natively on Claude and inlined on Codex. → [docs/backends.md](docs/backends.md)
-- **Pluggable exerciser.** CLI, web, or **iOS/macOS**: for Apple apps the multimodal evaluator builds, launches the Simulator, drives the UI, and *reads screenshots* to verify UI changes. → [docs/ios.md](docs/ios.md)
-- **Post-accept measure (opt-in).** After an item is accepted, run the project's **own QA/benchmark harness** (`measure.command`), parse its JSON metrics, and diff them against a stored baseline to flag regressions a code-reading evaluator can't see (a perf cliff, a silently-disabled tier). **Non-blocking** — a signal that records an artifact + a memory line and feeds reflect, never a gate. Also standalone: `sparra measure`. → [docs/build-loop.md](docs/build-loop.md#measure)
-- **Bounded & safe by default.** Per-item USD/token budgets ("start closed"), a git-worktree boundary with a backend-independent escape backstop, and an optional **holdout wall** of evaluator-only checks the builder can't overfit to (a *reduced* on-disk surface: scope-exclusion + prompt-wall + verdict redaction, not an airtight box; see [docs/role-runner.md](docs/role-runner.md)). Accepted items can be **auto-committed** as agent-authored, atomic conventional commits (a cheap `committer` model splits the diff; harness executes) onto the Sparra branch, **never your main**. With `git.provisionDeps`, dependencies are auto-provisioned into the build worktree so verify/eval run there. → [docs/build-loop.md](docs/build-loop.md)
-- **Survives provider limits (unattended).** Opt-in **auto-restart**: when a model hits a rate/usage window, the loop switches to a configured **cross-provider fallback model** or **waits the window out**, then retries the same round, bounded by hard wait/restart caps and resumable from disk. → [docs/build-loop.md](docs/build-loop.md#auto-restart--model-fallback-on-provider-limits)
-- **Self-improving & resumable.** Full transcripts to `traces/`, `sparra reflect` proposes prompt diffs you approve, and `sparra prompts audit` runs a **conciseness auditor over Sparra's own role prompts**, proposing tightenings with a coverage-gated `--apply` (an independent verifier pass guards it; `--source default` audits the shipping defaults, report-only). Durable cross-run `memory.md`, and resume-from-disk at any phase. → [docs/configuration.md](docs/configuration.md)
-- **Everything is a knob.** Per-role models/backends/effort, rubric weights, pivot thresholds, budgets, deviation strictness, exerciser. → [docs/configuration.md](docs/configuration.md)
+Prefer to hand off? The same engine runs unattended as a sequence of phases — collaborative planning, a human freeze gate, then the autonomous build loop:
 
-## Autonomous CLI phases
-
-Prefer to hand off and let it run unattended? The same engine runs as a sequence of CLI phases:
+```mermaid
+flowchart TB
+    init["sparra init<br>(+ orient for existing repos)"] --> plan
+    plan["sparra plan — collaborative<br>interview, co-edits PLAN.md"] <-.-> proto["sparra prototype<br>(throwaway, for learning)"]
+    plan --> freeze["sparra freeze — <b>your call</b>,<br>locks the plan as build input"]
+    freeze --> build["sparra build — the autonomous<br>loop, item by item"]
+    build --> reflect["sparra reflect — proposes prompt<br>edits from the run's traces"]
+    reflect --> new["sparra new / finish —<br>next feature, fresh cycle"]
+```
 
 ```bash
-cd your-project/                  # new or existing; Sparra detects which
-sparra orient        # existing projects only → CODEBASE_MAP.md
-sparra plan          # the collaborative interview
-sparra freeze        # YOUR call; locks the plan as build input
-sparra build         # the autonomous generator/evaluator loop
-sparra reflect       # propose prompt improvements from the run's traces
+cd your-project/     # new or existing; Sparra detects which
+sparra plan && sparra freeze && sparra build && sparra reflect
 sparra status        # where am I? what's next?
-sparra new "next"    # done? start the next feature; archives this cycle, fresh plan
+sparra resume        # continue any phase from disk
 ```
 
-No build step: the bins run the TypeScript directly via `tsx`, so edits/`git pull` take effect immediately. (`npm link` symlinks back to this repo; keep it where it is. Undo: `npm rm -g sparra`.)
+`sparra build --step` pauses at each checkpoint for human steering; `sparra help` lists everything else (`batch`, `finish`, `clean`, `prompts audit`, `measure`, …). → [docs/phases.md](docs/phases.md)
 
-### More commands
+## Key ideas
 
-Beyond the phase flow above, the CLI exposes (run `sparra help` for the full signatures):
-
-- `prototype "<idea>"` · `log-finding <FINDINGS.md>` · `snapshot`: Phase B throwaway prototypes and folding findings back into `PLAN.md`.
-- `build [--fresh] [--only <item-id>] [--step contract,round,commit,item]`: `--step` pauses the autonomous loop at each checkpoint for human steering; `--only` rebuilds a single item.
-- `prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]`: compare/sync `.sparra/prompts` with the built-in defaults; `audit` is a concision review (see self-improvement above).
-- `batch [-k N]`: run N builds of the frozen plan and summarize the failures.
-- `finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]`: close out a cycle by landing the Sparra branch (PR or ff-only merge), tearing down, archiving.
-- `clean [--yes] [--force]`: prune stale Sparra worktrees/branches (dry-run by default).
-- `resume`: continue whatever phase you're in, from disk.
-- `role run …` / `eval …`: the interactive/cross-model role seam (see the quick start above).
+- **The evaluator runs your code.** Grading is evidence-based: it builds, launches, and exercises the artifact (CLI, web, or iOS Simulator with screenshot reading), and won't pass flaky or gamed results. → [docs/build-loop.md](docs/build-loop.md)
+- **Cross-model on tap.** Pick the backend per role — one model family builds while another judges, for a genuinely independent second opinion. → [docs/backends.md](docs/backends.md)
+- **Holdout wall.** Evaluator-only acceptance checks the builder never sees, so it can't teach to the test. → [docs/role-runner.md](docs/role-runner.md#what-the-runner-enforces-the-holdout-wall)
+- **Bounded & safe by default.** Per-item budgets, sandboxed permissions, and a git-worktree boundary — Sparra never commits to your main branch. → [docs/build-loop.md](docs/build-loop.md#sandbox-first-safety)
+- **Filesystem is the source of truth.** Contracts, verdicts, traces, and memory all live in `.sparra/` on disk — resumable from any point, and it survives provider rate limits unattended. → [docs/configuration.md](docs/configuration.md)
+- **Self-improving.** `sparra reflect` reads the run's traces and proposes prompt edits you approve. → [docs/phases.md](docs/phases.md#self-improvement-outer-loop)
 
 ## Docs
 
 | | |
 |---|---|
 | [Phases](docs/phases.md) | orient → plan ⇄ prototype → freeze → build → reflect; greenfield vs brownfield |
-| [The build loop](docs/build-loop.md) | contract negotiation, exercising, GAN pivots, holdout wall, sandbox-first safety, budgets, memory |
-| [Agent backends](docs/backends.md) | the `AgentBackend` seam, Claude + Codex, per-role + cross-backend evaluation |
-| [Role-runner](docs/role-runner.md) | run Sparra's roles (cross-model adversarial eval, holdout wall) from an interactive Claude Code session via `sparra role run` + the MCP `run_role` tool |
-| [iOS / macOS](docs/ios.md) | `xcodebuildmcp`, XcodeGen, the launch-screen requirement, multimodal UI grading |
-| [Configuration](docs/configuration.md) | every knob, on-disk layout, resuming |
+| [The build loop](docs/build-loop.md) | contract negotiation, exercising, pivots, budgets, code review, measure, memory |
+| [Role-runner](docs/role-runner.md) | the interactive seam: `/sparra-loop`, MCP `run_role`, `sparra eval`, the holdout wall |
+| [Agent backends](docs/backends.md) | Claude + Codex, per-role backends, OpenAI-compatible endpoints, skills |
+| [iOS / macOS](docs/ios.md) | Simulator builds, `xcodebuildmcp`, XcodeGen, multimodal UI grading |
+| [Configuration](docs/configuration.md) | every knob, the `.sparra/` on-disk layout, resuming |
 
 ## Requirements
 
-- **Node 20+**, and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
-- For the **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI (optional; only if you use it). A Codex role can also front any **OpenAI-compatible endpoint** (OpenRouter, or local LM Studio/Ollama) via `baseUrl`/`apiKey`. → [docs/backends.md](docs/backends.md#openai-compatible-endpoints-openrouter-lm-studio-ollama)
-- For **iOS/macOS** builds: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`.
+- **Node 20+** and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
+- Optional **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI. → [docs/backends.md](docs/backends.md)
+- Optional **iOS/macOS** exercising: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`. → [docs/ios.md](docs/ios.md)
 
-> SDK signatures are verified against the installed packages' own `.d.ts`, not training data. Claude Agent SDK pinned at `@anthropic-ai/claude-agent-sdk@0.3.186`.
+No build step — the bins run the TypeScript directly via `tsx`, so a `git pull` takes effect immediately.
 
 ## License
 
