@@ -155,4 +155,52 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     expect(deny("Grep", { pattern: "x", path: path.join(root, "src"), glob: ".sparra/**" })).toBeTruthy();
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  // U2 Gap A — a wildcard DIRECTORY segment that descends into .sparra enumerates filenames beneath
+  // it even when it matches no top-level artifact and is not globstar. The allow/deny pairs below fail
+  // against the pre-fix code (the mid-depth denials were allowed), so they are non-degenerate.
+  it("#1/#2 Glob with a wildcard-dir segment descending into .sparra is denied", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Glob", { pattern: ".s*/verdicts/*" })).toBeTruthy(); // NEW: mid-depth wildcard dir
+    expect(deny("Glob", { pattern: ".s*/traces/*" })).toBeTruthy(); // NEW
+    expect(deny("Glob", { pattern: ".s*/*" })).toBeTruthy(); // stays denied (matches .sparra/HOLDOUT.md)
+    expect(deny("Glob", { pattern: ".s*/**" })).toBeTruthy(); // stays denied (globstar into .sparra)
+    expect(deny("Glob", { pattern: ".s*" })).toBeTruthy(); // stays denied (names the .sparra dir)
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("#3 innocent globs whose wildcard tail never traverses into .sparra are allowed", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Glob", { pattern: "docs/*.md" })).toBeNull();
+    expect(deny("Glob", { pattern: "src/**/*.ts" })).toBeNull();
+    expect(deny("Glob", { pattern: "*.json" })).toBeNull();
+    expect(deny("Glob", { pattern: ".git/*" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // U2 Gap B — the direct path/basename Bash checks are case-insensitive so a lowercase name reads
+  // the real artifact on a case-insensitive FS. The allow cases still pass (exact basename, not a bare
+  // "holdout" substring), so the pair is non-degenerate.
+  it("#4/#5 Bash referencing a holdout basename/.sparra is denied case-insensitively", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Bash", { command: "cat holdout.md" })).toBeTruthy(); // NEW: lowercase basename
+    expect(deny("Bash", { command: "cat Holdout.MD" })).toBeTruthy(); // NEW: mixed case
+    expect(deny("Bash", { command: "ls .Sparra" })).toBeTruthy(); // NEW: mixed-case .sparra
+    expect(deny("Bash", { command: "cat HOLDOUT.md" })).toBeTruthy(); // exact-case, unchanged
+    expect(deny("Bash", { command: "ls .sparra" })).toBeTruthy(); // exact-case, unchanged
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("#6 Bash with legit source / prose (not an exact holdout basename) stays allowed", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Bash", { command: "cat src/build/holdout.ts" })).toBeNull();
+    expect(deny("Bash", { command: "grep redactHoldout src" })).toBeNull();
+    expect(deny("Bash", { command: "cat foo.test.ts" })).toBeNull();
+    expect(deny("Bash", { command: "echo holdout is redacted" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

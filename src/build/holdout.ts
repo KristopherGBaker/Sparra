@@ -150,6 +150,20 @@ export function makeHoldoutReadDecider(
     return segToRegex(head!).test(parts[0]!) && matchGlobPath(rest, parts.slice(1));
   };
 
+  // Does the glob (segments) DESCEND INTO `parts` — i.e. some prefix of the pattern fully consumes
+  // `parts` with at least one pattern segment left to enumerate BELOW it? Used to deny a wildcard-dir
+  // glob (`.s*/verdicts/*`) that lists filenames beneath `.sparra` without matching a specific artifact.
+  const matchGlobPrefix = (pat: string[], parts: string[]): boolean => {
+    if (parts.length === 0) return pat.length > 0; // reached the dir; remaining pattern lists inside it
+    if (pat.length === 0) return false;
+    const [head, ...rest] = pat;
+    if (head === "**") {
+      for (let i = 0; i <= parts.length; i++) if (matchGlobPrefix(rest, parts.slice(i))) return true;
+      return false;
+    }
+    return segToRegex(head!).test(parts[0]!) && matchGlobPrefix(rest, parts.slice(1));
+  };
+
   // A single-file READ is blocked when it IS / sits under a holdout artifact.
   const blockedReadTarget = (t: string) => {
     const abs = resolve(t);
@@ -227,6 +241,11 @@ export function makeHoldoutReadDecider(
       if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && matchGlobPath(restSegs, rel.split(path.sep)))
         return true;
     }
+    // The wildcard tail traverses INTO `.sparra` (enumerates filenames beneath it) even without
+    // matching a specific artifact file — a prefix of the tail resolves onto the protected dir.
+    const relDir = path.relative(base, sparraDir);
+    if (relDir && !relDir.startsWith("..") && !path.isAbsolute(relDir) && matchGlobPrefix(restSegs, relDir.split(path.sep)))
+      return true;
     return globstar && artifacts.some((a) => within(a, base)); // `**` descends into a contained artifact
   };
   const globHitsArtifact = (pattern: string, root: string): boolean =>
@@ -246,8 +265,11 @@ export function makeHoldoutReadDecider(
   // real holdout ARTIFACT (by literal path or matching wildcard) still trips the checks above.
   const hiddenGlob = /(?:^|[\s'"=:(<>|&/])\.[A-Za-z0-9_]*[*?[]/; // a dot-prefixed token containing a glob metachar
   const bashBlocked = (cmd: string): boolean => {
-    if (cmd.includes(sparraDir) || cmd.includes(sparraBase)) return true;
-    if ([...basenames].some((b) => cmd.includes(b))) return true;
+    // Case-insensitive on the direct path/basename substrings so a lowercase name on a
+    // case-insensitive FS (`cat holdout.md`, `.SPARRA/…`) still reads the real artifact — blocked.
+    const lc = cmd.toLowerCase();
+    if (lc.includes(sparraDir.toLowerCase()) || lc.includes(sparraBase.toLowerCase())) return true;
+    if ([...basenames].some((b) => lc.includes(b.toLowerCase()))) return true;
     if (hiddenGlob.test(cmd)) return true;
     for (const tok of cmd.split(/[\s;|&<>()'"=`]+/)) {
       if (tok && GLOB_META.test(tok) && tok.split("/").some(segNamesArtifact)) return true;

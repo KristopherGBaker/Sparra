@@ -691,9 +691,12 @@ describe("runRole — holdout never reaches the conductor", () => {
     expect(deny("Bash", { command: "cat *OUT.md" })).toBeTruthy();
     // Control: a wildcard token matching NO protected basename is allowed (not "deny any wildcard").
     expect(deny("Bash", { command: "cat *.test.ts" })).toBeNull();
-    // `head -5 holdout.md` is now ALLOWED: `holdout.md` is not a protected basename (`HOLDOUT.md`)
-    // and Bash is path-based — it only tripped the removed case-insensitive "holdout" substring check.
-    expect(deny("Bash", { command: "head -5 holdout.md" })).toBeNull();
+    // U2 case-insensitive FS closure: `holdout.md` IS the real `HOLDOUT.md` on macOS/APFS, so the
+    // EXACT-basename substring check is case-insensitive now — denied. The false-block we still avoid
+    // is a bare "holdout" substring: legit source like `src/build/holdout.ts`/`redactHoldout` stays OK.
+    expect(deny("Bash", { command: "head -5 holdout.md" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat src/build/holdout.ts" })).toBeNull();
+    expect(deny("Bash", { command: "grep redactHoldout src" })).toBeNull();
     // Ordinary verify/build commands (no hidden-glob, no holdout/.sparra token) still pass through.
     expect(deny("Bash", { command: "npm test" })).toBeNull();
     expect(deny("Bash", { command: "ls src/*.ts" })).toBeNull();
