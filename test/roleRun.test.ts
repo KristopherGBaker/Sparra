@@ -658,6 +658,17 @@ describe("runRole — holdout never reaches the conductor", () => {
     expect(deny("Grep", { path: ".", pattern: "x" })).toBeTruthy(); // "." → root, contains .sparra
     expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy();
     expect(deny("Glob", { pattern: "**/HOLDOUT.md" })).toBeTruthy(); // pattern names the holdout
+    // WILDCARD-basename evasion: a glob whose final segment MATCHES a protected basename (never
+    // spelling it out) is denied — the live holdout resolves to <root>/HOLDOUT.md by default, so
+    // these expand onto it. Rooted at the repo root AND as an explicit-path glob (same decision).
+    expect(deny("Glob", { pattern: "HOLDOUT.*" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "HOLD*" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "*OUT.md" })).toBeTruthy();
+    expect(deny("Glob", { path: dir, pattern: "HOLDOUT.*" })).toBeTruthy();
+    expect(deny("Glob", { path: dir, pattern: "*OUT.md" })).toBeTruthy();
+    // Control: a wildcard matching NO protected basename stays allowed (the matcher is not merely
+    // "deny any wildcard").
+    expect(deny("Glob", { path: "src", pattern: "*.test.ts" })).toBeNull();
     // A search rooted at a NON-holdout subdir is fine.
     expect(deny("Grep", { path: "src", pattern: "x" })).toBeNull();
     expect(deny("Glob", { path: "src", pattern: "*.ts" })).toBeNull();
@@ -673,6 +684,13 @@ describe("runRole — holdout never reaches the conductor", () => {
     expect(deny("Bash", { command: "cat .s*/*OUT*" })).toBeTruthy();
     expect(deny("Bash", { command: "cd .sp* && cat *.md" })).toBeTruthy();
     expect(deny("Bash", { command: "cat .*/HOLD*" })).toBeTruthy();
+    // WILDCARD-basename evasion in Bash (the round-2 hole): a token whose glob segment MATCHES a
+    // protected basename reads the live <root>/HOLDOUT.md directly without ever spelling it out.
+    expect(deny("Bash", { command: "cat HOLDOUT.*" })).toBeTruthy();
+    expect(deny("Bash", { command: "head HOLD*" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat *OUT.md" })).toBeTruthy();
+    // Control: a wildcard token matching NO protected basename is allowed (not "deny any wildcard").
+    expect(deny("Bash", { command: "cat *.test.ts" })).toBeNull();
     // `head -5 holdout.md` is now ALLOWED: `holdout.md` is not a protected basename (`HOLDOUT.md`)
     // and Bash is path-based — it only tripped the removed case-insensitive "holdout" substring check.
     expect(deny("Bash", { command: "head -5 holdout.md" })).toBeNull();

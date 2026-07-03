@@ -71,9 +71,16 @@ export function assertNoHoldoutLeak(role: string, prompt: string, holdoutText: s
  *      blocked only when the effective root reaches the holdout, or a path-shaped file filter
  *      (`glob`) names an artifact (judged as a Glob pattern).
  *    - Glob: the pattern IS path-shaped — blocked when any brace alternative resolves (with `..`
- *      and absolute prefixes applied) to/under an artifact, names a protected segment, or — being
- *      recursive (`**`) — descends into one. A pathless Glob of innocent explicit files is allowed
- *      even at a holdout-bearing cwd.
+ *      and absolute prefixes applied) to/under an artifact, names a protected segment (literal OR a
+ *      wildcard matching a protected basename — `HOLDOUT.*`/`HOLD*`/`*OUT.md`), or — being recursive
+ *      (`**`) — descends into one. A pathless Glob of innocent explicit files is allowed even at a
+ *      holdout-bearing cwd. ROOT CAUSE of an observed brace-Glob block (e.g. `{CLAUDE.md,
+ *      docs/build-loop.md,…}`) at a holdout-bearing repo root: it was the DESIGNED pathless-root
+ *      rule, NOT a pattern bug — a pattern-LESS search resolves its root (the `path` arg, else the
+ *      cwd) to the holdout-bearing repo root, so `blockedSearchRoot`'s ancestor check denies it;
+ *      `patternRefsHoldout` (a text-inspection of the pattern) never fired because there is no such
+ *      check. Here a PATTERNED Glob is instead decided on its resolved targets and never branches on
+ *      whether `path` was supplied, so a brace-glob of innocent files is allowed in BOTH forms.
  *    - Bash: best-effort and path-based (see below). */
 export function makeHoldoutReadDecider(
   ctx: Ctx,
@@ -92,6 +99,57 @@ export function makeHoldoutReadDecider(
     return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   };
   const artifacts = [...protectedFiles, sparraDir];
+
+  // Minimatch-style single-segment glob → anchored regex (matches ONE path segment; `*`/`?` never
+  // cross `/`). This is the defense against WILDCARD-basename evasion: exact-string equality alone
+  // let any wildcard in the final segment slip the wall (`HOLDOUT.*`, `HOLD*`, `*OUT.md` all evaded).
+  // `dot:false` semantics — a leading `*`/`?`/`[` will NOT match a name starting with `.` (so a bare
+  // `*` can't stand in for `.sparra`), but an explicit-dot pattern (`.s*`, `.[a-z]*`) still can.
+  const GLOB_META = /[*?[\]]/;
+  const segToRegex = (seg: string): RegExp => {
+    let re = "";
+    for (let k = 0; k < seg.length; k++) {
+      const c = seg[k]!;
+      if (c === "*") re += "[^/]*";
+      else if (c === "?") re += "[^/]";
+      else if (c === "[") {
+        let end = k + 1;
+        if (seg[end] === "!" || seg[end] === "^") end++;
+        if (seg[end] === "]") end++; // a literal `]` as the first class member
+        while (end < seg.length && seg[end] !== "]") end++;
+        if (end >= seg.length) re += "\\["; // unclosed class → literal `[`
+        else {
+          re += "[" + seg.slice(k + 1, end).replace(/^!/, "^") + "]";
+          k = end;
+        }
+      } else re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+    const head = /[*?[]/.test(seg[0] ?? "") ? "(?!\\.)" : ""; // leading wildcard doesn't match a dotfile
+    return new RegExp("^" + head + re + "$");
+  };
+  const artifactNames = new Set([sparraBase, ...basenames]);
+  // Does a path segment NAME a protected artifact — the `.sparra` dir or a protected basename?
+  // Exact match, OR a WILDCARD segment whose glob matches one of those names. `**` (recursion, not a
+  // basename) is excluded here. Directory-AGNOSTIC — used only by the best-effort Bash matcher, where
+  // a bare token like `HOLDOUT.*` is suspicious wherever it sits (the Glob path is dir-aware instead).
+  const segNamesArtifact = (seg: string): boolean =>
+    artifactNames.has(seg) ||
+    (GLOB_META.test(seg) && !seg.includes("**") && [...artifactNames].some((n) => segToRegex(seg).test(n)));
+
+  // Recursive minimatch of a relative glob (segments) against a relative path (segments); `**`
+  // matches zero or more path segments. Lets the Glob path ask, directory-AWARE, whether a wildcard
+  // pattern actually resolves ONTO a specific protected artifact under the dir it scans.
+  const matchGlobPath = (pat: string[], parts: string[]): boolean => {
+    if (pat.length === 0) return parts.length === 0;
+    const [head, ...rest] = pat;
+    if (head === "**") {
+      for (let i = 0; i <= parts.length; i++) if (matchGlobPath(rest, parts.slice(i))) return true;
+      return false;
+    }
+    if (parts.length === 0) return false;
+    return segToRegex(head!).test(parts[0]!) && matchGlobPath(rest, parts.slice(1));
+  };
+
   // A single-file READ is blocked when it IS / sits under a holdout artifact.
   const blockedReadTarget = (t: string) => {
     const abs = resolve(t);
@@ -137,17 +195,18 @@ export function makeHoldoutReadDecider(
   };
 
   // Does one brace-expanded GLOB alternative resolve onto a protected artifact? Decide on the path
-  // it targets, not its text: a literal `.sparra`/protected-basename segment names an artifact; the
-  // literal prefix (up to the first wildcard) is resolved (applying `..`/absolute) to the dir the
-  // glob scans from — deny when that dir IS/UNDER an artifact, or when a recursive `**` would
-  // descend into an artifact contained beneath it.
+  // it targets, not its text: a LITERAL `.sparra`/protected-basename segment names an artifact; else
+  // the literal prefix (up to the first wildcard) is resolved (applying `..`/absolute) to the dir the
+  // glob scans from — deny when that dir IS/UNDER an artifact, when the WILDCARD tail actually matches
+  // a protected artifact sitting under that dir (closing `HOLDOUT.*`/`HOLD*`/`*OUT.md` basename
+  // evasion, directory-aware), or when a recursive `**` would descend into an artifact beneath it.
   const altHitsArtifact = (alt: string, root: string): boolean => {
     const segs = alt.split("/").filter((s) => s !== "" && s !== ".");
-    if (segs.some((s) => s === sparraBase || basenames.has(s))) return true;
+    if (segs.some((s) => artifactNames.has(s))) return true; // a literal `.sparra`/basename segment
     const literal: string[] = [];
     let sawWildcard = false;
     for (const s of segs) {
-      if (/[*?[\]]/.test(s)) {
+      if (GLOB_META.test(s)) {
         sawWildcard = true;
         break;
       }
@@ -159,6 +218,15 @@ export function makeHoldoutReadDecider(
       : path.resolve(root, literal.join("/"));
     if (!sawWildcard) return protectedFiles.has(base) || within(base, sparraDir); // concrete target
     if (protectedFiles.has(base) || within(base, sparraDir)) return true; // scans from inside an artifact
+    // WILDCARD-basename evasion: does the glob (resolved under `base`) actually MATCH a protected
+    // artifact sitting in the dir it scans? (`HOLDOUT.*`/`HOLD*`/`*OUT.md` at a root holding the live
+    // <root>/HOLDOUT.md.) Directory-aware, so an innocent `docs/*.md` never reaches a root-level holdout.
+    const restSegs = segs.slice(literal.length);
+    for (const a of artifacts) {
+      const rel = path.relative(base, a);
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && matchGlobPath(restSegs, rel.split(path.sep)))
+        return true;
+    }
     return globstar && artifacts.some((a) => within(a, base)); // `**` descends into a contained artifact
   };
   const globHitsArtifact = (pattern: string, root: string): boolean =>
@@ -169,15 +237,22 @@ export function makeHoldoutReadDecider(
   // string check is airtight — the authoritative wall is that the holdout lives OUTSIDE the role's
   // cwd/read scope + the prompt wall + verdict redaction. We deny commands that reference a protected
   // artifact BY PATH: the `.sparra` dir (name or absolute), a protected basename (`HOLDOUT.md` /
-  // `HOLDOUT.frozen.md` / the explicit holdout), or a hidden-path glob (`.s*`, `.[a-z]*`, `.*`) that
-  // could expand into the dotted `.sparra`. We deliberately do NOT block on a bare case-insensitive
-  // "holdout" substring — that false-blocked legitimate source (`src/build/holdout.ts`,
-  // `redactHoldout`); a command naming a real holdout ARTIFACT still trips the checks above.
+  // `HOLDOUT.frozen.md` / the explicit holdout), a hidden-path glob (`.s*`, `.[a-z]*`, `.*`) that
+  // could expand into the dotted `.sparra`, or a WILDCARD token whose segment matches a protected
+  // basename (`cat HOLDOUT.*`, `head HOLD*`, `cat *OUT.md` — the same wildcard-basename evasion the
+  // Glob path closes; without it a live holdout at `<root>/HOLDOUT.md` is read directly). We
+  // deliberately do NOT block on a bare case-insensitive "holdout" substring — that false-blocked
+  // legitimate source (`src/build/holdout.ts`, `redactHoldout`, `cat *.test.ts`); a command naming a
+  // real holdout ARTIFACT (by literal path or matching wildcard) still trips the checks above.
   const hiddenGlob = /(?:^|[\s'"=:(<>|&/])\.[A-Za-z0-9_]*[*?[]/; // a dot-prefixed token containing a glob metachar
   const bashBlocked = (cmd: string): boolean => {
     if (cmd.includes(sparraDir) || cmd.includes(sparraBase)) return true;
     if ([...basenames].some((b) => cmd.includes(b))) return true;
-    return hiddenGlob.test(cmd);
+    if (hiddenGlob.test(cmd)) return true;
+    for (const tok of cmd.split(/[\s;|&<>()'"=`]+/)) {
+      if (tok && GLOB_META.test(tok) && tok.split("/").some(segNamesArtifact)) return true;
+    }
+    return false;
   };
   const DENY = "Holdout/.sparra is evaluator-only and not readable by this role.";
   const DENY_ROOT =
