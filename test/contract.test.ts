@@ -286,6 +286,136 @@ describe("negotiateContract — assertion-drop guard on revision", () => {
   });
 });
 
+/**
+ * U-B: the delta-critique protocol for re-critique rounds, exercised through negotiateContract with
+ * injected session/executor fakes (no live model calls). Verify-section-free, identical-assertion
+ * contracts isolate the delta protocol from the verify-probe and drop-guard machinery (both above).
+ */
+describe("negotiateContract — delta-critique protocol on re-critique rounds", () => {
+  // No "## I will verify by" section ⇒ the probe never fires; identical "## Assertions" each round
+  // ⇒ the drop guard never fires. `marker` only varies the (non-asserted) build section.
+  const plain = (marker: string) => `## Item\nA thing.\n## I will build\nX ${marker}.\n## Assertions\n1. it works\n`;
+
+  /** Scripted fake: generator emits `proposals[round-1]`, evaluator emits `critiques[round-1]`. */
+  function scripted(proposals: string[], critiques: string[]) {
+    const calls: RunSessionParams[] = [];
+    let g = 0;
+    let e = 0;
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      const text =
+        p.role === "contract-generator"
+          ? proposals[Math.min(g++, proposals.length - 1)]!
+          : critiques[Math.min(e++, critiques.length - 1)]!;
+      return { ok: true, subtype: "success", resultText: text, sessionId: "s", costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "" };
+    };
+    return { calls, fn };
+  }
+  const clean: CommandExecutor = async (_ws, cmd) => ({ ran: true, command: cmd, exitCode: 0, stdout: "", stderr: "", timedOut: false });
+  const evalPrompts = (calls: RunSessionParams[]) => calls.filter((c) => c.role === "contract-evaluator").map((c) => c.prompt);
+
+  it("round>1 evaluator prompts accumulate ALL prior critiques labeled by round + the RE-CRITIQUE marker; round 1 has neither (assertions 1, 2)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scripted(
+      [plain("v1"), plain("v2"), plain("v3")],
+      // r1/r2 do NOT agree (distinct sentinels); r3 agrees.
+      ["CRIT-R1-xyz: assertion 1 too loose.", "CRIT-R2-xyz: tighten the fixture.", "Good.\nCONTRACT: AGREED"]
+    );
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, clean);
+    expect(res.agreed).toBe(true);
+    const [p1, p2, p3] = evalPrompts(session.calls) as [string, string, string];
+
+    // Round 1: full-scope adversarial, no delta and no prior-critique block.
+    expect(p1).not.toContain("RE-CRITIQUE:");
+    expect(p1).not.toContain("CRIT-R1-xyz");
+    // Round 2: prior round-1 critique carried in + the delta marker.
+    expect(p2).toContain("RE-CRITIQUE:");
+    expect(p2).toContain("CRIT-R1-xyz");
+    expect(p2).toMatch(/Round 1 critique/);
+    // Round 3: BOTH prior critiques, EACH labeled by its round (defeats last-critique-only).
+    expect(p3).toContain("CRIT-R1-xyz");
+    expect(p3).toContain("CRIT-R2-xyz");
+    expect(p3).toMatch(/Round 1 critique/);
+    expect(p3).toMatch(/Round 2 critique/);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("a verify-probe bounce rides into the next round's evaluator prompt as prior-critique context (assertion 3)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = fakeSession((r) => (r === 1 ? "mytool --bogus" : "mytool run"));
+    const exec: CommandExecutor = async (_ws, cmd) => (cmd.includes("--bogus") ? usage(cmd) : behavioral(cmd));
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, exec);
+    const evals = evalPrompts(session.calls);
+    expect(evals).toHaveLength(2); // round 1 bounced by the probe, round 2 agreed
+    // The round-1 critique the round-2 evaluator sees INCLUDES the appended harness probe report.
+    expect(evals[1]!).toContain("HARNESS VERIFY-PROBE");
+    expect(evals[1]!).toContain("mytool --bogus");
+    expect(evals[1]!).toContain("RE-CRITIQUE:");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("the RE-CRITIQUE instruction states all four delta rules (assertion 4)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scripted([plain("v1"), plain("v2")], ["needs work", "CONTRACT: AGREED"]);
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, clean);
+    const p2 = evalPrompts(session.calls)[1]!;
+    expect(p2).toMatch(/RE-CRITIQUE:/);
+    expect(p2).toMatch(/each prior point is resolved/i); // prior-points-resolved check
+    expect(p2).toMatch(/new points outside the changed text/i); // no new points outside changed text…
+    expect(p2).toMatch(/correctness-critical/i); // …unless correctness-critical
+    expect(p2).toMatch(/reverse a position[^]*name the round/i); // no reversal without naming the round
+    expect(p2).toMatch(/style\/conciseness nits are non-blocking/i); // style nits non-blocking on re-critique
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("a 1-round agreement keeps the round-1 shape: Be adversarial + PROPOSED CONTRACT, no prior-critique block, no RE-CRITIQUE marker (assertion 9)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scripted([plain("v1")], ["CONTRACT: AGREED"]);
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, clean);
+    expect(res.agreed).toBe(true);
+    const evals = evalPrompts(session.calls);
+    expect(evals).toHaveLength(1);
+    expect(evals[0]!).toContain("Be adversarial");
+    expect(evals[0]!).toContain("PROPOSED CONTRACT:");
+    expect(evals[0]!).not.toContain("RE-CRITIQUE:");
+    expect(evals[0]!).not.toContain("PRIOR CRITIQUES");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+});
+
+describe("U-B delta-critique — prompt + skill + docs", () => {
+  it("DEFAULT_PROMPTS[contract-evaluator] folds the re-critique protocol into the batching sentence (assertion 5)", () => {
+    const p = DEFAULT_PROMPTS["contract-evaluator"]!;
+    expect(p).toMatch(/grade only the delta/i); // delta-only
+    expect(p).toMatch(/never reverse a prior-round position without naming/i); // no uncited reversals
+    expect(p).toMatch(/style\/conciseness nits as non-blocking/i); // style nits non-blocking on re-critique
+    // Folded INTO the existing batching sentence (same line), not a new section.
+    const batchLine = p.split("\n").find((l) => l.includes("Batch ALL blocking issues"))!;
+    expect(batchLine).toBeTruthy();
+    expect(batchLine).toMatch(/RE-CRITIQUE round/);
+  });
+
+  it("SKILL.md instructs conductor-side re-critique (prior critique + delta instruction; inline, not a .sparra path) and bumps the plugin version (assertion 6)", () => {
+    const skill = fs.readFileSync(path.join(process.cwd(), "skills/sparra-loop/SKILL.md"), "utf8");
+    expect(skill).toMatch(/RE-CRITIQUE/);
+    expect(skill).toMatch(/prior critique/i); // carry the prior critique text
+    expect(skill).toMatch(/delta instruction/i); // …and state the delta instruction
+    expect(skill).toMatch(/inline/i); // forbid role can't read .sparra/ — inline it
+    const mkt = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".claude-plugin/marketplace.json"), "utf8"));
+    expect(mkt.metadata.version).toBe("2026.7.3.8");
+  });
+
+  it("docs/build-loop.md documents the delta-critique protocol (assertion 7)", () => {
+    const doc = fs.readFileSync(path.join(process.cwd(), "docs/build-loop.md"), "utf8");
+    expect(doc).toMatch(/Delta-critique protocol/i);
+    expect(doc).toMatch(/RE-CRITIQUE:/);
+  });
+});
+
 describe("Q3 config defaults + prompt edits", () => {
   it("knobs default on: contract.probeVerifyCommands=true, build.flakinessReruns=2", () => {
     const cfg = defaultConfig();

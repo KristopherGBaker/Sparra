@@ -76,6 +76,18 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    step too when you want a model to propose rather than write it yourself. Skipping the
    contract-evaluator gate is allowed only for a throwaway one-off the user explicitly
    wants quick — say so when you skip it.
+   **Re-critique rounds are DELTA reviews, not fresh reviews.** A fresh contract-evaluator
+   session re-reviews from scratch each round — reversing its own prior positions and
+   promoting nits to blockers — so past round 1 you MUST carry the **prior critique text**
+   into the brief and state the delta instruction: *"RE-CRITIQUE — verify each prior point is
+   resolved; raise nothing new outside the changed text unless correctness-critical; don't
+   reverse a prior-round position without naming the round and why; style/conciseness nits are
+   non-blocking."* Round 1 stays full-scope adversarial (that's where every blocking issue
+   belongs). IMPORTANT — the contract-evaluator is a forbid role whose read scope **excludes
+   `.sparra/`** (holdout-bearing), so a critique file saved under `.sparra/` is **unreadable**
+   by it: **inline** the prior critique text (or its gist) directly in the brief, or keep the
+   prior-critique file(s) **outside** any holdout-bearing dir and pass those — never just hand
+   it a `.sparra/…` path.
 2. **Generate.** `run_role(roleKind="generator", briefPath=…, contractPath=…,
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",

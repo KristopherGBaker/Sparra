@@ -219,9 +219,9 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(13);
-    // Regenerated 2026-07-03 (U-A): contract-generator prompt gained patch-semantics revision
-    // discipline (assertions survive unless critiqued; explicit dropped/changed list).
-    expect(h.digest("hex")).toBe("bbb6c69c36e4f443f39a2caa7bd272a4b01996df4647a99a921876634c5f7945");
+    // Regenerated 2026-07-03 (U-B): contract-evaluator prompt gained the re-critique delta
+    // protocol (prior points resolved; no uncited reversals; style nits non-blocking).
+    expect(h.digest("hex")).toBe("e92b43c5699b1e6ed605f0a752fed9de1c4317eab2f84a79647d8a5ef2a0f30f");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

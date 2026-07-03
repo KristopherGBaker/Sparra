@@ -19,6 +19,14 @@ import { mergedBuildEnv } from "./env.ts";
 const AGREED = "CONTRACT: AGREED";
 const SECTION = "## AGREED CONTRACT";
 
+// Delta instruction injected on round>1 evaluator calls (alongside the prior critiques). A fresh
+// session re-reviews from scratch each round — reversing its own prior positions and promoting
+// nits to blockers — so re-critique rounds must be scoped to the delta: confirm prior points are
+// resolved, don't reopen settled ground, don't reverse without citing the round. The distinctive
+// `RE-CRITIQUE:` marker is asserted by the round-shape tests.
+const RE_CRITIQUE_INSTRUCTION =
+  `RE-CRITIQUE: this is a revision of a contract you already critiqued (your prior critiques are below, labeled by round). Verify each prior point is resolved; do NOT raise new points outside the changed text unless correctness-critical; do NOT reverse a position you took in a prior round unless you name the round and why; style/conciseness nits are non-blocking on re-critique.`;
+
 export interface ContractResult {
   text: string;
   agreed: boolean;
@@ -87,6 +95,10 @@ export async function negotiateContract(
   let seq = traceSeqStart;
   let agreed = false;
   const maxRounds = ctx.config.contract.maxNegotiationRounds;
+  // Every prior round's FINAL critique text (incl. harness reports appended below), labeled by
+  // round. Carried into round>1 evaluator calls so a fresh session sees what it already said and
+  // grades only the delta instead of relitigating settled points (see RE_CRITIQUE_INSTRUCTION).
+  const priorCritiques: string[] = [];
 
   for (let round = 1; round <= maxRounds; round++) {
     info(`Contract ${item.id}: round ${round}/${maxRounds}`);
@@ -132,7 +144,14 @@ export async function negotiateContract(
       }
     }
 
-    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\nPROPOSED CONTRACT:\n${proposal}`;
+    // Round>1 is a RE-critique: carry every prior round's finalized critique (labeled by round,
+    // harness reports included) plus the delta instruction, so the evaluator verifies resolution
+    // instead of re-reviewing from scratch. Round 1 keeps the full-scope adversarial framing —
+    // that's where every blocking issue belongs.
+    if (round > 1) priorCritiques.push(`--- Round ${round - 1} critique ---\n${critique}`);
+    const reCritiqueBlock =
+      round > 1 ? `${RE_CRITIQUE_INSTRUCTION}\n\nPRIOR CRITIQUES (verify each is resolved):\n${priorCritiques.join("\n\n")}\n\n` : "";
+    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\n${reCritiqueBlock}PROPOSED CONTRACT:\n${proposal}`;
     assertNoHoldoutLeak("contract-evaluator", evalTask, holdout);
     const evalRes = await run({
       role: "contract-evaluator",
