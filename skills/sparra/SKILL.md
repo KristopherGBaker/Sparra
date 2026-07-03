@@ -54,7 +54,7 @@ sparra prototype "…"   # optional throwaway spike → FINDINGS.md
 sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOUT) as build input
 sparra build           # the autonomous generator↔evaluator loop
 sparra measure [dir]   # run measure.command → parse JSON metrics → diff vs baseline (compare-only; --set-baseline; --worktree)
-sparra reflect         # propose prompt edits from the run's traces (--apply to accept)
+sparra reflect [--traces <glob-or-dir>] # propose prompt edits from build or role-run traces (--apply to accept)
 sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage per-finding harness reflections in ~/.sparra/reflections (SPARRA_HOME); --clear archives ALL
 sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
 sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
@@ -251,7 +251,8 @@ with failed assertion evidence + UN-RUN/no-signal ids); anything deeper → the 
   per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
 - **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;
   Claude loads natively (settingSources stays []), Codex inlines the SKILL.md.
-- After a meaningful run, `sparra reflect` turns the traces into proposed prompt edits, and routes any
+- After a meaningful run, `sparra reflect` turns build traces or auto-discovered interactive
+  `role-run-*` traces into proposed prompt edits (`--traces <glob-or-dir>` overrides selection), and routes any
   **harness-level** findings (about Sparra itself, not this project's prompts) into a shared user-level
   inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides), each finding written as its own `###` section.
   From the Sparra repo, `sparra reflect --upstream` lists every finding with a global 1-based index;

@@ -238,7 +238,7 @@ Output ONLY a fenced \`\`\`json object, nothing else:
 { "complete": true, "missing": [{"rule": "..."}] }
 \`\`\``,
 
-  reflector: `You are the REFLECTOR, the outer self-improvement loop. Read traces of a completed build run; find where the EVALUATOR was too lenient, too harsh, or diverged from the rubric; propose prompt edits.
+  reflector: `You are the REFLECTOR, the outer self-improvement loop. Read traces from a completed Sparra run; find where the EVALUATOR was too lenient, too harsh, or diverged from the rubric; propose prompt edits.
 
 READ-ONLY on the build; your only output is a proposed prompt improvement — never apply it yourself (human reviews/applies).
 

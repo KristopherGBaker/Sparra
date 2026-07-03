@@ -63,7 +63,7 @@ flowchart TB
     plan["sparra plan — collaborative<br>interview, co-edits PLAN.md"] <-.-> proto["sparra prototype<br>(throwaway, for learning)"]
     plan --> freeze["sparra freeze — <b>your call</b>,<br>locks the plan as build input"]
     freeze --> build["sparra build — the autonomous<br>loop, item by item"]
-    build --> reflect["sparra reflect — proposes prompt<br>edits from the run's traces"]
+    build --> reflect["sparra reflect — proposes prompt<br>edits from build or role-run traces"]
     reflect --> new["sparra new / finish —<br>next feature, fresh cycle"]
 ```
 
@@ -83,7 +83,7 @@ sparra resume        # continue any phase from disk
 - **Holdout wall.** Evaluator-only acceptance checks the builder never sees, so it can't teach to the test. → [docs/role-runner.md](docs/role-runner.md#what-the-runner-enforces-the-holdout-wall)
 - **Bounded & safe by default.** Per-item budgets, sandboxed permissions, and a git-worktree boundary — Sparra never commits to your main branch. → [docs/build-loop.md](docs/build-loop.md#sandbox-first-safety)
 - **Filesystem is the source of truth.** Contracts, verdicts, traces, and memory all live in `.sparra/` on disk — resumable from any point, and it survives provider rate limits unattended. → [docs/configuration.md](docs/configuration.md)
-- **Self-improving.** `sparra reflect` reads the run's traces and proposes prompt edits you approve. → [docs/phases.md](docs/phases.md#self-improvement-outer-loop)
+- **Self-improving.** `sparra reflect` reads build traces, or safe ad-hoc role-run trace bundles, and proposes prompt edits you approve. → [docs/phases.md](docs/phases.md#self-improvement-outer-loop)
 
 ## Adapt it to your stack
 

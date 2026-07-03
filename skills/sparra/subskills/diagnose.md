@@ -44,10 +44,11 @@ From the project root (the dir you ran `sparra` in):
    (blocking vs advisory, with `blockOn`). An item that passes the exercise but isn't accepted
    was blocked here.
 
-5. **`.sparra/traces/<run>/NN-<role>.md`** — the full transcript of every role session as
-   markdown. The most recent file (by mtime) shows current activity. Read these when the
-   verdict/contract summary isn't enough — e.g. to see what the generator actually did, or
-   how the evaluator exercised the artifact. `ls -lt .sparra/traces/*/ | head`.
+5. **`.sparra/traces/<run>/NN-<role>.md` / `.sparra/traces/role-run-*/NN-role-run-*.md`** —
+   full role transcripts as markdown. The most recent file (by mtime) shows current activity.
+   Read these when the verdict/contract summary isn't enough — e.g. to see what the generator
+   actually did, or how a non-evaluator exercised the artifact. Evaluator role-run traces may
+   contain holdout text, so prefer verdicts. `ls -lt .sparra/traces/*/ | head`.
 
    **`.sparra/measure/`** — if `measure.enabled`, the post-accept QA step's `baseline.json`
    (metrics keyed by name) + a rendered `measure-<stamp>.md` report per accept (metrics vs.
