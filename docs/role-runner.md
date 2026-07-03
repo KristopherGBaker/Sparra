@@ -184,10 +184,13 @@ sparra role run --kind evaluator --backend codex \
 Flags: `--kind` (generator | contract-generator | contract-evaluator | evaluator |
 reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--brief <file>` |
 `--brief-text "…"`, `--contract <file>`, `--holdout <file>`, `--workspace <dir>`, `--out <file>`,
-`--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited), and
+`--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited),
 `--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
 generator** auto-run `build.verifyCommands` through the strict allow-hook; no-op on `eval`, which
-runs the evaluator, not a writer).
+runs the evaluator, not a writer), and `--prior-critique <file>` (repeatable, contract-evaluator
+only — the CLI form of the `priorCritiquePaths` MCP arg: the RUNNER reads each file and inlines it
+into the re-critique task labeled by round in the order given, so critique files under `.sparra/`
+work even though the role itself can't read them).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
 [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>]` (alias for `role run --kind
