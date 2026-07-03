@@ -10,7 +10,7 @@ import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type Int
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
-import { budgetExceeded } from "./budget.ts";
+import { budgetExceeded, costUsdOrZero } from "./budget.ts";
 import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
@@ -129,7 +129,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   };
   const res = await run(baseReq);
   let resultText = res.resultText;
-  let costUsd = res.costUsd;
+  let costUsd = costUsdOrZero(res.costUsd);
   let tokens = res.tokens;
 
   // Shape-aware: the verdict is the JSON with rubric scores — not just the last
@@ -153,7 +153,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
       prompt: "Your previous reply had no parseable JSON verdict. Re-emit ONLY the JSON block per your instructions — nothing else.",
       resume: res.sessionId,
     });
-    costUsd += retry.costUsd;
+    costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;
     const reparsed = extractJsonWhere<Verdict>(retry.resultText, isVerdict);
     if (reparsed) {

@@ -89,9 +89,12 @@ The loop "starts closed". Each item is capped by **cost and/or tokens**; crossin
 
 - `build.maxBudgetUsdPerItem` — default **5**. Note `total_cost_usd` is *notional* (tokens × list price); on a subscription you're billed in tokens, so this is a proxy.
 - `build.maxTokensPerItem` — a **direct token ceiling**, the meaningful lever on a subscription / with Codex (which reports tokens, not USD). Default `0` (off).
+- `build.zeroCostTokenCap` — fallback token ceiling used only when the USD cap is active, reported item cost stays zero/unknown, and `maxTokensPerItem` is off. Default `0` (off). If it trips, the item halts as `BUDGET_EXCEEDED` and the halt message names `zeroCostTokenCap`.
 - `maxTurnsPerSession` / `maxRoundsPerItem` bound runaways regardless of pricing.
 
 Set a cap to `0` to opt out of that dimension.
+
+When an item finishes with `maxBudgetUsdPerItem > 0` but reported cost stayed zero/unknown, Sparra warns that the USD cap did not bind and names the effective token bound: explicit `maxTokensPerItem`, fallback `zeroCostTokenCap`, or no token cap if both are off. Interactive `run_role` / `sparra role run` emits the same zero/unknown-cost warning for an active per-call USD cap.
 
 ## Auto-restart / model fallback on provider limits
 The budgets above are *your* caps. A different thing can stop a long unattended build: the **provider's** own rate / usage / session limit (e.g. Claude's 5-hour or 7-day plan window, an HTTP 429, a Codex quota). Without handling, a limit produces a dead session that the loop would misread as a failed round.

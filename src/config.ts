@@ -217,6 +217,11 @@ export interface SparraConfig {
      */
     maxTokensPerItem: number;
     /**
+     * Fallback TOKEN ceiling used only when the USD cap is active, reported cost stays
+     * zero/unknown, and `maxTokensPerItem` is off. Same convention: 0 = no fallback cap.
+     */
+    zeroCostTokenCap: number;
+    /**
      * Agent skills made available to the builder roles (generator, prototyper) by default.
      * Claude loads them natively (as a scoped local plugin, settingSources stays []); Codex
      * gets their SKILL.md inlined into the input. Per-role `roles.<role>.skills` overrides.
@@ -455,6 +460,7 @@ export function defaultConfig(): SparraConfig {
       escalateAfterRounds: 0,
       maxBudgetUsdPerItem: 5,
       maxTokensPerItem: 0,
+      zeroCostTokenCap: 0,
       // Off by default: opting in lets an unattended build sleep for hours waiting out a limit.
       autoRestart: { enabled: false, maxWaitSec: 21600, pollSec: 300, maxRestarts: 20 },
       skills: [],

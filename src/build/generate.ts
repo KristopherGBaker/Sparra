@@ -5,7 +5,7 @@ import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { scopedWriterGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { budgetExceeded } from "./budget.ts";
+import { budgetExceeded, costUsdOrZero } from "./budget.ts";
 import type { AssertionClaim } from "./claims.ts";
 import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
 import { readText } from "../util/io.ts";
@@ -130,7 +130,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     traceSeq: args.traceSeq,
   };
   const res = await run(baseReq);
-  let costUsd = res.costUsd;
+  let costUsd = costUsdOrZero(res.costUsd);
   let tokens = res.tokens;
 
   type Report = { report?: string; deviations?: Deviation[]; assertionsClaimed?: AssertionClaim[] };
@@ -152,7 +152,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
       prompt: "Your previous reply had no parseable report JSON. Re-emit ONLY the JSON block per your instructions — nothing else.",
       resume: res.sessionId,
     });
-    costUsd += retry.costUsd;
+    costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;
     parsed = extractJsonWhere<Report>(retry.resultText, isReport);
   }

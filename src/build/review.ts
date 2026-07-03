@@ -10,6 +10,7 @@ import { info, ok, warn } from "../util/log.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
+import { costUsdOrZero } from "./budget.ts";
 import type { WorkItem } from "./types.ts";
 
 export interface Finding {
@@ -128,5 +129,5 @@ ${conventions}Review for substance per your instructions and emit the JSON findi
   if (blocking.length) warn(`${item.id} code review: ${blocking.length} blocking, ${advisory.length} advisory.`);
   else ok(`${item.id} code review clean${advisory.length ? ` (${advisory.length} advisory)` : ""}.`);
 
-  return { findings, blocking, advisory, raw: res.resultText, sessionId: res.sessionId, costUsd: res.costUsd, tokens: res.tokens };
+  return { findings, blocking, advisory, raw: res.resultText, sessionId: res.sessionId, costUsd: costUsdOrZero(res.costUsd), tokens: res.tokens };
 }

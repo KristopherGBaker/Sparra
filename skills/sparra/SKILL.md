@@ -98,10 +98,12 @@ The few that matter most:
 - **`roles.generatorLocal`** + work-item **`gen: "local"`** — hybrid builds: tagged items build on
   a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;
   edit tags in `items.json`. See `docs/backends.md`.
-- **`build.maxBudgetUsdPerItem` / `maxTokensPerItem`** — per-item caps; crossing either
-  halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap. The standalone role
-  surfaces override the USD cap per call: `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s
-  `--budget <usd>` (omit = config cap; `0` = unlimited).
+- **`build.maxBudgetUsdPerItem` / `maxTokensPerItem` / `zeroCostTokenCap`** — per-item caps;
+  crossing USD/tokens halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
+  `zeroCostTokenCap` applies only when the USD cap is active, cost reports zero/unknown, and
+  `maxTokensPerItem` is off. The standalone role surfaces override the USD cap per call:
+  `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s `--budget <usd>` (omit = config cap;
+  `0` = unlimited).
 - **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
   rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by
@@ -168,8 +170,9 @@ roles:
   evaluator:  { backend: claude, model: opus, effort: high } # independent grader
 ```
 Two rules of thumb: **keep `decomposer` on Claude** even when Codex builds (Codex tends to
-over-split), and on a **subscription or with Codex, cap with `maxTokensPerItem`, not USD**
-— Codex reports tokens (its `costUsd` is `0`), so the dollar cap only bounds the Claude side.
+over-split), and on a **subscription or with Codex, cap with `maxTokensPerItem`** (or set
+`zeroCostTokenCap` as the fallback when `maxTokensPerItem` is intentionally off) — Codex
+reports tokens and often `costUsd: 0`, so a dollar cap alone can't bind.
 Needs `npm i @openai/codex-sdk` + the `codex` CLI (auth from `~/.codex`).
 
 ### iOS / macOS
@@ -227,7 +230,8 @@ Then, by symptom: decomposition shape → `workitems/items.json`; contract not c
   move `decomposer` to Claude.
 - **iOS: launch screen is mandatory**, else letterbox → UI automation fails. Build in the
   project's own dir, not nested.
-- **Budgets on a subscription/Codex**: use `maxTokensPerItem`; USD shows `$0` for Codex.
+- **Budgets on a subscription/Codex**: use `maxTokensPerItem`; `zeroCostTokenCap` is only the
+  fallback when USD is active but cost is `$0`/unknown and `maxTokensPerItem` is off.
 - **`BUDGET_EXCEEDED` ≠ crash** — the item halts, the run continues to the next item.
 - **Contracts are proportionate**: a handful of *observable product-behavior* assertions,
   scaled to the item — not build-setting/toolchain trivia. Over-spec is a review failure too.

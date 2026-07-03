@@ -51,6 +51,15 @@ function recorder(resultText?: string) {
   return { calls, fn };
 }
 
+function captureStdout() {
+  let buf = "";
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+    buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+    return true;
+  });
+  return { lines: () => buf, restore: () => spy.mockRestore() };
+}
+
 const FORBID: RoleKind[] = ["generator", "contract-generator", "contract-evaluator", "reviewer"];
 
 describe("runRole — holdout wall", () => {
@@ -236,6 +245,76 @@ describe("runRole — safety intent + wiring", () => {
     await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: omitted.fn });
     expect(omitted.calls[0]!.maxBudgetUsd).toBe(13.5);
 
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("warns when an active USD cap cannot bind because role-run cost is zero or unknown", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.maxTokensPerItem = 1234;
+    const out = captureStdout();
+    const rec = recorder();
+
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 7, runSessionFn: rec.fn });
+    out.restore();
+
+    expect(out.lines()).toMatch(/USD cap \$7 cannot bind because reported cost was zero or unknown/i);
+    expect(out.lines()).toMatch(/build\.maxTokensPerItem \(1234 tokens\)/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("warns on missing role-run cost under an active USD cap and names zeroCostTokenCap when it is the configured fallback", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.zeroCostTokenCap = 9999;
+    const out = captureStdout();
+    const fn = async (): Promise<RunResult> => ({
+      ok: true,
+      subtype: "success",
+      resultText: EVAL_JSON,
+      sessionId: "r",
+      costUsd: undefined as unknown as number,
+      tokens: 7,
+      numTurns: 1,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: [],
+      tracePath: "",
+    });
+
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 7, runSessionFn: fn });
+    out.restore();
+
+    expect(out.lines()).toMatch(/zero or unknown/i);
+    expect(out.lines()).toMatch(/build\.zeroCostTokenCap \(9999 tokens\)/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("normalizes missing role-run cost to 0 and does not warn when maxBudgetUsd is 0", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = captureStdout();
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      return {
+        ok: true,
+        subtype: "success",
+        resultText: EVAL_JSON,
+        sessionId: "r",
+        costUsd: undefined as unknown as number,
+        tokens: 7,
+        numTurns: 1,
+        hitMaxTurns: false,
+        hitBudget: false,
+        errors: [],
+        tracePath: "",
+      };
+    };
+
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 0, runSessionFn: fn });
+    out.restore();
+
+    expect(calls[0]!.maxBudgetUsd).toBe(0);
+    expect(r.costUsd).toBe(0);
+    expect(out.lines()).not.toMatch(/USD cap .*cannot bind/i);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

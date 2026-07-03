@@ -26,6 +26,7 @@ import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
+import { costUsdOrZero } from "./budget.ts";
 import { info, warn } from "../util/log.ts";
 
 /**
@@ -647,6 +648,19 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // nothing happened" on every branch (limit, turn cap, budget death, clean).
   const filesChanged = isWriter && writerBefore ? countNewChanges() : undefined;
   const emptyText = !res.resultText.trim();
+  const costUsd = costUsdOrZero(res.costUsd);
+  const effectiveUsdCap = req.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
+  if (effectiveUsdCap > 0 && costUsd <= 0) {
+    const tokenBound =
+      ctx.config.build.maxTokensPerItem > 0
+        ? `build.maxTokensPerItem (${ctx.config.build.maxTokensPerItem} tokens)`
+        : ctx.config.build.zeroCostTokenCap > 0
+        ? `build.zeroCostTokenCap (${ctx.config.build.zeroCostTokenCap} tokens)`
+        : "no token cap configured (build.maxTokensPerItem=0, build.zeroCostTokenCap=0)";
+    warn(
+      `role-run-${roleKind}: USD cap $${effectiveUsdCap} cannot bind because reported cost was zero or unknown; effective token bound: ${tokenBound}.`
+    );
+  }
 
   const result: RoleRunResult = {
     ok: res.ok,
@@ -656,7 +670,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     resultText: res.resultText,
     traceDir,
     sessionId: res.sessionId,
-    costUsd: res.costUsd,
+    costUsd,
     tokens: res.tokens,
     errors: res.errors,
     // Preserved telemetry (never suppressed by classification): the writer change count and the

@@ -84,6 +84,19 @@ describe("build.verifyCommands knob", () => {
   });
 });
 
+describe("build.zeroCostTokenCap knob", () => {
+  it("defaults to 0 (off)", () => {
+    expect(defaultConfig().build.zeroCostTokenCap).toBe(0);
+  });
+
+  it("a partial YAML override preserves sibling build knobs", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { build: { zeroCostTokenCap: 750_000 } });
+    expect(merged.build.zeroCostTokenCap).toBe(750_000);
+    expect(merged.build.maxTokensPerItem).toBe(defaultConfig().build.maxTokensPerItem);
+    expect(merged.build.maxBudgetUsdPerItem).toBe(defaultConfig().build.maxBudgetUsdPerItem);
+  });
+});
+
 describe("rubric.anchorFunctionality knob (Q4)", () => {
   it("defaults to true", () => {
     expect(defaultConfig().rubric.anchorFunctionality).toBe(true);

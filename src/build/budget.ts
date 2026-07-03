@@ -30,3 +30,22 @@ export function remainingBudget(capUsd: number, spentUsd: number): number {
   if (capUsd <= 0) return 0; // no cap
   return Math.max(0, capUsd - spentUsd);
 }
+
+/** Treat missing/non-finite backend cost as zero so summaries and state never drift to NaN. */
+export function costUsdOrZero(costUsd: number | null | undefined): number {
+  return typeof costUsd === "number" && Number.isFinite(costUsd) ? costUsd : 0;
+}
+
+/**
+ * The fallback token cap applies only when an active USD cap cannot bind because reported
+ * accumulated cost is zero/unknown, and only when the user has not set an explicit token cap.
+ */
+export function zeroCostTokenFallbackExceeded(args: {
+  usdCap: number;
+  explicitTokenCap: number;
+  zeroCostTokenCap: number;
+  spentUsd: number;
+  usedTokens: number;
+}): boolean {
+  return args.usdCap > 0 && args.explicitTokenCap <= 0 && args.spentUsd <= 0 && tokensExceeded(args.zeroCostTokenCap, args.usedTokens);
+}

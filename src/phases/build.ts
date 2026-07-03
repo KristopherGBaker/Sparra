@@ -21,7 +21,7 @@ import { updateStreaksAndDecide } from "../build/pivot.ts";
 import { maybeResetWorkspace } from "../build/reset.ts";
 import { recordAttempt, attemptFailure, renderPriorAttempts, APPROACH_CAP } from "../build/attempts.ts";
 import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from "../build/feedback.ts";
-import { budgetExceeded, tokensExceeded, remainingBudget } from "../build/budget.ts";
+import { budgetExceeded, tokensExceeded, remainingBudget, costUsdOrZero, zeroCostTokenFallbackExceeded } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
 import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
 import { measureAcceptedItem, renderMeasureLearning } from "../build/measure.ts";
@@ -234,8 +234,28 @@ export async function cmdBuild(
   let totalCost = 0;
   const cap = ctx.config.build.maxBudgetUsdPerItem; // 0 = unlimited (opt-out)
   const tokenCap = ctx.config.build.maxTokensPerItem; // 0 = unlimited (opt-out)
-  const overBudget = (s: ItemState) => budgetExceeded(cap, s.costUsd ?? 0) || tokensExceeded(tokenCap, s.tokensUsed ?? 0);
+  const zeroCostTokenCap = ctx.config.build.zeroCostTokenCap; // 0 = unlimited (opt-out)
+  const overZeroCostFallback = (s: ItemState) =>
+    zeroCostTokenFallbackExceeded({
+      usdCap: cap,
+      explicitTokenCap: tokenCap,
+      zeroCostTokenCap,
+      spentUsd: s.costUsd ?? 0,
+      usedTokens: s.tokensUsed ?? 0,
+    });
+  const overBudget = (s: ItemState) => budgetExceeded(cap, s.costUsd ?? 0) || tokensExceeded(tokenCap, s.tokensUsed ?? 0) || overZeroCostFallback(s);
   const stamp = () => new Date().toISOString();
+  const effectiveTokenCapName = (): string => {
+    if (tokenCap > 0) return `build.maxTokensPerItem (${tokenCap} tokens)`;
+    if (zeroCostTokenCap > 0) return `build.zeroCostTokenCap (${zeroCostTokenCap} tokens)`;
+    return "no token cap (build.maxTokensPerItem=0, build.zeroCostTokenCap=0)";
+  };
+  const warnZeroCostUsdIneffective = (itemId: string, s: ItemState): void => {
+    if (cap <= 0 || (s.tokensUsed ?? 0) <= 0 || (s.costUsd ?? 0) > 0) return;
+    warn(
+      `${itemId}: USD cap did not bind because reported cost was zero or unknown; effective token bound: ${effectiveTokenCapName()}.`
+    );
+  };
 
   // Auto-restart / fallback state (the "heartbeat"). limitedUntil tracks which backends are in
   // a limit window; it survives a process restart via b.build.limitedRoles.
@@ -544,6 +564,8 @@ export async function cmdBuild(
       await ctx.store.save();
       const which = tokensExceeded(tokenCap, st.tokensUsed ?? 0)
         ? `${st.tokensUsed} tokens ≥ cap ${tokenCap}`
+        : overZeroCostFallback(st)
+        ? `${st.tokensUsed} tokens ≥ build.zeroCostTokenCap ${zeroCostTokenCap} (USD cap ineffective: zero/unknown reported cost)`
         : `$${(st.costUsd ?? 0).toFixed(3)} ≥ cap $${cap}`;
       warn(`${item.id} halted on budget: ${which} (during ${phase}).`);
       await d.appendLearning(ctx.paths, {
@@ -737,8 +759,9 @@ export async function cmdBuild(
         role: genPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
       });
-      totalCost += gen.costUsd;
-      st.costUsd = (st.costUsd ?? 0) + gen.costUsd;
+      const genCost = costUsdOrZero(gen.costUsd);
+      totalCost += genCost;
+      st.costUsd = (st.costUsd ?? 0) + genCost;
       st.tokensUsed = (st.tokensUsed ?? 0) + gen.tokens;
       st.generatorSessionId = gen.sessionId;
       st.generatorBackend = genKey;
@@ -788,8 +811,9 @@ export async function cmdBuild(
         role: evalPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
       });
-      totalCost += ev.costUsd;
-      st.costUsd = (st.costUsd ?? 0) + ev.costUsd;
+      const evCost = costUsdOrZero(ev.costUsd);
+      totalCost += evCost;
+      st.costUsd = (st.costUsd ?? 0) + evCost;
       st.tokensUsed = (st.tokensUsed ?? 0) + ev.tokens;
 
       const el = await onLimit(st, evalPick.role, ev.limitHit, `${item.id} evaluate`);
@@ -903,8 +927,9 @@ export async function cmdBuild(
             })
           : null;
         if (review) {
-          totalCost += review.costUsd;
-          st.costUsd = (st.costUsd ?? 0) + review.costUsd;
+          const reviewCost = costUsdOrZero(review.costUsd);
+          totalCost += reviewCost;
+          st.costUsd = (st.costUsd ?? 0) + reviewCost;
           st.tokensUsed = (st.tokensUsed ?? 0) + review.tokens;
           await ctx.store.save();
         }
@@ -1018,6 +1043,7 @@ export async function cmdBuild(
         at: stamp(),
       });
     }
+    warnZeroCostUsdIneffective(item.id, st);
 
     // `haltOnBudget`/pass mutate st.status through a closure, which defeats TS's
     // flow narrowing here — read it back through the declared union.

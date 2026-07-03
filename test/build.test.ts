@@ -37,6 +37,15 @@ function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100, ...over };
 }
 
+function captureStdout() {
+  let buf = "";
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+    buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+    return true;
+  });
+  return { lines: () => buf, restore: () => spy.mockRestore() };
+}
+
 async function makeCtx(buildOver: Partial<SparraConfig["build"]> = {}): Promise<{ ctx: Ctx; dir: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-build-"));
   const paths = new Paths(dir);
@@ -124,6 +133,100 @@ describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
     const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(res.budgetExceeded).toBe(0);
     expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("halts on build.zeroCostTokenCap when the USD cap is active but reported cost is zero", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, zeroCostTokenCap: 1000, maxRoundsPerItem: 6 });
+    const out = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut({ costUsd: 0, tokens: 1000 }),
+      evaluateItem: async () => evalOut(true),
+    };
+
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    out.restore();
+
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("budget_exceeded");
+    expect(res.budgetExceeded).toBe(1);
+    expect(out.lines()).toMatch(/build\.zeroCostTokenCap 1000/i);
+    expect(out.lines()).toMatch(/USD cap did not bind because reported cost was zero or unknown/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("treats missing costUsd as zero for the fallback cap and keeps item cost finite", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, zeroCostTokenCap: 1000, maxRoundsPerItem: 6 });
+    const out = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => ({ ...genOut({ tokens: 1000 }), costUsd: undefined as unknown as number }),
+      evaluateItem: async () => evalOut(true),
+    };
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    out.restore();
+
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("budget_exceeded");
+    expect(Number.isFinite(st.costUsd)).toBe(true);
+    expect(st.costUsd).toBe(0);
+    expect(out.lines()).toMatch(/zero or unknown/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not halt on the zero-cost fallback when build.zeroCostTokenCap is 0", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, zeroCostTokenCap: 0, maxRoundsPerItem: 2 });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut({ costUsd: 0, tokens: 10_000_000 }),
+      evaluateItem: async () => evalOut(true, { costUsd: 0, tokens: 10_000_000 }),
+    };
+
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    expect(res.budgetExceeded).toBe(0);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("names explicit maxTokensPerItem as the effective cap when it overrides zeroCostTokenCap", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxTokensPerItem: 50_000, zeroCostTokenCap: 1000, maxRoundsPerItem: 2 });
+    const out = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut({ costUsd: 0, tokens: 10 }),
+      evaluateItem: async () => evalOut(true, { costUsd: 0, tokens: 10 }),
+    };
+
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    out.restore();
+
+    expect(out.lines()).toMatch(/build\.maxTokensPerItem \(50000 tokens\)/);
+    expect(out.lines()).not.toMatch(/effective token bound: build\.zeroCostTokenCap/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not warn or fallback-halt when reported cost is nonzero", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxTokensPerItem: 0, zeroCostTokenCap: 1000, maxRoundsPerItem: 2 });
+    const out = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut({ costUsd: 0.001, tokens: 10_000 }),
+      evaluateItem: async () => evalOut(true, { costUsd: 0.001, tokens: 10_000 }),
+    };
+
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    out.restore();
+
+    expect(res.budgetExceeded).toBe(0);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    expect(out.lines()).not.toMatch(/zero or unknown/i);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
