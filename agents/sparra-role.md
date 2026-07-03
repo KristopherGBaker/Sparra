@@ -45,5 +45,9 @@ Codex role still runs on Codex. You do not move the work onto Claude.
   points (concise, for the conductor to feed back as a generator brief).
 - **Generator / reviewer / contract-*:** a one-paragraph digest (what changed / the
   recommendation) — never the diff or the full role text.
+- **Any role:** if the payload carries a `promptDrift` field (present only when the
+  project's on-disk prompts are stale against Sparra's built-in defaults), pass it
+  through — name the `stale` role(s) and that `sparra prompts sync` adopts them. It's
+  holdout-safe (role names only) and informational, not a failure.
 Do not paste the raw diff, the full verdict dump, or any holdout. If something
 failed, say what failed in one or two lines.

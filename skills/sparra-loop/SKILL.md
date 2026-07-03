@@ -238,6 +238,12 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
   generator/reviewer/contract-* → a **one-paragraph digest**. The raw diff, the full
   verdict dump, and any role output must **NOT** be pasted into this main session —
   it lives and dies in the subagent.
+- **Newer default prompts (`promptDrift`):** any `run_role` payload may carry a
+  holdout-safe `promptDrift` field (present only when actionable) — the project's
+  on-disk role prompts have gone stale against Sparra's improved built-in defaults.
+  The subagent passes it through; when you see it, tell the user which role(s) have a
+  `stale` (adoptable) newer default and that `sparra prompts sync` adopts them (it
+  leaves local edits / conflicts untouched). Informational, not a failure.
 - **Holdout carries over:** the subagent inherits the rules below — never read
   `HOLDOUT.md`, pass it by path, read the redacted verdict (not raw output/traces),
   and return no holdout text. The conductor never receives holdout.
