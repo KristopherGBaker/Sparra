@@ -56,8 +56,9 @@ sparra build           # the autonomous generator↔evaluator loop
 sparra measure [dir]   # run measure.command → parse JSON metrics → diff vs baseline (compare-only; --set-baseline; --worktree)
 sparra reflect [--traces <glob-or-dir>] # propose prompt edits from build or role-run traces (--apply to accept)
 sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage per-finding harness reflections in ~/.sparra/reflections (SPARRA_HOME); --clear archives ALL
-sparra prompts status  # compare .sparra/prompts/ with the built-in defaults (drift = your edits or stale)
-sparra prompts sync    # adopt the current defaults (overwrites local edits; --role <r>, --dry-run)
+sparra prompts status  # 3-way drift vs defaults: same/stale(newer default)/local(your edit)/conflict/drifted/missing
+sparra prompts sync    # adopt STALE only (safe); --role <r> or --all force-overwrite (discards edits); --dry-run
+# A `stale` (newer-default) prompt is surfaced once on the build AND `sparra eval`/`role run`/`sparra-loop` paths.
 sparra prompts audit   # concision review of role prompts → prompts/audit/<role>.md; --apply tightens in place behind a coverage guard PLUS an independent prompt-audit-verifier pass (re-derives the original's rules; skips if any are missing)
 sparra status          # where am I / what's next
 sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan

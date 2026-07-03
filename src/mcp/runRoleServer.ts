@@ -6,6 +6,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadCtxForRole, type Ctx } from "../context.ts";
 import { runRole, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { promptDrift, summarizePromptDrift } from "../prompts.ts";
+
+/** Holdout-safe prompt-drift note for the MCP payload: role names + the one-line note ONLY (never a
+ *  prompt body, never holdout). `null` when there's nothing actionable to surface. */
+export interface PromptDriftNote {
+  stale: string[];
+  conflict: string[];
+  note: string;
+}
 
 /** The `run_role` tool's argument shape (mirrors the zod schema below). */
 export interface RunRoleToolArgs {
@@ -64,9 +73,17 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
  * plus `traceDir` (holdout-free by scope) so the conductor can tail it for live progress. Neither
  * branch ever carries holdout contents.
  */
-export function buildRunRolePayload(r: RoleRunResult, passThreshold: number): Record<string, unknown> {
+export function buildRunRolePayload(
+  r: RoleRunResult,
+  passThreshold: number,
+  drift?: PromptDriftNote | null
+): Record<string, unknown> {
+  // Only surface the drift note when there's something actionable (a newer default / conflict) —
+  // don't add noise to every call. Role names + the note line only; never a body, never holdout.
+  const driftField = drift ? { promptDrift: drift } : {};
   return r.verdict
     ? {
+        ...driftField,
         roleKind: r.roleKind,
         backend: r.backend,
         model: r.model,
@@ -85,6 +102,7 @@ export function buildRunRolePayload(r: RoleRunResult, passThreshold: number): Re
         hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
       }
     : {
+        ...driftField,
         roleKind: r.roleKind,
         backend: r.backend,
         model: r.model,
@@ -195,9 +213,15 @@ export async function startRunRoleServer(root: string): Promise<void> {
       try {
         const ctx = await loadCtxForRole(root);
         const r = await runRole(toRunRoleRequest(ctx, args));
+        // Surface a newer-default (`stale`) / conflicting prompt to the /sparra-loop conductor, so
+        // a fresh loop learns an adoptable default exists. Holdout-safe: role names + the note line
+        // ONLY (never a prompt body, never holdout), and only when actionable.
+        const summary = summarizePromptDrift(await promptDrift(ctx.paths));
+        const drift: PromptDriftNote | null =
+          summary.actionable && summary.line ? { stale: summary.stale, conflict: summary.conflict, note: summary.line } : null;
         // Never return holdout: evaluator → verdict summary only; others → result text. The
         // holdout-safe field split (incl. evaluator omitting `traceDir`) lives in buildRunRolePayload.
-        const payload = buildRunRolePayload(r, ctx.config.rubric.passThreshold);
+        const payload = buildRunRolePayload(r, ctx.config.rubric.passThreshold, drift);
         return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
       } catch (e) {
         // Holdout-leak and other failures surface as a (sanitized) tool error.

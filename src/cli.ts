@@ -18,6 +18,7 @@ import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
 import { cmdRoleRun } from "./phases/role.ts";
 import { cmdMeasure } from "./phases/measure.ts";
+import { promptDrift, summarizePromptDrift } from "./prompts.ts";
 import { parse } from "./util/args.ts";
 
 const HELP = `${color.bold("sparra")} — autonomous build harness on the Claude Agent SDK
@@ -84,6 +85,11 @@ async function main(): Promise<void> {
   // config-less, default-backed context (existing `.sparra/` is still honored).
   if (cmd === "role" || cmd === "eval" || cmd === "measure") {
     const roleCtx = await loadCtxForRole(root);
+    // Surface a newer-default (`stale`) / conflicting prompt once on the standalone role-runner
+    // path, so a fresh `sparra eval` / `role run` / `measure` learns an adoptable default exists
+    // (the build phase already does this via the same summarizer). Quiet when non-actionable.
+    const roleDrift = summarizePromptDrift(await promptDrift(roleCtx.paths));
+    if (roleDrift.actionable && roleDrift.line) info(`Note: ${roleDrift.line}.`);
     if (cmd === "role") {
       if (positionals[1] === "run") await cmdRoleRun(roleCtx, flags);
       else {

@@ -119,6 +119,12 @@ export class Paths {
     return path.join(this.cycles, name);
   }
 
+  /** Records the hash of the DEFAULT_PROMPTS text last seeded/synced per role, so `promptDrift`
+   *  can tell a stale-vs-default copy from your own local edit. A dotfile — never a role prompt. */
+  get promptBaseline() {
+    return path.join(this.prompts, ".baseline.json");
+  }
+
   promptFile(role: string) {
     return path.join(this.prompts, `${role}.md`);
   }

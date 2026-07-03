@@ -88,6 +88,36 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
   });
 });
 
+describe("buildRunRolePayload — promptDrift field (present only when actionable, body-free)", () => {
+  const note = { stale: ["reviewer"], conflict: ["generator"], note: "newer default prompt(s) available for reviewer — adopt with `sparra prompts sync`" };
+
+  it("OMITS promptDrift when no drift note is passed (non-actionable / absent)", () => {
+    expect("promptDrift" in buildRunRolePayload(baseResult({}), 75)).toBe(false);
+    expect("promptDrift" in buildRunRolePayload(baseResult({}), 75, null)).toBe(false);
+  });
+
+  it("INCLUDES promptDrift (role names + note line only) on the non-evaluator branch when actionable", () => {
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator" }), 75, note);
+    expect(p.promptDrift).toEqual(note);
+    // Never a prompt body: the field carries only role names + the one-liner.
+    const json = JSON.stringify(p.promptDrift);
+    expect(json).not.toMatch(/You are the/); // no DEFAULT_PROMPTS body text
+  });
+
+  it("INCLUDES promptDrift on the evaluator (verdict) branch too, still holdout-safe (no traceDir)", () => {
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        verdict: { verdict: "pass", weightedTotal: 90, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"],
+      }),
+      75,
+      note
+    );
+    expect(p.promptDrift).toEqual(note);
+    expect("traceDir" in p).toBe(false); // wall intact
+  });
+});
+
 describe("toRunRoleRequest — MCP arg forwarding", () => {
   const ctx = { root: "/proj" } as unknown as Ctx;
 

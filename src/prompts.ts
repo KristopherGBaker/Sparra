@@ -1,5 +1,6 @@
 import path from "node:path";
-import { exists, readText, writeText } from "./util/io.ts";
+import { createHash } from "node:crypto";
+import { exists, readJson, readText, writeText } from "./util/io.ts";
 import type { Paths } from "./paths.ts";
 
 /**
@@ -253,45 +254,131 @@ For each problem, propose a SPECIFIC edit (which prompt, what text, why) as a un
 Keep edits CONCISE — these prompts run every item every cycle, so findings ratchet length. Fit a finding into existing structure: extend a bullet, add one list item, or generalize an existing rule rather than add a new section restating nearby guidance. A finding is usually a clause, not a paragraph; prefer one generalized principle with a short concrete example over near-duplicate rules.`,
 };
 
-export async function seedPrompts(paths: Paths): Promise<void> {
-  for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
-    const file = paths.promptFile(role);
-    if (!exists(file)) await writeText(file, body + "\n");
-  }
+/** Stable content hash of a prompt body — sha256 hex of `body.trim()`, matching the `.trim()`
+ *  comparison `promptDrift` uses so a whitespace-only diff never registers as drift. */
+export function hashPrompt(body: string): string {
+  return createHash("sha256").update(body.trim()).digest("hex");
 }
 
-export type PromptState = "same" | "drifted" | "missing";
+/** The recorded baseline map `{ [role]: <hash> }` (default `{}` when `.baseline.json` is absent). */
+export async function readBaseline(paths: Paths): Promise<Record<string, string>> {
+  return (await readJson<Record<string, string>>(paths.promptBaseline)) ?? {};
+}
+
+/** Merge `entries` into the existing baseline JSON and write it back — never clobbers roles it
+ *  doesn't name (so seeding one role leaves another role's recorded baseline intact). */
+export async function writeBaselineEntries(paths: Paths, entries: Record<string, string>): Promise<void> {
+  const merged = { ...(await readBaseline(paths)), ...entries };
+  await writeText(paths.promptBaseline, JSON.stringify(merged, null, 2) + "\n");
+}
+
+export async function seedPrompts(paths: Paths): Promise<void> {
+  const recorded: Record<string, string> = {};
+  for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
+    const file = paths.promptFile(role);
+    if (!exists(file)) {
+      await writeText(file, body + "\n");
+      recorded[role] = hashPrompt(body); // baseline the default we just wrote
+    }
+  }
+  if (Object.keys(recorded).length) await writeBaselineEntries(paths, recorded);
+}
+
+export type PromptState = "same" | "stale" | "local" | "conflict" | "drifted" | "missing";
 
 /**
- * Compare each on-disk role prompt to the built-in default. Drift is expected and often
- * intentional (your edits, or `reflect`'s) — but it also happens when Sparra's defaults improve
- * after a project was `init`ed, leaving the local copy stale. Callers surface it, never auto-fix.
+ * Compare each on-disk role prompt to the built-in default, three ways via the recorded baseline
+ * (the default text last seeded/synced for that role). Drift is often intentional (your edits, or
+ * `reflect`'s), but also happens when Sparra's defaults improve after a project was `init`ed,
+ * leaving the local copy stale. The baseline distinguishes those cases:
+ *   - `same`     — disk matches the current default (nothing to adopt).
+ *   - `stale`    — disk still matches its baseline but the default moved past it (safe to adopt).
+ *   - `local`    — you edited it; the default is unchanged (no update available).
+ *   - `conflict` — both your copy AND the default moved (adopting would discard your edit).
+ *   - `drifted`  — drifted but NO baseline entry (legacy project) — unclassifiable, never guessed.
+ *   - `missing`  — the file is absent.
+ * Callers surface it, never auto-fix — this is a PURE read (no writes).
  */
 export async function promptDrift(paths: Paths): Promise<Array<{ role: string; state: PromptState }>> {
+  const baseline = await readBaseline(paths);
   const out: Array<{ role: string; state: PromptState }> = [];
   for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
     const fromDisk = await readText(paths.promptFile(role));
-    const state: PromptState = !fromDisk ? "missing" : fromDisk.trim() === body.trim() ? "same" : "drifted";
+    let state: PromptState;
+    if (fromDisk == null) {
+      // ABSENT only — `readText` returns "" (not null) for a zero-byte file, which must flow
+      // through the normal classification (an empty file != default → local/drifted), not `missing`.
+      state = "missing";
+    } else if (fromDisk.trim() === body.trim()) {
+      state = "same";
+    } else {
+      const base = baseline[role];
+      const defaultHash = hashPrompt(body);
+      const diskHash = hashPrompt(fromDisk);
+      if (base === undefined) {
+        state = "drifted"; // legacy: no baseline → don't guess
+      } else if (diskHash === base && base !== defaultHash) {
+        state = "stale"; // untouched local copy; default moved
+      } else if (diskHash !== base && base === defaultHash) {
+        state = "local"; // your edit; default unchanged
+      } else {
+        state = "conflict"; // both moved
+      }
+    }
     out.push({ role, state });
   }
   return out;
 }
 
 /**
- * Overwrite on-disk role prompts with the current built-in defaults. With no `roles`, syncs every
- * drifted/missing role; pass `roles` to target specific ones. Returns the roles written. This
- * DISCARDS local edits (including reflect's) — the caller must make that explicit to the user.
+ * Overwrite on-disk role prompts with the current built-in defaults AND refresh their baseline
+ * entries (so an immediate re-`promptDrift` reports them `same`). With no `roles`, syncs every
+ * non-`same` role; pass `roles` to target specific ones. Returns the roles written. This DISCARDS
+ * local edits (including reflect's) — the caller decides which roles are safe to pass and must make
+ * that explicit to the user.
  */
 export async function syncPrompts(paths: Paths, opts: { roles?: string[] } = {}): Promise<string[]> {
   const drift = await promptDrift(paths);
   const target = new Set(opts.roles ?? drift.filter((d) => d.state !== "same").map((d) => d.role));
   const written: string[] = [];
+  const baselines: Record<string, string> = {};
   for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
     if (!target.has(role)) continue;
     await writeText(paths.promptFile(role), body + "\n");
+    baselines[role] = hashPrompt(body);
     written.push(role);
   }
+  if (written.length) await writeBaselineEntries(paths, baselines);
   return written;
+}
+
+/** Buckets `promptDrift` output by state + a one-line human note for the role-runner / loop path.
+ *  `actionable` is true when there's anything worth surfacing to act on — `stale` (adoptable) or
+ *  `conflict` roles. `line` names the adoptable `stale` roles (`sparra prompts sync`) and mentions
+ *  conflicts separately; it is `null` when nothing is stale/conflicting. */
+export function summarizePromptDrift(drift: Array<{ role: string; state: PromptState }>): {
+  stale: string[];
+  local: string[];
+  conflict: string[];
+  drifted: string[];
+  missing: string[];
+  actionable: boolean;
+  line: string | null;
+} {
+  const by = (s: PromptState) => drift.filter((d) => d.state === s).map((d) => d.role);
+  const stale = by("stale");
+  const conflict = by("conflict");
+  const actionable = stale.length + conflict.length > 0;
+  let line: string | null = null;
+  if (stale.length || conflict.length) {
+    const parts: string[] = [];
+    if (stale.length)
+      parts.push(`newer default prompt(s) available for ${stale.join(", ")} — adopt with \`sparra prompts sync\``);
+    if (conflict.length)
+      parts.push(`${conflict.join(", ")} conflict (both your edit and the default moved — \`sparra prompts sync --role <r>\` to force, discarding your edit)`);
+    line = parts.join("; ");
+  }
+  return { stale, local: by("local"), conflict, drifted: by("drifted"), missing: by("missing"), actionable, line };
 }
 
 /** Load a role prompt from disk (falls back to the built-in default). */

@@ -222,9 +222,11 @@ your-project/
    │                   #   pause.md (redacted), decision.json, feedback.md — see build-loop.md
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)
    ├─ prompts/         # editable role system prompts (reflect diffs these); seeded from the
-   │                   #   built-in defaults at init — can go stale as Sparra improves. Compare/
-   │                   #   adopt with `sparra prompts status` / `sparra prompts sync`. Tighten with
+   │  ├─ <role>.md     #   built-in defaults at init — can go stale as Sparra improves. Compare/
+   │  └─ .baseline.json#   adopt with `sparra prompts status` / `sparra prompts sync`. Tighten with
    │                   #   `sparra prompts audit` (review files land in prompts/audit/<role>.md).
+   │                   #   .baseline.json records the default hash last seeded/synced per role, so
+   │                   #   drift is classified 3-way (stale/local/conflict) — a dotfile, not a role.
    ├─ calibration/     # good/ vs slop/ reference samples
    ├─ reflect/         # proposed prompt diffs awaiting approval (+ a run's upstream.md = harness findings)
    ├─ measure/         # post-accept QA metrics: baseline.json + rendered per-run regression reports
@@ -246,6 +248,32 @@ run. `--upstream --clear` (no triage flags) archives ALL inbox files at once. Se
 persist across cycles; the rest of the working set is archived per cycle by `sparra new` (or
 `sparra finish`). Each `cycles/<n-slug>/` now also includes the cycle's archived **`HOLDOUT.md`**
 (moved out of the live tree so a stale per-cycle holdout never bleeds into the next cycle).
+
+## Prompt drift (`sparra prompts status` / `sync`)
+`init` snapshots the defaults to `.sparra/prompts/<role>.md`, and `.baseline.json` records the hash
+of the default text last seeded/synced per role. `sparra prompts status` classifies each role
+**three ways** against the current default using that baseline:
+
+- **`same`** — disk matches the current default (nothing to adopt).
+- **`stale`** — disk still matches its baseline but the default moved past it (a newer default is
+  available; **safe to adopt** — you never edited it).
+- **`local`** — you (or `reflect`) edited it; the default is unchanged (no update available).
+- **`conflict`** — both your copy AND the default moved (adopting would discard your edit).
+- **`drifted`** — drifted but with **no baseline entry** (a legacy project inited before baselines):
+  unclassifiable, never guessed.
+- **`missing`** — the file is absent.
+
+`sync` respects that classification so it never silently clobbers a local edit:
+
+- `sparra prompts sync` (no flags) → adopts **`stale` only** (the safe ones); `local`/`conflict`/
+  `drifted` roles are left on disk and reported as skipped (force them explicitly).
+- `sparra prompts sync --role <r>` → force-overwrites that one role regardless of state (DISCARDS
+  local edits).
+- `sparra prompts sync --all` → overwrites every non-`same` role (strong discard warning).
+
+Any sync refreshes `.baseline.json` for the roles it writes, so an immediate re-`status` reads
+`same`. A newer-default (`stale`) prompt is also surfaced once on the **build** and **role-runner /
+`sparra eval` / `sparra-loop`** paths (see [build-loop](build-loop.md) / [phases](phases.md)).
 
 ## Auditing prompt conciseness (`sparra prompts audit`)
 `reflect` APPENDS to role prompts, so the built-in defaults ratchet up over cycles. `sparra prompts

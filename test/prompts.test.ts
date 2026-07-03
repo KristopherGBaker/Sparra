@@ -3,7 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Paths } from "../src/paths.ts";
-import { seedPrompts, promptDrift, syncPrompts, DEFAULT_PROMPTS } from "../src/prompts.ts";
+import {
+  seedPrompts,
+  promptDrift,
+  syncPrompts,
+  DEFAULT_PROMPTS,
+  hashPrompt,
+  readBaseline,
+  writeBaselineEntries,
+  summarizePromptDrift,
+} from "../src/prompts.ts";
+import { cmdPrompts } from "../src/phases/prompts.ts";
+import type { Ctx } from "../src/context.ts";
 
 async function tmpPaths(): Promise<{ dir: string; paths: Paths }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-prompts-"));
@@ -57,7 +68,7 @@ describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
     expect(skill).toContain("exerciseStatus: mixed");
     expect(diagnose).toContain("Verdict lists `unrunAssertionIds`");
     expect(diagnose).toContain("all-UN-RUN verdict is inconclusive");
-    expect(marketplace.metadata.version).toBe("2026.7.3.10");
+    expect(marketplace.metadata.version).toBe("2026.7.3.11");
   });
 });
 
@@ -108,10 +119,11 @@ describe("decomposer + reconciler prompts (Q7 a/b)", () => {
     const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
     expect(byRole["decomposer"]).toBe("same");
     expect(byRole["reconciler"]).toBe("same");
-    // Drift machinery sees an edit like any other role.
+    // Drift machinery sees an edit like any other role. seedPrompts recorded a baseline (==
+    // the current default), so an edit AFTER seeding classifies as `local`, not the coarse `drifted`.
     fs.writeFileSync(paths.promptFile("decomposer"), "edited\n");
     const after = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
-    expect(after["decomposer"]).toBe("drifted");
+    expect(after["decomposer"]).toBe("local");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -125,12 +137,12 @@ describe("prompt drift + sync", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("detects drifted and missing prompts", async () => {
+  it("detects local edits and missing prompts (edit after seed is `local`, not coarse `drifted`)", async () => {
     const { dir, paths } = await tmpPaths();
     fs.writeFileSync(paths.promptFile("evaluator"), "totally different\n");
     fs.rmSync(paths.promptFile("generator"));
     const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
-    expect(byRole["evaluator"]).toBe("drifted");
+    expect(byRole["evaluator"]).toBe("local"); // baseline == default, disk moved → your edit
     expect(byRole["generator"]).toBe("missing");
     expect(byRole["planner"]).toBe("same");
     fs.rmSync(dir, { recursive: true, force: true });
@@ -144,7 +156,7 @@ describe("prompt drift + sync", () => {
     expect(written).toEqual(["evaluator"]);
     const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
     expect(byRole["evaluator"]).toBe("same"); // synced
-    expect(byRole["generator"]).toBe("drifted"); // untouched
+    expect(byRole["generator"]).toBe("local"); // untouched (edited after seed → local)
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -157,5 +169,273 @@ describe("prompt drift + sync", () => {
     expect(written).toContain("generator");
     expect((await promptDrift(paths)).every((d) => d.state === "same")).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("prompt-drift baseline (three-way classification)", () => {
+  it("hashPrompt is a stable, whitespace-insensitive hex sha256", () => {
+    expect(hashPrompt("x")).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashPrompt("x")).toBe(hashPrompt("  x\n")); // ends trimmed
+    expect(hashPrompt("a")).not.toBe(hashPrompt("b"));
+  });
+
+  it("readBaseline defaults to {} when absent; writeBaselineEntries MERGES (never clobbers)", async () => {
+    const { dir, paths } = await tmpPaths();
+    fs.rmSync(paths.promptBaseline, { force: true }); // start clean
+    expect(await readBaseline(paths)).toEqual({});
+    await writeBaselineEntries(paths, { roleA: "aaa" });
+    await writeBaselineEntries(paths, { roleB: "bbb" });
+    expect(await readBaseline(paths)).toEqual({ roleA: "aaa", roleB: "bbb" }); // roleA survived
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("seedPrompts records .baseline.json = hashPrompt(default) for every seeded role", async () => {
+    const { dir, paths } = await tmpPaths();
+    expect(fs.existsSync(paths.promptBaseline)).toBe(true);
+    const base = await readBaseline(paths);
+    for (const [role, body] of Object.entries(DEFAULT_PROMPTS)) {
+      expect(base[role]).toBe(hashPrompt(body));
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it(".baseline.json is never treated as a role — promptDrift returns exactly DEFAULT_PROMPTS roles", async () => {
+    const { dir, paths } = await tmpPaths();
+    const roles = (await promptDrift(paths)).map((d) => d.role).sort();
+    expect(roles).toEqual(Object.keys(DEFAULT_PROMPTS).sort());
+    expect(roles).not.toContain(".baseline");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("promptDrift is a PURE read — it neither creates nor modifies .baseline.json", async () => {
+    const { dir, paths } = await tmpPaths();
+    fs.rmSync(paths.promptBaseline, { force: true });
+    await promptDrift(paths);
+    expect(fs.existsSync(paths.promptBaseline)).toBe(false); // no write on read
+    // And with a baseline present, a read leaves it byte-identical.
+    await writeBaselineEntries(paths, { generator: "zzz" });
+    const before = fs.readFileSync(paths.promptBaseline, "utf8");
+    await promptDrift(paths);
+    expect(fs.readFileSync(paths.promptBaseline, "utf8")).toBe(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("classifies `stale` — disk matches baseline but the default moved past it (safe to adopt)", async () => {
+    const { dir, paths } = await tmpPaths();
+    const diskText = "an older default the project has never touched\n";
+    fs.writeFileSync(paths.promptFile("reviewer"), diskText);
+    // Baseline records THAT older default's hash — so disk == baseline, but baseline != current default.
+    await writeBaselineEntries(paths, { reviewer: hashPrompt(diskText) });
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["reviewer"]).toBe("stale");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("classifies `local` — you edited it, the default is unchanged", async () => {
+    const { dir, paths } = await tmpPaths();
+    fs.writeFileSync(paths.promptFile("reviewer"), "my local tweak\n"); // baseline still == default
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["reviewer"]).toBe("local");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("classifies `conflict` — disk, baseline, and current default all differ (both moved)", async () => {
+    const { dir, paths } = await tmpPaths();
+    fs.writeFileSync(paths.promptFile("reviewer"), "my local edit\n"); // disk != default
+    await writeBaselineEntries(paths, { reviewer: hashPrompt("some third older default\n") }); // baseline != default, != disk
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["reviewer"]).toBe("conflict");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("legacy fallback — no baseline entry ⇒ an edited role is `drifted`, never a wrong classification", async () => {
+    const { dir, paths } = await tmpPaths();
+    fs.rmSync(paths.promptBaseline, { force: true }); // legacy project: no baseline at all
+    fs.writeFileSync(paths.promptFile("reviewer"), "edited with no baseline\n");
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["reviewer"]).toBe("drifted");
+    // Never stale/local/conflict when unclassifiable.
+    expect(["stale", "local", "conflict"]).not.toContain(byRole["reviewer"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`same` wins even when the baseline is stale/absent (disk == current default)", async () => {
+    const { dir, paths } = await tmpPaths();
+    await writeBaselineEntries(paths, { reviewer: hashPrompt("a stale baseline\n") });
+    // disk is untouched (== current default), so it must read `same` regardless of the baseline.
+    const byRole = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(byRole["reviewer"]).toBe("same");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("sync adopts ONLY stale roles by default and refreshes the baseline → a re-check reads `same`", async () => {
+    const { dir, paths } = await tmpPaths();
+    // reviewer = stale (adoptable), planner = local (your edit, must be left alone by a bare sync).
+    const staleText = "older reviewer default\n";
+    fs.writeFileSync(paths.promptFile("reviewer"), staleText);
+    await writeBaselineEntries(paths, { reviewer: hashPrompt(staleText) });
+    fs.writeFileSync(paths.promptFile("planner"), "my planner edit\n");
+
+    const drift = await promptDrift(paths);
+    const summary = summarizePromptDrift(drift);
+    expect(summary.stale).toContain("reviewer");
+    expect(summary.local).toContain("planner");
+
+    // Phase-level policy: a bare sync adopts stale only → pass exactly the stale roles.
+    const written = await syncPrompts(paths, { roles: summary.stale });
+    expect(written).toEqual(["reviewer"]);
+
+    const after = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(after["reviewer"]).toBe("same"); // baseline refreshed on write
+    expect(after["planner"]).toBe("local"); // your edit untouched
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdPrompts sync policy — stale-only vs --role vs --all (real phase, on-disk effect)", () => {
+  const fakeCtx = (paths: Paths): Ctx => ({ root: paths.root, paths }) as unknown as Ctx;
+
+  // Build a fixture with one role in each interesting state. Returns the on-disk texts so a test
+  // can assert which files actually changed.
+  async function scenario(): Promise<{ dir: string; paths: Paths; before: Record<string, string | null> }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-cmdprompts-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    await seedPrompts(paths); // all `same`, baseline == default
+
+    // stale: reviewer disk == baseline, baseline != current default.
+    const staleText = "older reviewer default\n";
+    fs.writeFileSync(paths.promptFile("reviewer"), staleText);
+    // local: planner edited after seed (baseline stays == default).
+    fs.writeFileSync(paths.promptFile("planner"), "my planner edit\n");
+    // conflict: generator disk != baseline != default.
+    fs.writeFileSync(paths.promptFile("generator"), "my generator edit\n");
+    // drifted: evaluator edited AND its baseline entry removed (legacy).
+    fs.writeFileSync(paths.promptFile("evaluator"), "evaluator edit no baseline\n");
+    // missing: decomposer file absent.
+    fs.rmSync(paths.promptFile("decomposer"));
+
+    // Rewrite the baseline: reviewer→older hash, generator→a third hash, evaluator→removed.
+    const base = await readBaseline(paths);
+    base["reviewer"] = hashPrompt(staleText);
+    base["generator"] = hashPrompt("some third older generator default\n");
+    delete base["evaluator"];
+    fs.writeFileSync(paths.promptBaseline, JSON.stringify(base, null, 2) + "\n");
+
+    // Sanity: the states are what we intend.
+    const st = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(st["reviewer"]).toBe("stale");
+    expect(st["planner"]).toBe("local");
+    expect(st["generator"]).toBe("conflict");
+    expect(st["evaluator"]).toBe("drifted");
+    expect(st["decomposer"]).toBe("missing");
+
+    const before: Record<string, string | null> = {};
+    for (const role of ["reviewer", "planner", "generator", "evaluator", "decomposer"])
+      before[role] = fs.existsSync(paths.promptFile(role)) ? fs.readFileSync(paths.promptFile(role), "utf8") : null;
+    return { dir, paths, before };
+  }
+
+  const read = (paths: Paths, role: string): string | null =>
+    fs.existsSync(paths.promptFile(role)) ? fs.readFileSync(paths.promptFile(role), "utf8") : null;
+
+  it("bare sync adopts ONLY `stale`; local/conflict/drifted/missing are left byte-identical", async () => {
+    const { dir, paths, before } = await scenario();
+    await cmdPrompts(fakeCtx(paths), ["sync"], {});
+    // reviewer (stale) adopted → now the current default.
+    expect(read(paths, "reviewer")).toBe(DEFAULT_PROMPTS.reviewer + "\n");
+    // everything else untouched.
+    expect(read(paths, "planner")).toBe(before["planner"]);
+    expect(read(paths, "generator")).toBe(before["generator"]);
+    expect(read(paths, "evaluator")).toBe(before["evaluator"]);
+    expect(read(paths, "decomposer")).toBeNull(); // missing stays absent
+    const st = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(st["reviewer"]).toBe("same"); // baseline refreshed
+    expect(st["planner"]).toBe("local");
+    expect(st["generator"]).toBe("conflict");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--role X force-overwrites that one role regardless of state (a `conflict`), touching no other", async () => {
+    const { dir, paths, before } = await scenario();
+    await cmdPrompts(fakeCtx(paths), ["sync"], { role: "generator" });
+    expect(read(paths, "generator")).toBe(DEFAULT_PROMPTS.generator + "\n"); // forced despite conflict
+    expect(read(paths, "reviewer")).toBe(before["reviewer"]); // stale left (not this role)
+    expect(read(paths, "planner")).toBe(before["planner"]);
+    const st = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(st["generator"]).toBe("same");
+    expect(st["reviewer"]).toBe("stale");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--all overwrites EVERY non-`same` role (stale+local+conflict+drifted+missing)", async () => {
+    const { dir, paths } = await scenario();
+    await cmdPrompts(fakeCtx(paths), ["sync"], { all: true });
+    for (const role of ["reviewer", "planner", "generator", "evaluator", "decomposer"])
+      expect(read(paths, role)).toBe(DEFAULT_PROMPTS[role] + "\n");
+    expect((await promptDrift(paths)).every((d) => d.state === "same")).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("zero-byte edge: a role truncated to '' is `local`, left by bare sync, adopted by --role", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-cmdprompts-empty-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    await seedPrompts(paths);
+    fs.writeFileSync(paths.promptFile("reviewer"), ""); // zero-byte, baseline == default
+    const st0 = Object.fromEntries((await promptDrift(paths)).map((d) => [d.role, d.state]));
+    expect(st0["reviewer"]).toBe("local"); // NOT missing (file exists, just empty)
+
+    await cmdPrompts(fakeCtx(paths), ["sync"], {}); // bare
+    expect(fs.readFileSync(paths.promptFile("reviewer"), "utf8")).toBe(""); // untouched
+
+    await cmdPrompts(fakeCtx(paths), ["sync"], { role: "reviewer" }); // force
+    expect(fs.readFileSync(paths.promptFile("reviewer"), "utf8")).toBe(DEFAULT_PROMPTS.reviewer + "\n");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("summarizePromptDrift — buckets / actionable / line", () => {
+  const drift = [
+    { role: "reviewer", state: "stale" as const },
+    { role: "planner", state: "local" as const },
+    { role: "generator", state: "conflict" as const },
+    { role: "evaluator", state: "drifted" as const },
+    { role: "decomposer", state: "missing" as const },
+    { role: "reconciler", state: "same" as const },
+  ];
+
+  it("buckets each state and is actionable when there are stale OR conflict roles", () => {
+    const s = summarizePromptDrift(drift);
+    expect(s.stale).toEqual(["reviewer"]);
+    expect(s.local).toEqual(["planner"]);
+    expect(s.conflict).toEqual(["generator"]);
+    expect(s.drifted).toEqual(["evaluator"]);
+    expect(s.missing).toEqual(["decomposer"]);
+    expect(s.actionable).toBe(true);
+  });
+
+  it("the line NAMES stale roles (adoptable via sync) and mentions conflicts separately", () => {
+    const { line } = summarizePromptDrift(drift);
+    expect(line).toContain("reviewer"); // named as adoptable
+    expect(line).toContain("sparra prompts sync");
+    expect(line).toContain("generator"); // conflict mentioned separately
+    expect(line).toMatch(/conflict/i);
+  });
+
+  it("is non-actionable with a null line when every role is `same`", () => {
+    const s = summarizePromptDrift([{ role: "x", state: "same" as const }]);
+    expect(s.actionable).toBe(false);
+    expect(s.line).toBeNull();
+  });
+
+  it("is non-actionable when only local/drifted/missing (no adoptable update, no conflict)", () => {
+    const s = summarizePromptDrift([
+      { role: "a", state: "local" as const },
+      { role: "b", state: "drifted" as const },
+      { role: "c", state: "missing" as const },
+    ]);
+    expect(s.actionable).toBe(false);
+    expect(s.line).toBeNull();
   });
 });
