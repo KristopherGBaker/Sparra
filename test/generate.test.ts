@@ -56,6 +56,15 @@ describe("appleConventions / isApplePlatform", () => {
     expect(t).toMatch(/disable-sandbox/); // don't bake build-env workarounds into project.yml
     expect(t).toMatch(/debounce|per-keystroke/); // deterministic UI guidance
   });
+
+  it("carries the iOS #if DEBUG launch-arg reach clause on ios but NOT on macos (contrast pair)", () => {
+    const ios = appleConventions("ios");
+    const mac = appleConventions("macos");
+    expect(ios).toContain("#if DEBUG");
+    expect(ios).toContain("ProcessInfo.processInfo.arguments");
+    // macOS uses an XCUITest target for reach, not simctl launch args — the ios-only clause is absent.
+    expect(mac).not.toContain("ProcessInfo.processInfo.arguments");
+  });
 });
 
 describe("generateItem — Apple conventions injection", () => {

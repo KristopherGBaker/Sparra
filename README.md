@@ -78,7 +78,7 @@ sparra resume        # continue any phase from disk
 
 ## Key ideas
 
-- **The evaluator runs your code.** Grading is evidence-based: it builds, launches, and exercises the artifact (CLI, web, or iOS Simulator with screenshot reading), and won't pass flaky or gamed results. → [docs/build-loop.md](docs/build-loop.md)
+- **The evaluator runs your code.** Grading is evidence-based: it builds, launches, and exercises the artifact (CLI, web, or iOS Simulator with screenshot **and animation contact-sheet** reading), and won't pass flaky or gamed results. → [docs/build-loop.md](docs/build-loop.md)
 - **Cross-model on tap.** Pick the backend per role — one model family builds while another judges, for a genuinely independent second opinion. → [docs/backends.md](docs/backends.md)
 - **Holdout wall.** Evaluator-only acceptance checks the builder never sees, so it can't teach to the test. → [docs/role-runner.md](docs/role-runner.md#what-the-runner-enforces-the-holdout-wall)
 - **Bounded & safe by default.** Per-item budgets, sandboxed permissions, and a git-worktree boundary — Sparra never commits to your main branch. → [docs/build-loop.md](docs/build-loop.md#sandbox-first-safety)

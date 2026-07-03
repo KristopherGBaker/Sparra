@@ -13,6 +13,7 @@ Two platforms, set by **`exercise.ios.platform`**:
 - **`xcodebuildmcp`** CLI: `brew tap getsentry/xcodebuildmcp && brew install xcodebuildmcp` (or `npm i -g xcodebuildmcp@latest`).
 - **XcodeGen**: `brew install xcodegen` (projects are defined by `project.yml`, not a hand-authored `.pbxproj`).
 - *(optional)* **SwiftFormat** + **SwiftLint** for format-on-write: `brew install swiftformat swiftlint`.
+- *(optional)* **ffmpeg**: `brew install ffmpeg`. Needed only for **animation** verification (`exercise.ios.visual: true`, the default) — the evaluator tiles a Simulator screen recording into one contact sheet with `ffmpeg`. Absent → the animation gate is **UN-RUN** (environment-blocked), never failed; static screenshots don't need it.
 - *(optional)* **xcbeautify**: `brew install xcbeautify`. When present, the guidance has the agent pipe raw `xcodebuild` through `xcbeautify -qq` (with `set -o pipefail`) for concise build logs — fewer tokens, easier to read; it re-runs verbose to diagnose a failure. Absent → plain `xcodebuild`.
 
 ## Config
@@ -24,6 +25,7 @@ exercise:
     scheme: ""             # "" → the evaluator discovers it
     simulator: ""          # "" → auto-discover an available one (or pin e.g. "iPhone 17"); iOS only
     platform: ios          # "ios" (Simulator) or "macos" (run the .app on the host; verify via XCUITest)
+    visual: true           # iOS only: inject the screenshot + animation contact-sheet recipe (needs ffmpeg for animation); false → pre-recipe guidance
   runExistingTests: true   # existing projects: new failures = hard fail
 
 format:
@@ -37,6 +39,25 @@ On `mechanism: ios` the generator is given the house Swift conventions automatic
 - **XcodeGen is authoritative** — edit `project.yml`, run `xcodegen generate`; never hand-edit the `.pbxproj`. The exerciser regenerates from `project.yml` if the `.xcodeproj` is missing/stale.
 - **A launch screen is mandatory** — `INFOPLIST_KEY_UILaunchScreen_Generation: "YES"` (or a `UILaunchScreen: {}` Info.plist entry). Without it the app runs **letterboxed at 320×480 with black bars**, reports wrong screen metrics, and **breaks coordinate-based UI automation** (taps land off-target). The evaluator treats a legacy/letterboxed frame as an app defect, not a tooling glitch.
 - Idiomatic modern SwiftUI (`@Observable`/`@MainActor`, value types), **Swift Testing** (not XCTest), persistence behind a store/repository seam, no code signing for simulator builds.
+- **Deterministic-reach hooks** — the generator exposes `#if DEBUG` **launch-arg hooks** (reading `ProcessInfo.processInfo.arguments`) so the evaluator can jump straight to a UI state via `simctl launch … <args>` (a feature flag, skip-onboarding, seed a fixture, optionally auto-trigger the interaction). This is what makes the screenshots/animation captures below *reliable* — the evaluator reaches the exact state under test instead of hand-navigating.
+
+## Visual verification (screenshots + animation contact sheets)
+With **`exercise.ios.visual: true`** (the default), the iOS exerciser guidance carries a **visual-verification recipe** so the multimodal evaluator can put *eyes* on Simulator-runnable UI **and animation** — the dimension code review is blind to. The evaluator runs these commands itself (Sparra encodes the recipe, it doesn't run a capture pipeline).
+
+**Static UI → screenshot.** Boot a simulator (`xcrun simctl boot <udid>`), build into a **repo-local `-derivedDataPath`** — passing **`CODE_SIGNING_ALLOWED=NO`** when driving raw `xcodebuild` for an unsigned Simulator build (unsigned Sim + SPM resource bundles) — then `xcrun simctl install <udid> <app>`, `xcrun simctl launch <udid> <bundle> <launch-args>`, and `xcrun simctl io <udid> screenshot <file>.png`. The evaluator **Reads the PNG** and judges it, complemented by an **accessibility-hierarchy dump** for deterministic assertions.
+
+**Animation / transition → contact sheet.** Record around a scripted trigger:
+```bash
+xcrun simctl io <udid> recordVideo --codec=h264 clip.mov      # h264, NOT hevc (ffmpeg decode compatibility)
+ffmpeg -i clip.mov -vf "fps=N,scale=W:-2,tile=CxR" sheet.png   # ONE image; -2 auto-picks an EVEN height (odd/-1 fails)
+```
+The evaluator **Reads the single contact sheet** and judges the **start→mid→end** geometry. Use **two passes**: a **coarse** sheet over the full clip to *locate* the motion, then a **dense** sheet over a *narrow window* around the transition to *judge* it.
+
+**Timing caveats.** `window.layer.speed` does **not** slow **system-driven** transitions (e.g. a `UINavigation preferredTransition = .zoom`) — only a **custom** `UIViewControllerAnimatedTransitioning` animator with an **explicit duration** is slow-mo-able; the Simulator's **⌘T Slow-Animations** toggle is **GUI-only** (not CLI-scriptable). A system transition can be **~0.15s**, so capture at **high fps** and sample **densely** around the window (expect a sparse peak).
+
+**Honest boundary (the evidence must state it).** These captures **prove** geometry / layout / nav structure / transition *shape*. They do **not** prove motion feel, jank, frame pacing (120 Hz), gesture interruptibility, or Simulator-gated **GPU/ML** (Metal / Neural Engine) paths — the evaluator must **not** claim those from a screenshot or contact sheet.
+
+**UN-RUN semantics.** If the Simulator is unavailable (or `recordVideo`/`ffmpeg` for an animation gate), the affected visual gates — **static screenshot gates included** — are **UN-RUN** (environment-blocked), **never failed** and **never passed via a weaker fallback**. A screenshot only *supplements* a static-UI check; it **never** substitutes for an animation gate. Set `exercise.ios.visual: false` for the pre-recipe guidance (byte-identical to before the knob existed).
 
 ## macOS apps (no simulator)
 Set `exercise.ios.platform: macos`. A Mac app runs on the host, and xcodebuildmcp's `screenshot`/`ui-automation` tools are **simulator-only** (its `macos` workflow has build/launch/`stop`/`test` but no UI tools). So Sparra verifies a Mac UI through **XCUITest**, not simulator screenshots:

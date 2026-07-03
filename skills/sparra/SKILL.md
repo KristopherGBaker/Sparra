@@ -192,6 +192,14 @@ app and reads it. Needs Xcode + `xcodebuildmcp` + `xcodegen`. Set **`exercise.io
   target (`macos test`) + `xcresulttool` screenshots + `screencapture` (xcodebuildmcp's screenshot/
   ui-automation is simulator-only). The generator includes a UI-test target.
 
+**`exercise.ios.visual`** (iOS only, default `true`) injects the **visual-verification recipe**: a
+static **screenshot** chain (Read the PNG + a11y-hierarchy dump) **and** an **animation** chain
+(`simctl io … recordVideo --codec=h264` → `ffmpeg … "fps=N,scale=W:-2,tile=CxR"` → Read ONE contact
+sheet, judged start→mid→end, coarse-then-dense), plus the `#if DEBUG` launch-arg reach convention,
+the honest boundary (geometry/nav proven; motion feel/jank/120 Hz/GPU-ML **not**), and **UN-RUN**
+semantics (Simulator/`ffmpeg` unavailable → env-blocked, never failed). Needs **ffmpeg** for
+animation. Set `false` for the pre-recipe guidance.
+
 Full guide: `docs/ios.md`.
 
 ### Holdout / isolation wall

@@ -111,14 +111,18 @@ function block(text: string) {
  * (Sparra runs with settingSources:[], so the user's own CLI skill is not loaded).
  */
 export function iosGuidance(config: SparraConfig): string {
-  const { cli, scheme, simulator, platform } = config.exercise.ios;
+  const { cli, scheme, simulator, platform, visual } = config.exercise.ios;
   const schemeHint = scheme ? `"${scheme}"` : "(discover it with the CLI)";
   const simHint = simulator || "(pick an available simulator)";
   // macOS apps have NO simulator: build & run the .app on the host, and observe/drive the UI
   // via an XCUITest target (the simulator screenshot/ui-automation tooling does not apply).
   if (platform === "macos") return macosGuidance(cli, schemeHint);
+  // The VISUAL-VERIFICATION recipe (screenshots + animation contact sheets) is stated ONCE here and
+  // appended to whichever iOS guidance we return — but only when the knob is on, so knob-off iOS
+  // output stays byte-identical to before this capability existed.
+  const visualTail = visual ? visualRecipe() : "";
   if (!cli.trim()) {
-    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN). Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
+    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN). Native builds are slow: pass a generous timeout_ms (up to the 600000 max).${visualTail}`;
   }
   return `This is an Apple-platform app (iOS/macOS/etc.). EXERCISE the real running app — never grade the diff.
 
@@ -144,7 +148,28 @@ For UI changes (the important part — you are MULTIMODAL, use it):
 - Use the UI hierarchy / describe-ui output for DETERMINISTIC assertions (e.g. "a control labelled 'Sign In' is visible and enabled") and cite it as evidence. Screenshots justify taste; the hierarchy justifies pass/fail.
 - Capture logs when behavior is dynamic.
 
-Every UI assertion in the contract must be backed by a screenshot you viewed or a hierarchy entry you found. No evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN).`;
+Every UI assertion in the contract must be backed by a screenshot you viewed or a hierarchy entry you found. No evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN).${visualTail}`;
+}
+
+/**
+ * The VISUAL-VERIFICATION recipe appended to iOS guidance when `exercise.ios.visual` is on. Stated
+ * ONCE (single source of truth — docs quote it, the generator side carries only the launch-arg
+ * clause): a static screenshot chain, an animation `recordVideo`→ffmpeg contact-sheet chain the
+ * multimodal evaluator READS, the timing caveats that make animation capture actually work, the
+ * `#if DEBUG` launch-arg deterministic-reach convention, the honest boundary the evidence must
+ * state, and the UN-RUN semantics for every visual gate (never a fail, never a fallback pass).
+ * Prefixed with a leading blank line so it appends cleanly to the guidance body.
+ */
+function visualRecipe(): string {
+  return `
+
+VISUAL VERIFICATION (exercise.ios.visual is ON — you are MULTIMODAL; code review is BLIND to layout/motion, so back Simulator-runnable UI/animation contract claims with captures you READ):
+- STATIC UI (screenshot): boot a simulator (\`xcrun simctl boot <udid>\`), build into a repo-local derived-data dir (\`-derivedDataPath\` at a repo-local path) — when you drive raw \`xcodebuild\` for an unsigned Simulator build pass \`CODE_SIGNING_ALLOWED=NO\` (unsigned Sim + SPM resource bundles) — then \`xcrun simctl install <udid> <app>\`, \`xcrun simctl launch <udid> <bundle> <launch-args>\`, and \`xcrun simctl io <udid> screenshot <file>.png\`. READ the PNG with the Read tool and judge it; complement the pixels with an accessibility-hierarchy dump for deterministic assertions.
+- ANIMATION / TRANSITION (contact sheet): record around a scripted trigger with \`xcrun simctl io <udid> recordVideo --codec=h264 <file>.mov\` (h264, NOT hevc — ffmpeg decode compatibility), then tile frames into ONE image: \`ffmpeg -i <clip> -vf "fps=N,scale=W:-2,tile=CxR" <sheet>.png\` — always \`scale=W:-2\` for the height (the \`-2\` auto-picks an EVEN height; a \`-1\`/odd output height makes ffmpeg fail). READ that single contact sheet and judge the start→mid→end geometry. Two-pass: a COARSE sheet over the FULL clip to LOCATE the motion, then a DENSE sheet over a NARROW window around the transition to JUDGE it.
+- TIMING: \`window.layer.speed\` does NOT slow SYSTEM-driven transitions (e.g. a UINavigation \`preferredTransition = .zoom\`) — only a custom \`UIViewControllerAnimatedTransitioning\` animator with an EXPLICIT duration is slow-mo-able; the Simulator's ⌘T Slow-Animations toggle is GUI-only (not CLI-scriptable). A system transition can be ~0.15s, so capture at HIGH fps and sample DENSELY around the window (accept a sparse peak).
+- DETERMINISTIC REACH: use the app's \`#if DEBUG\` launch-arg hooks via \`simctl launch … <args>\` to jump straight to the state under test (set a feature flag, skip onboarding, seed a fixture, optionally auto-trigger the interaction) — don't hand-navigate.
+- HONEST BOUNDARY — your evidence MUST state this and never imply more: these captures PROVE geometry / layout / nav structure / transition shape ONLY. They do NOT prove motion feel, jank, frame pacing (120 Hz), gesture interruptibility, or Simulator-gated GPU/ML (Metal / Neural Engine) paths — never claim those from a screenshot or contact sheet.
+- UN-RUN semantics (ALL visual gates): if the Simulator is unavailable (or \`recordVideo\`/\`ffmpeg\` for an animation gate), the affected visual gates — static screenshot gates INCLUDED — are UN-RUN (environment-blocked), never FAILED and never passed via a weaker fallback. A screenshot only SUPPLEMENTS a static-UI check; it NEVER substitutes for an animation gate.`;
 }
 
 /**

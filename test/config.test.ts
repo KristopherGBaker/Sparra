@@ -48,6 +48,30 @@ describe("exercise.sandbox knob", () => {
   });
 });
 
+describe("exercise.ios.visual knob", () => {
+  it("defaults to true", () => {
+    expect(defaultConfig().exercise.ios.visual).toBe(true);
+  });
+
+  it("a partial YAML override to false keeps sibling ios.* knobs", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { exercise: { ios: { visual: false } } });
+    expect(merged.exercise.ios.visual).toBe(false);
+    expect(merged.exercise.ios.cli).toBe("xcodebuildmcp"); // sibling ios.* knob survives the partial merge
+    expect(merged.exercise.ios.platform).toBe("ios");
+    expect(merged.exercise.mechanism).toBe("cli"); // sibling exercise.* knob survives
+  });
+
+  it("appears in the seeded config output (writeDefaultConfig YAML)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-config-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    await writeDefaultConfig(paths, "existing");
+    const yaml = fs.readFileSync(paths.config, "utf8");
+    expect(yaml).toMatch(/visual: true/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("git.provisionDeps knob", () => {
   it("defaults to { enabled: true, dirs: ['node_modules'] }", () => {
     expect(defaultConfig().git.provisionDeps).toEqual({ enabled: true, dirs: ["node_modules"] });

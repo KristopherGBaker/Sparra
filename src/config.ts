@@ -375,8 +375,14 @@ export interface SparraConfig {
      *             simulator — build & run the .app on the host; UI is observed/driven via an
      *             XCUITest target run with `macos test` + xcresult screenshots, plus
      *             screencapture). Default "ios".
+     *   visual    (iOS only, default true) inject the VISUAL-VERIFICATION recipe into the
+     *             evaluator guidance: capture a Simulator screenshot AND — for animations —
+     *             a `recordVideo`→ffmpeg contact sheet the multimodal evaluator READS, plus
+     *             the `#if DEBUG` launch-arg deterministic-reach convention and the honest
+     *             statement of what the Simulator can/can't prove. Off → the pre-recipe
+     *             iOS guidance (byte-identical to before the knob existed).
      */
-    ios: { cli: string; scheme: string; simulator: string; platform: "ios" | "macos" };
+    ios: { cli: string; scheme: string; simulator: string; platform: "ios" | "macos"; visual: boolean };
   };
 
   deviation: {
@@ -496,7 +502,7 @@ export function defaultConfig(): SparraConfig {
       existingTestCommand: "",
       customRecipe: "",
       web: { startCommand: "", baseUrl: "http://localhost:3000" },
-      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "", platform: "ios" }, // simulator: "" → auto-discover; platform: "macos" for a Mac app
+      ios: { cli: "xcodebuildmcp", scheme: "", simulator: "", platform: "ios", visual: true }, // simulator: "" → auto-discover; platform: "macos" for a Mac app; visual: true → screenshot+animation recipe
     },
     deviation: { strictness: "moderate" },
     review: { enabled: false, blockOn: "high" },
