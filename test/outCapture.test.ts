@@ -23,12 +23,23 @@ async function makeCtx(prefix: string): Promise<{ ctx: Ctx; dir: string }> {
 }
 
 function captureStdout() {
+  // The logger is silenced under vitest; both call sites assert on its output, so lift the
+  // gate via the documented escape hatch while capturing and restore prior env on cleanup.
+  const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
   let buf = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
     buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
     return true;
   });
-  return { lines: () => buf, restore: () => spy.mockRestore() };
+  return {
+    lines: () => buf,
+    restore: () => {
+      spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+    },
+  };
 }
 
 function runResult(resultText: string): RunResult {

@@ -38,6 +38,8 @@ No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.
 
 Vitest, in `test/`. Tests **inject dependencies** (e.g. `BuildDeps`, `runSessionFn`) and **never make live API/model calls** — fake the session and assert on the request/flow. Add tests with each feature; mirror the existing patterns (`build.test.ts`, `review.test.ts`, `skills.test.ts`).
 
+The phase logger (`src/util/log.ts`) is **silenced under vitest** (gated on `process.env.VITEST`) so the runner's pass/fail summary isn't buried in phase-log noise; set `SPARRA_LOG_IN_TESTS=1` to restore log output for debugging (a test asserting on log output must set this escape hatch).
+
 ## Git
 
 Do feature work on a `sparra/<topic>` branch, then fast-forward merge to `main` (never commit directly to `main`). Use **conventional commits**; end commit messages with the `Claude-Session:` footer. Commit/push only when the user asks.

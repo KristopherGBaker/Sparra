@@ -52,12 +52,22 @@ function recorder(resultText?: string) {
 }
 
 function captureStdout() {
+  // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+  const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
   let buf = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
     buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
     return true;
   });
-  return { lines: () => buf, restore: () => spy.mockRestore() };
+  return {
+    lines: () => buf,
+    restore: () => {
+      spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+    },
+  };
 }
 
 const FORBID: RoleKind[] = ["generator", "contract-generator", "contract-evaluator", "reviewer"];
@@ -189,6 +199,9 @@ describe("runRole — safety intent + wiring", () => {
 
   it("warns when a forbid Codex role runs in-place with a reachable holdout (no hard refusal)", async () => {
     const { ctx, dir } = await makeCtx(); // holdout present; in-place (workspace defaults to ctx.root)
+    // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+    const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
     let buf = "";
     const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
       buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
@@ -207,6 +220,8 @@ describe("runRole — safety intent + wiring", () => {
       expect(buf).not.toMatch(/holdout is reachable/i);
     } finally {
       spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   });

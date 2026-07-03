@@ -162,6 +162,9 @@ describe("runRoleInTempWorktree — WIP-faithful temp worktree (Item D)", () => 
 
   it("--keep-worktree retains the dir and PRINTS its path", GIT_IT, async () => {
     const seen: Seen = {};
+    // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+    const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
     let buf = "";
     const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
       buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
@@ -171,6 +174,8 @@ describe("runRoleInTempWorktree — WIP-faithful temp worktree (Item D)", () => 
       await runRoleInTempWorktree({ ctx: ctxRepo, roleKind: "evaluator", brief: "grade", keepWorktree: true }, { runRoleFn: observer(seen) });
     } finally {
       spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
     }
     expect(fs.existsSync(seen.workspace!)).toBe(true); // RETAINED
     expect(buf).toContain(seen.workspace!); // path actually printed

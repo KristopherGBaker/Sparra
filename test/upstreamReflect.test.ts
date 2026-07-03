@@ -64,12 +64,22 @@ function seedTrace(ctx: Ctx, runId: string): void {
 
 /** Capture process.stdout for assertions on printed output. */
 function captureStdout(): { buf: () => string; restore: () => void } {
+  // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+  const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
   let buf = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
     buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
     return true;
   });
-  return { buf: () => buf, restore: () => spy.mockRestore() };
+  return {
+    buf: () => buf,
+    restore: () => {
+      spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+    },
+  };
 }
 
 const inboxFiles = () => {

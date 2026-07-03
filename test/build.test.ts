@@ -38,12 +38,22 @@ function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
 }
 
 function captureStdout() {
+  // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+  const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
   let buf = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
     buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
     return true;
   });
-  return { lines: () => buf, restore: () => spy.mockRestore() };
+  return {
+    lines: () => buf,
+    restore: () => {
+      spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+    },
+  };
 }
 
 async function makeCtx(buildOver: Partial<SparraConfig["build"]> = {}): Promise<{ ctx: Ctx; dir: string }> {
@@ -1268,12 +1278,22 @@ describe("decompose — DEFAULT_PROMPTS prompt + build.maxItems clamp (Q7a)", ()
   }
 
   function captureStdout(): { lines: () => string; restore: () => void } {
+    // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+    const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
     let buf = "";
     const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
       buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
       return true;
     });
-    return { lines: () => buf, restore: () => spy.mockRestore() };
+    return {
+      lines: () => buf,
+      restore: () => {
+        spy.mockRestore();
+        if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+        else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+      },
+    };
   }
 
   it("clamps a 20-item decomposition to build.maxItems (default 12), keeps the head, and warns", async () => {

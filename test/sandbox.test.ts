@@ -35,12 +35,22 @@ function fakeRun(capture: (p: RunSessionParams) => void): (p: RunSessionParams) 
 
 /** Capture stdout (where `warn` writes its loud line) so we can assert the gate warns visibly. */
 function captureStdout(): { lines: () => string; restore: () => void } {
+  // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
+  const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
   let buf = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
     buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
     return true;
   });
-  return { lines: () => buf, restore: () => spy.mockRestore() };
+  return {
+    lines: () => buf,
+    restore: () => {
+      spy.mockRestore();
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+    },
+  };
 }
 
 describe("gateSandbox (worktree safety gate, pure)", () => {
