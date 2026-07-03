@@ -57,7 +57,7 @@ describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
     expect(skill).toContain("exerciseStatus: mixed");
     expect(diagnose).toContain("Verdict lists `unrunAssertionIds`");
     expect(diagnose).toContain("all-UN-RUN verdict is inconclusive");
-    expect(marketplace.metadata.version).toBe("2026.7.3.6");
+    expect(marketplace.metadata.version).toBe("2026.7.3.7");
   });
 });
 

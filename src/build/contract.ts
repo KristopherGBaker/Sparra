@@ -10,6 +10,7 @@ import { detail, info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider, redactHoldout } from "./holdout.ts";
 import { classifyExec, extractVerifyCommands, renderExecOutcome, runVerifyCommand, type CommandExecutor } from "./exec.ts";
+import { buildDropGuardReport, findUncitedDrops } from "./dropGuard.ts";
 import { contractModeClauses } from "./modeText.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
@@ -90,7 +91,11 @@ export async function negotiateContract(
   for (let round = 1; round <= maxRounds; round++) {
     info(`Contract ${item.id}: round ${round}/${maxRounds}`);
 
-    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. REVISE the contract to address every point.\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
+    // Round>1 revisions PATCH the standing contract — every prior assertion survives verbatim
+    // unless a critique point names it (the drop guard below enforces this runner-side).
+    const prevProposal = proposal;
+    const answeredCritique = critique;
+    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. PATCH it — REVISE to address every point, but keep every existing assertion/scope item VERBATIM unless a critique point names it (or its section); don't rewrite from the critique. End with a short list of dropped/changed assertions, each tied to the critique point that justifies it, or "none dropped".\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
 
     assertNoHoldoutLeak("contract-generator", genTask, holdout);
     const genRes = await run({
@@ -112,6 +117,20 @@ export async function negotiateContract(
     });
     proposal = normalizeOutCapture(genRes.resultText).text.trim();
     await appendText(file, `### Round ${round} — proposal\n\n${proposal}\n\n`);
+
+    // Runner-side assertion-DROP guard (round>1): a revision must PATCH, not rewrite from the
+    // critique. An assertion that vanished old→new WITHOUT the answered critique naming it is an
+    // UNCITED DROP (the lossy-revision bug). Build a holdout-redacted report (like the verify-probe)
+    // that feeds forward into the next generator round — and voids a same-round agreement below.
+    let dropReport = "";
+    if (round > 1) {
+      const dropped = findUncitedDrops(prevProposal, proposal, answeredCritique);
+      if (dropped.length > 0) {
+        dropReport = buildDropGuardReport(dropped, holdout);
+        await appendText(file, `### Round ${round} — drop-guard (harness)\n\n${dropReport}\n\n`);
+        warn(`Contract ${item.id}: drop-guard found ${dropped.length} uncited assertion drop(s) — re-opening negotiation.\n${dropped.map((d) => `  - ${d}`).join("\n")}`);
+      }
+    }
 
     const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\nPROPOSED CONTRACT:\n${proposal}`;
     assertNoHoldoutLeak("contract-evaluator", evalTask, holdout);
@@ -153,6 +172,14 @@ export async function negotiateContract(
         }
       }
       if (brokenCommands.length === 0) {
+        // Drop guard composes with the (clean) probe: an uncited assertion drop this round voids
+        // the agreement and re-opens negotiation, same as a probe bounce.
+        if (dropReport) {
+          critique = `${critique}\n\n${dropReport}`;
+          await appendText(file, `### Round ${round} — drop-guard bounce\n\n_Agreement voided: uncited assertion drop(s) in this revision — negotiation re-opened._\n\n`);
+          warn(`Contract ${item.id}: agreement voided by the drop-guard — re-opening negotiation.`);
+          continue;
+        }
         agreed = true;
         ok(`Contract ${item.id} agreed in round ${round}.`);
         break;
@@ -163,11 +190,14 @@ export async function negotiateContract(
         `HARNESS VERIFY-PROBE: the agreement is void — these "I will verify by" commands are broken AS WRITTEN (a usage error, or unsafe for the harness executor — single self-contained commands only: no chaining/redirect/network/mutation/commit; not a not-built-yet failure). Replace them with commands the harness can actually run, checked against the real surface (flags/subcommands/paths):\n${brokenCommands.map((e) => `- ${e}`).join("\n")}`,
         holdout
       );
-      critique = `${critique}\n\n${probeReport}`;
+      // A drop this round rides along with the probe bounce (both feed the next generator round).
+      critique = `${critique}\n\n${probeReport}${dropReport ? `\n\n${dropReport}` : ""}`;
       await appendText(file, `### Round ${round} — verify-probe (harness)\n\n${probeReport}\n\n`);
       warn(`Contract ${item.id}: verify-probe found ${brokenCommands.length} broken verify command(s) — re-opening negotiation.`);
       continue;
     }
+    // Not agreed: the drop-guard report (if any) rides along with the critique into the next round.
+    if (dropReport) critique = `${critique}\n\n${dropReport}`;
     detail("evaluator not satisfied; generator will revise.");
   }
 

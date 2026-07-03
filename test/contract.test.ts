@@ -174,6 +174,118 @@ describe("negotiateContract — harness verify-probe on agreement", () => {
   });
 });
 
+/**
+ * U-A: the runner-side assertion-DROP guard, exercised through negotiateContract with injected
+ * session/executor fakes (no live model calls). The pure helpers are unit-tested in dropGuard.test.ts.
+ */
+describe("negotiateContract — assertion-drop guard on revision", () => {
+  const A1 = "tool add 2 3 prints 5 exits 0";
+  const A2 = "negotiateContract voids agreement on an uncited assertion drop";
+  const A3 = "holdout redaction scrubs the sentinel before the generator sees it";
+  // Contracts carry NO "I will verify by" section, so the verify-probe never fires here — this
+  // isolates the drop guard from the probe (they compose, tested separately above).
+  const contract = (asserts: string[]) =>
+    `## Item\nA thing.\n## I will build\nX.\n## Assertions\n${asserts.map((a, i) => `${i + 1}. ${a}`).join("\n")}\n`;
+
+  /** Scripted fake: generator emits `proposals[round-1]`, evaluator emits `critiques[round-1]`. */
+  function scriptedSession(proposals: string[], critiques: string[]) {
+    const calls: RunSessionParams[] = [];
+    let g = 0;
+    let e = 0;
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      const text =
+        p.role === "contract-generator"
+          ? proposals[Math.min(g++, proposals.length - 1)]!
+          : critiques[Math.min(e++, critiques.length - 1)]!;
+      return { ok: true, subtype: "success", resultText: text, sessionId: "s", costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "" };
+    };
+    return { calls, fn };
+  }
+  const noProbe: CommandExecutor = async (_ws, cmd) => ({ ran: true, command: cmd, exitCode: 0, stdout: "", stderr: "", timedOut: false });
+  const genPrompts = (calls: RunSessionParams[]) => calls.filter((c) => c.role === "contract-generator").map((c) => c.prompt);
+
+  it("an UNCITED drop + a same-round AGREE does NOT accept: it re-opens and the next generator sees the drop-guard marker + dropped text", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scriptedSession(
+      // r1: all three; r2: drops A2 (uncited); r3: restores A2.
+      [contract([A1, A2, A3]), contract([A1, A3]), contract([A1, A2, A3])],
+      // r1 critique names ONLY assertion 1; r2/r3 AGREE.
+      ["Assertion 1's wording is loose — make 'prints 5' exact.", "Looks solid.\nCONTRACT: AGREED", "Good.\nCONTRACT: AGREED"]
+    );
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, noProbe);
+
+    const prompts = genPrompts(session.calls);
+    expect(prompts.length).toBeGreaterThanOrEqual(3); // round-3 generator call happened
+    expect(prompts[2]).toContain("HARNESS DROP-GUARD");
+    expect(prompts[2]).toContain(A2); // the dropped assertion's text is in the round-3 context
+    // Round 2's AGREE was voided (the drop guard re-opened negotiation), not accepted at round 2.
+    expect(prompts[1]).not.toContain("HARNESS DROP-GUARD");
+    expect(res.agreed).toBe(true); // round 3 restored A2 and agreed cleanly
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("records the dropped assertion in a drop-guard section of the negotiation file", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scriptedSession(
+      [contract([A1, A2, A3]), contract([A1, A3]), contract([A1, A2, A3])],
+      ["Assertion 1's wording is loose.", "CONTRACT: AGREED", "CONTRACT: AGREED"]
+    );
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, noProbe);
+    const file = fs.readFileSync(ctx.paths.contractFile(item.id), "utf8");
+    expect(file).toMatch(/drop-guard/i);
+    expect(file).toContain(A2);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("an EXPLICITLY-cited drop does NOT bounce: the round-2 agreement stands, no marker in any generator prompt", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scriptedSession(
+      [contract([A1, A2, A3]), contract([A1, A3])],
+      [`CUT assertion 2 (${A2}) — redundant with assertion 3.`, "CONTRACT: AGREED"]
+    );
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, noProbe);
+    const prompts = genPrompts(session.calls);
+    expect(prompts).toHaveLength(2); // agreed at round 2 — no re-open
+    expect(res.agreed).toBe(true);
+    expect(prompts.join("\n")).not.toContain("HARNESS DROP-GUARD");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("a reword-within-citation revision drops nothing → no bounce", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scriptedSession(
+      [contract([A1, A2, A3]), contract([A1, "negotiateContract must void the agreement whenever an uncited assertion is silently dropped", A3])],
+      ["Assertion 2 could be sharper.", "CONTRACT: AGREED"]
+    );
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, noProbe);
+    const prompts = genPrompts(session.calls);
+    expect(prompts).toHaveLength(2);
+    expect(res.agreed).toBe(true);
+    expect(prompts.join("\n")).not.toContain("HARNESS DROP-GUARD");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("the round>1 generator prompt carries the patch instruction (keep uncited assertions verbatim; list drops)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = scriptedSession(
+      [contract([A1, A2, A3]), contract([A1, A2, A3])], // no drop
+      ["Assertion 2 could be sharper.", "CONTRACT: AGREED"]
+    );
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, noProbe);
+    const round2 = genPrompts(session.calls)[1]!;
+    expect(round2).toMatch(/PATCH/);
+    expect(round2).toMatch(/VERBATIM/i);
+    expect(round2).toMatch(/dropped\/changed|none dropped/i);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+});
+
 describe("Q3 config defaults + prompt edits", () => {
   it("knobs default on: contract.probeVerifyCommands=true, build.flakinessReruns=2", () => {
     const cfg = defaultConfig();
@@ -188,5 +300,14 @@ describe("Q3 config defaults + prompt edits", () => {
       expect(p).toMatch(/harness probes/i); // …the harness probe is referenced instead
       expect(p).toMatch(/real source/i); // check-against-real-surface rule retained
     }
+  });
+
+  it("contract-generator carries the patch-revision discipline (survives-unless-named + dropped/changed list)", () => {
+    const p = DEFAULT_PROMPTS["contract-generator"]!;
+    expect(p).toMatch(/PATCH/); // a revision patches, not rewrites
+    expect(p).toMatch(/VERBATIM/i); // existing assertions survive verbatim…
+    expect(p).toMatch(/unless a critique point names it/i); // …unless a critique point names it
+    expect(p).toMatch(/dropped\/changed/i); // explicit dropped/changed list
+    expect(p).toMatch(/none dropped/i); // …or "none dropped"
   });
 });
