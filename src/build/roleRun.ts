@@ -28,6 +28,7 @@ import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } fro
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
+import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
 import { environmentNotesSection } from "../environment.ts";
@@ -791,6 +792,49 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   }
   // 7. Normal success — no classification flag.
 
+  // One-shot report re-ask (build.jsonReask) — the interactive analogue of generate.ts's re-ask.
+  // A branch-3 cap-death LANDED work (filesChanged>0) but emitted no usable report: that's a
+  // REPORT problem, not a work problem, so resume the SAME session ONCE, tightly capped, to
+  // re-emit only the final report block. Gated to OUR-OWN-cap deaths (a budget-cap death carries no
+  // `res.limitHit`): a session already under a provider limit (the Codex empty-completion promotes
+  // to one, and the fallback chain deliberately STOPPED on it) can't be resumed usefully, so it's
+  // left to the conductor exactly as today. On a usable reply the report surfaces and
+  // `emptyCompletion` clears, but the cap telemetry (hitBudget + the recorded notes) stays truthful
+  // — the summary still says the cap hit and the report came from a re-ask; on a failed/disabled
+  // re-ask, today's behavior stands (flags surface, the conductor decides). Never fires without
+  // landed work (branch 3 gates that) and never more than once (no loop).
+  if (result.emptyCompletion && !res.limitHit && ctx.config.build.jsonReask) {
+    const reaskBudget = effectiveUsdCap > 0 ? Math.min(effectiveUsdCap, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
+    const retry = await run({
+      ...commonReq,
+      backend: ranRole.backend,
+      model: ranRole.model,
+      effort: ranRole.effort,
+      baseUrl: ranRole.baseUrl,
+      apiKey: ranRole.apiKey,
+      traceSeq: (req.traceSeq ?? 1) + chain.length,
+      ...reportReaskOverrides({
+        role: `role-run-${roleKind}-reask`,
+        sessionId: res.sessionId,
+        tightCap: { maxBudgetUsd: reaskBudget },
+      }),
+    });
+    result.costUsd += costUsdOrZero(retry.costUsd);
+    result.tokens += retry.tokens;
+    if (retry.resultText.trim() && !retry.emptyCompletion && !retry.limitHit) {
+      // The report was recovered — surface it and clear the empty-report flag, but KEEP the cap
+      // telemetry (hitBudget, filesChanged) so the summary still records that a cap was hit and the
+      // report came from a re-ask.
+      result.resultText = retry.resultText;
+      result.emptyCompletion = undefined;
+      const recovered =
+        `role-run-${roleKind}: recovered the final report via a one-shot re-ask (build.jsonReask) after the cap — ` +
+        `the cap telemetry above still stands.`;
+      if (!result.errors.includes(recovered)) result.errors = [...result.errors, recovered];
+      info(recovered);
+    }
+  }
+
   if (evaluator) {
     // Redact any holdout the evaluator quoted, so it can't reach the conductor via
     // the returned verdict or the `--out` file (the evaluator may cite holdout in
@@ -823,7 +867,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       result.outPath = req.out;
     }
   } else if (req.out) {
-    await writeText(req.out, normalizeOutCapture(res.resultText).text);
+    // `result.resultText` (not the raw `res.resultText`) so a report recovered by the cap-death
+    // re-ask above is what lands in the --out file; identical to `res.resultText` otherwise.
+    await writeText(req.out, normalizeOutCapture(result.resultText).text);
     result.outPath = req.out;
   }
 

@@ -118,9 +118,14 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    loop's auto-restart/fallback.)
    **Empty completion + work landed ≠ fail — RESUME or ACCEPT:** if a generator summary
    carries `emptyCompletion: true` (always with `filesChanged > 0`), the work LANDED on
-   disk and only the completion report failed to emit. Do NOT re-run the item (a second
-   generator would clobber the landed work — the fallback chain already refuses to) and
-   do NOT feed it back as a FAIL: resume the session (`resumeSessionId`/`resumeBackend`
+   disk and only the completion report failed to emit. The runner **already re-asks
+   automatically first:** with `build.jsonReask` on, a budget-cap death gets ONE tightly-
+   capped (1-turn) report-only re-ask on the same session before you see it — so a
+   recovered report rides in `resultText` (an `errors` note says "recovered … via a
+   one-shot re-ask") and `emptyCompletion` clears. If `emptyCompletion` STILL surfaces
+   (re-ask disabled/failed, or a provider-limit empty completion), do NOT re-run the item
+   (a second generator would clobber the landed work — the fallback chain already refuses
+   to) and do NOT feed it back as a FAIL: resume the session (`resumeSessionId`/`resumeBackend`
    = the result's `sessionId`/`backend`) to re-emit the report, or verify the tree
    (typecheck/test) and accept the landed work, then evaluate as normal. `filesChanged`
    is always populated for a generator — `>0` means work landed, whatever the flags say.

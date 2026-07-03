@@ -1400,6 +1400,144 @@ describe("runRole — fallback chain STOPS on a writer ec whose work landed (Ite
   });
 });
 
+// ── U4: one-shot report re-ask on a writer cap-death (build.jsonReask, interactive analogue) ──
+
+/** A fake session returning a scripted RunResult per call (clamped to the last), recording every
+ *  request — so a re-ask shows up as a distinct, inspectable second call. */
+function seqSession(results: Partial<RunResult>[]) {
+  const calls: RunSessionParams[] = [];
+  const base: RunResult = {
+    ok: false,
+    subtype: "error",
+    resultText: "",
+    sessionId: "sess-A",
+    costUsd: 0,
+    tokens: 0,
+    numTurns: 1,
+    hitMaxTurns: false,
+    hitBudget: false,
+    errors: [],
+    tracePath: "",
+  };
+  const fn = async (p: RunSessionParams): Promise<RunResult> => {
+    const shape = results[Math.min(calls.length, results.length - 1)]!;
+    calls.push(p);
+    return { ...base, ...shape };
+  };
+  return { calls, fn };
+}
+
+describe("runRole — cap-death report re-ask (U4)", () => {
+  const FILE = "/ws/src/new.ts";
+  const SENTINEL = "RE-ASK-RECOVERED-REPORT";
+  const SENTINEL_REPORT = '```json\n{"report":"' + SENTINEL + '","deviations":[]}\n```';
+  /** A budget-cap death (OUR own cap — no provider limitHit), empty text, work landed. */
+  const BUDGET_DEATH: Partial<RunResult> = {
+    ok: false,
+    subtype: "error_max_budget_usd",
+    resultText: "",
+    hitBudget: true,
+    sessionId: "sess-budget",
+    errors: ["error_max_budget_usd"],
+  };
+
+  it("(#1/#2/#3) budget cap-death + landed work → ONE resume for a report-only prompt; report surfaces, emptyCompletion cleared, cap telemetry kept", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.maxBudgetUsdPerItem = 5; // the original (large) per-item cap
+    const rec = seqSession([BUDGET_DEATH, { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-budget", tokens: 5, costUsd: 0.01 }]);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build the widget.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    // #1 exactly two session calls; the second RESUMES the dying session with a report-only prompt.
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("sess-budget");
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
+    expect(rec.calls[1]!.prompt).not.toContain("Build the widget."); // report-only, not more work
+    // #2 the re-ask is tightly capped: one turn AND a budget materially tighter than the original.
+    expect(rec.calls[1]!.maxTurns).toBe(1);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
+    // #3 the report surfaces; emptyCompletion cleared; filesChanged + the cap telemetry preserved.
+    expect(r.resultText).toContain(SENTINEL);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.hitBudget).toBe(true);
+    expect(r.filesChanged).toBe(1);
+    expect(r.sessionId).toBe("sess-budget"); // the conductor still holds the dying session id
+    expect(r.errors.some((e) => /re-ask/i.test(e))).toBe(true); // notes record the recovery, truthfully
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4a) build.jsonReask disabled → NO re-ask (exactly one call); emptyCompletion surfaces as today", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.jsonReask = false;
+    const rec = seqSession([BUDGET_DEATH, { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-budget" }]);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls).toHaveLength(1); // no re-ask fired
+    expect(r.emptyCompletion).toBe(true); // classification unchanged from today
+    expect(r.resultText).not.toContain(SENTINEL);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4b) zero landed files → NO re-ask (a no-progress/limit case, not a report problem)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([{ ...BUDGET_DEATH, sessionId: "sess-budget0" }, { ok: true, subtype: "success", resultText: SENTINEL_REPORT }]);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], []]), // nothing landed
+    });
+    expect(rec.calls).toHaveLength(1); // no re-ask — there's no landed report to recover
+    expect(r.emptyCompletion).toBeUndefined(); // branch 5: budget death, no landed work
+    expect(r.hitBudget).toBe(true);
+    expect(r.filesChanged).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4c) the re-ask itself returns unusable text → no third call; emptyCompletion still surfaces, no bogus report attached", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([BUDGET_DEATH, { ...BUDGET_DEATH }]); // the re-ask dies the same way
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls).toHaveLength(2); // re-asked exactly once, never a third
+    expect(r.emptyCompletion).toBe(true); // still surfaces — the conductor decides, as today
+    expect(r.resultText).toBe(""); // no bogus report attached
+    expect(r.hitBudget).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does NOT re-ask a session under a live provider limit (a Codex empty completion) — left to the conductor", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback
+    const rec = seqSession([{ ...EC_SHAPE, sessionId: "sess-ec" }]);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls).toHaveLength(1); // resuming a limited session is futile → no re-ask
+    expect(r.emptyCompletion).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // ── Item B: anchored functionality cap — parity with the autonomous evaluate.ts path ──
 
 /** An evaluator reply with a controllable assertion set + functionality score. */

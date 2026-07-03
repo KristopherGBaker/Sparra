@@ -108,6 +108,18 @@ describe("selfVerifyGuidance — in-place opt-in ungating (H7 assertion 7e)", ()
     expect(selfVerifyGuidance(ctx, true)).toBe("");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("(U4) the non-empty guidance carries the cap-aware truncation/run-as-written clause AND still the SELF-VERIFY text", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    ctx.store.data.build.branch = "sparra/x"; // ensure the block is emitted
+    const out = selfVerifyGuidance(ctx, true);
+    // Extends, not replaces: the existing anchor stays…
+    expect(out).toContain("SELF-VERIFY");
+    // …and the new clause tells writers output is truncated → run as written + read the tail/summary.
+    expect(out).toContain("Tool output is TRUNCATED");
+    expect(out).toContain("read the tail/summary");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("rubricText — anchored criterion definitions + band scale (Q4)", () => {

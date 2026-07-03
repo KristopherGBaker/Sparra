@@ -89,7 +89,10 @@ build:
                               #   items are clamped (head kept, with a warning); 0 = no cap
   jsonReask: true             # on an unparseable generator report / evaluator verdict, re-ask
                               #   ONCE on the same session ("re-emit ONLY the JSON block") before
-                              #   the usual fallback (degraded report / forced FAIL)
+                              #   the usual fallback (degraded report / forced FAIL). Also covers
+                              #   interactive role-runs (run_role / /sparra-loop): a writer that hit
+                              #   OUR budget cap with work landed but no report gets one tight
+                              #   (1-turn) report-only re-ask before the conductor is asked to step in
   maxRoundsPerItem: 6
   maxTurnsPerSession: 60
   escalateAfterRounds: 0      # quality escalation: after this many FAILED rounds on an item, switch

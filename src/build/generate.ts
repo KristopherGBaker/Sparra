@@ -14,6 +14,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy, selfVerifyGuidance } from "./modeText.ts";
+import { reportReaskOverrides } from "./jsonReask.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
@@ -153,9 +154,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     warn(`Generator for ${item.id} returned no parseable report JSON — re-asking once for the JSON block.`);
     const retry = await run({
       ...baseReq,
-      role: `generator-${item.id}-reask`,
-      prompt: "Your previous reply had no parseable report JSON. Re-emit ONLY the JSON block per your instructions — nothing else.",
-      resume: res.sessionId,
+      ...reportReaskOverrides({ role: `generator-${item.id}-reask`, sessionId: res.sessionId }),
     });
     costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;
