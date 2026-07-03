@@ -28,6 +28,8 @@ import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
+import { mergedBuildEnv } from "./env.ts";
+import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
 /**
@@ -493,7 +495,8 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const conventions = roleKind === "generator" || roleKind === "reviewer" ? await conventionsBlock(ctx) : "";
 
   const contractBlock = contract.trim() ? `\nAGREED CONTRACT (satisfy/grade against THIS):\n---\n${contract.trim()}\n---\n` : "";
-  let task = `${brief.trim()}\n${contractBlock}${conventions}${memory}`;
+  const environment = roleKind === "generator" ? await environmentNotesSection(ctx.paths) : "";
+  let task = `${brief.trim()}\n${environment}${contractBlock}${conventions}${memory}`;
   if (evaluator) {
     task += holdoutSection(holdoutText); // injected ONLY here
   } else {
@@ -574,6 +577,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     cwd: workspace,
     additionalDirectories: readDirs,
     tools: spec.tools,
+    env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, spec.skillsName),
     // Backend-agnostic safety intent so Codex sandboxes correctly (it ignores Claude hooks):
     // only the generator may write; every other role is read-only. A write role's native-sandbox

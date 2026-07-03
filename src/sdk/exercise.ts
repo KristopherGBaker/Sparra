@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createSdkMcpServer, tool, type McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { ExerciseMechanism, SparraConfig } from "../config.ts";
+import { mergedBuildEnv, stringProcessEnv } from "../build/env.ts";
 
 /** What the evaluator gets to EXERCISE the artifact, chosen by config.exercise.mechanism. */
 export interface Exerciser {
@@ -62,9 +63,15 @@ export function exerciseStatusFromObservations(obs: ("blocked" | "ran")[]): "blo
   return "none";
 }
 
-function runShell(command: string, cwd: string, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+function runShell(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  env: Record<string, string>,
+  spawnFn: typeof spawn = spawn
+): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true });
+    const child = spawnFn(command, { cwd, shell: true, env });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -167,8 +174,9 @@ Every UI assertion in the contract must be backed by an XCUITest assertion you r
  * Build the exerciser for a given mechanism. The artifact directory (the cwd the
  * generator built into) is captured so commands run in the right place.
  */
-export function buildExerciser(config: SparraConfig, artifactDir: string): Exerciser {
+export function buildExerciser(config: SparraConfig, artifactDir: string, opts: { spawnFn?: typeof spawn } = {}): Exerciser {
   const mech: ExerciseMechanism = config.exercise.mechanism;
+  const env = mergedBuildEnv(config) ?? stringProcessEnv();
 
   // Harness-owned observation log: one classification per tool invocation. The TEXT returned to the
   // model is unchanged (additive); this is what makes the harness — not the model's self-report —
@@ -184,7 +192,7 @@ export function buildExerciser(config: SparraConfig, artifactDir: string): Exerc
     },
     async (args) => {
       const timeout = Math.min(args.timeout_ms ?? 60_000, 600_000);
-      const r = await runShell(args.command, artifactDir, timeout);
+      const r = await runShell(args.command, artifactDir, timeout, env, opts.spawnFn);
       observations.push(classifyExerciseExit(r));
       return block(
         `$ ${args.command}\n[cwd: ${artifactDir}]\n[exit code: ${r.code}${r.timedOut ? " — TIMED OUT" : ""}]\n\n--- stdout ---\n${r.stdout || "(empty)"}\n\n--- stderr ---\n${r.stderr || "(empty)"}`

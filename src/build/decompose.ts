@@ -9,6 +9,7 @@ import { extractJson } from "../util/extract.ts";
 import { readJson, readText, writeJson, exists } from "../util/io.ts";
 import { info, warn } from "../util/log.ts";
 import type { WorkItem } from "./types.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 /** Read the frozen plan and produce items.json. Idempotent unless force is set.
  *  `workspaceDir` (the worktree for an isolated build, else `ctx.root`) selects a holdout-free cwd;
@@ -69,6 +70,7 @@ Order matters: earlier items should not depend on later ones.`;
     effort: role.effort,
     cwd,
     tools: ["Read", "Glob", "Grep"],
+    env: mergedBuildEnv(ctx.config),
     // Forbid role: run in a holdout-free cwd (the worktree when building isolated; else ctx.root).
     // Keep the deny-decider attached (tracking THAT cwd) as defense-in-depth on hooks-aware backends.
     ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),

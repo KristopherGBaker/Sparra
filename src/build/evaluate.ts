@@ -19,6 +19,7 @@ import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./hold
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -116,6 +117,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     cwd: workspaceDir,
     additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Bash"],
+    env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, "evaluator"),
     allowedTools: exerciser.allowedTools,
     mcpServers: exerciser.mcpServers,

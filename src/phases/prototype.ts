@@ -3,18 +3,25 @@ import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { plannerWriteScope } from "../sdk/permissions.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { banner, info, ok, warn, detail } from "../util/log.ts";
 import { ensureDir, exists, readText } from "../util/io.ts";
 import { isGitRepo, hasCommits, prepareWorkspace } from "../util/git.ts";
+import { mergedBuildEnv } from "../build/env.ts";
+import { environmentNotesSection } from "../environment.ts";
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "proto";
 }
 
-export async function cmdPrototype(ctx: Ctx, idea: string): Promise<void> {
+export async function cmdPrototype(
+  ctx: Ctx,
+  idea: string,
+  opts: { runSessionFn?: (p: RunSessionParams) => Promise<RunResult> } = {}
+): Promise<void> {
   banner("Phase B · PROTOTYPE (throwaway, for learning)");
   if (!idea.trim()) {
     warn('Describe what to explore, e.g. `sparra prototype "try SQLite vs JSON file for storage"`');
@@ -44,9 +51,11 @@ export async function cmdPrototype(ctx: Ctx, idea: string): Promise<void> {
   const traceDir = ctx.paths.traceDir(runId);
 
   const planText = (await readText(ctx.paths.plan)) ?? "";
+  const environment = await environmentNotesSection(ctx.paths);
   const task = `Explore this question with a throwaway prototype: "${idea}"
 
 Work ONLY inside: ${protoDir}
+${environment}
 ${isExisting ? `This is an existing project; you may read the real repo at ${ctx.root} for reference, but write only inside the prototype workspace.\n` : ""}
 Current PLAN.md (context, for orientation):
 ---
@@ -55,7 +64,8 @@ ${planText.slice(0, 4000)}
 Build the smallest thing that answers the question, then write FINDINGS.md in the prototype directory.`;
 
   info(`Prototyping with ${role.model}…`);
-  const res = await runSession({
+  const run = opts.runSessionFn ?? runSession;
+  const res = await run({
     role: "prototyper",
     prompt: task,
     systemPrompt: system,
@@ -65,6 +75,7 @@ Build the smallest thing that answers the question, then write FINDINGS.md in th
     cwd: protoDir,
     additionalDirectories: isExisting ? [ctx.root] : undefined,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+    env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, "prototyper"),
     ...scopedWriterGuard(ctx, [protoDir]),
     maxTurns: ctx.config.build.maxTurnsPerSession,

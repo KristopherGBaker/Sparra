@@ -54,10 +54,13 @@ From the project root (the dir you ran `sparra` in):
    baseline, regressions flagged). A `MEASURE` line in `memory.md` summarizes each run. Reflect
    reads this dir, so measured regressions inform prompt improvement.
 
-6. **`.sparra/memory.md`** — durable cross-run learnings (pivots, budget halts, pass/fail, measure).
+6. **`.sparra/environment.md`** — optional environment notes injected into writer prompts. Read it
+   when tools fail before project code loads (cache/user dirs, headless app setup, writable HOME).
+
+7. **`.sparra/memory.md`** — durable cross-run learnings (pivots, budget halts, pass/fail, measure).
    Roles read this each item; a wrong/misleading entry can bias new work.
 
-7. **`CHANGELOG.md`** / **`.sparra/proposals/`** — recorded deviations (in-scope) and
+8. **`CHANGELOG.md`** / **`.sparra/proposals/`** — recorded deviations (in-scope) and
    out-of-scope ideas logged for the human (brownfield).
 
 ## Item statuses

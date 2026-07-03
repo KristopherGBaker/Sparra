@@ -70,6 +70,7 @@ class ClaudeBackend implements AgentBackend {
     if (req.tools) options.tools = req.tools;
     if (req.allowedTools) options.allowedTools = req.allowedTools;
     if (req.disallowedTools) options.disallowedTools = req.disallowedTools;
+    if (req.env) options.env = req.env;
     if (req.canUseTool) options.canUseTool = req.canUseTool;
     if (hooks) options.hooks = hooks;
     if (req.mcpServers) options.mcpServers = req.mcpServers;

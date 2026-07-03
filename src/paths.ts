@@ -48,6 +48,9 @@ export class Paths {
   get memory() {
     return path.join(this.dir, "memory.md");
   }
+  get environment() {
+    return path.join(this.dir, "environment.md");
+  }
   get frozen() {
     return path.join(this.dir, "frozen");
   }

@@ -8,6 +8,7 @@ import { loadPrompt } from "../prompts.ts";
 import { readOnlyGuard } from "../sdk/guard.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { changedFiles, workingDiff, commitPaths } from "../util/git.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 /**
  * Commit an accepted item onto the Sparra branch. Two modes (config `git.agentCommits`):
@@ -94,6 +95,7 @@ export async function commitItem(ctx: Ctx, args: CommitItemArgs): Promise<{ ok: 
       baseUrl: role.baseUrl,
       apiKey: role.apiKey,
       cwd: workspaceDir,
+      env: mergedBuildEnv(ctx.config),
       // No tools: the diff is supplied inline, so the committer can't read anything off disk
       // (closes any .sparra/holdout read vector even when the workspace IS the repo root).
       tools: [],

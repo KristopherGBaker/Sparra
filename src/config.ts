@@ -222,6 +222,13 @@ export interface SparraConfig {
      */
     zeroCostTokenCap: number;
     /**
+     * Environment variables injected into build execution surfaces: agent SDK sessions,
+     * evaluator exercise commands, and harness verify/measure commands. Values must be strings.
+     * The runner merges these over process.env before passing env to SDKs/spawns because the SDKs
+     * replace inherited env whenever env is provided.
+     */
+    env: Record<string, string>;
+    /**
      * Agent skills made available to the builder roles (generator, prototyper) by default.
      * Claude loads them natively (as a scoped local plugin, settingSources stays []); Codex
      * gets their SKILL.md inlined into the input. Per-role `roles.<role>.skills` overrides.
@@ -463,6 +470,7 @@ export function defaultConfig(): SparraConfig {
       zeroCostTokenCap: 0,
       // Off by default: opting in lets an unattended build sleep for hours waiting out a limit.
       autoRestart: { enabled: false, maxWaitSec: 21600, pollSec: 300, maxRestarts: 20 },
+      env: {},
       skills: [],
       extraReadDirs: [],
       // Default set deliberately EXCLUDES package-runners like `npx` that fetch/install on demand —
@@ -523,7 +531,25 @@ export async function loadConfig(paths: Paths): Promise<SparraConfig> {
   } catch (e) {
     throw new Error(`Could not parse ${paths.config}: ${(e as Error).message}`);
   }
+  validateBuildEnv(parsed, paths.config);
   return deepMerge(def, parsed);
+}
+
+function validateBuildEnv(parsed: unknown, configPath: string): void {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  const build = (parsed as Record<string, unknown>).build;
+  if (build == null) return;
+  if (typeof build !== "object" || Array.isArray(build)) return;
+  const env = (build as Record<string, unknown>).env;
+  if (env == null) return;
+  if (typeof env !== "object" || Array.isArray(env)) {
+    throw new Error(`Invalid ${configPath}: build.env must be a map of string values`);
+  }
+  for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+    if (typeof value !== "string") {
+      throw new Error(`Invalid ${configPath}: build.env.${key} must be a string`);
+    }
+  }
 }
 
 export async function writeDefaultConfig(

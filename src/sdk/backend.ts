@@ -85,6 +85,8 @@ export interface AgentRequest {
   cwd: string;
   additionalDirectories?: string[];
   tools?: string[];
+  /** Environment variables for the backend process; already merged over process.env by callers. */
+  env?: Record<string, string>;
   /** Agent skills to make available to this role (native where supported, else inlined). */
   skills?: ResolvedSkill[];
 

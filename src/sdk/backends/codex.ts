@@ -80,6 +80,7 @@ class CodexBackend implements AgentBackend {
       if (req.baseUrl) codexOptions.baseUrl = req.baseUrl;
       if (req.apiKey) codexOptions.apiKey = req.apiKey;
       else if (req.baseUrl) codexOptions.apiKey = "lm-studio"; // local servers ignore the key
+      if (req.env) codexOptions.env = req.env;
       const codex = new Codex(codexOptions);
 
       const threadOptions: Record<string, unknown> = {

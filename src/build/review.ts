@@ -11,6 +11,7 @@ import { buildReadDirs } from "./readscope.ts";
 import { makeHoldoutReadDecider } from "./holdout.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { costUsdOrZero } from "./budget.ts";
+import { mergedBuildEnv } from "./env.ts";
 import type { WorkItem } from "./types.ts";
 
 export interface Finding {
@@ -98,6 +99,7 @@ ${conventions}Review for substance per your instructions and emit the JSON findi
     // would expose .sparra/HOLDOUT.md when building on a worktree) and deny on-disk holdout reads.
     additionalDirectories: reviewReadDirs,
     tools: ["Read", "Glob", "Grep", "Bash"],
+    env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, "reviewer"),
     ...readOnlyGuard(ctx, {
       readScopes: [workspaceDir, ...(reviewReadDirs ?? [])],

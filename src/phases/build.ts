@@ -28,6 +28,7 @@ import { measureAcceptedItem, renderMeasureLearning } from "../build/measure.ts"
 import { diffClaims, renderClaimGap } from "../build/claims.ts";
 import { assertNoHoldoutLeak, readHoldout, redactHoldout } from "../build/holdout.ts";
 import { extractVerifyCommands, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
+import { mergedBuildEnv } from "../build/env.ts";
 import {
   writeContractPause,
   writeRoundPause,
@@ -877,7 +878,8 @@ export async function cmdBuild(
                   extractVerifyCommands(contract.text),
                   reruns,
                   d.execVerifyCommand,
-                  ctx.config.build.verifyCommands // explicit opt-in past the executor's argv[0] allowlist
+                  ctx.config.build.verifyCommands, // explicit opt-in past the executor's argv[0] allowlist
+                  mergedBuildEnv(ctx.config)
                 )
               ).filter((r) => r.status !== "ok")
             : [];

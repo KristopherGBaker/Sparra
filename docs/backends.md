@@ -13,6 +13,7 @@ Two backends ship today:
 | Tool-call hooks | ✓ (Pre/PostToolUse) | — |
 | Sandbox | — (hooks + permission mode) | **native OS sandbox** |
 | Skills | native (scoped local plugin) | `SKILL.md` inlined into input |
+| Env injection | `Options.env` | `CodexOptions.env` |
 | Cost | USD + tokens | tokens |
 
 The Codex SDK is **optional**: install only if you use it — `npm i @openai/codex-sdk` plus the `codex` CLI on PATH (auth comes from `~/.codex`). Absent, the backend no-ops with a clear message; the rest of the harness runs fine.
@@ -75,6 +76,11 @@ roles:
 ```
 
 > Heads-up: decomposition is a *planning* act and reads best on a model that follows the decomposer prompt closely. If you put the builder on Codex, keep `decomposer` on Claude (Codex tends to over-split). That's why `decomposer` is its own role.
+
+## Environment variables
+`build.env` is injected for both shipped backends. Claude receives the merged map via `Options.env`; Codex receives it via `CodexOptions.env`. Both installed SDK declaration files state that providing `env` replaces inherited `process.env`, so Sparra first builds a string-only merge of `process.env` plus `build.env` (with `build.env` winning) before passing it to either SDK. That preserves `PATH` and auth variables while letting a project pin tool cache homes such as `HOME=/private/tmp`.
+
+Future backends should use a real env option when their SDK exposes one. If a backend lacks env injection entirely, document that asymmetry and degrade by adding the expected environment facts to the role brief; Claude and Codex do not use that prompt-only path.
 
 ## Normalized intent, native enforcement
 A request carries **backend-agnostic intent** — `writeScope`, `readOnly`, `outputSchema`, `maxTokens` — and each backend satisfies it natively:

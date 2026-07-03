@@ -124,6 +124,10 @@ The few that matter most:
   worktree boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
   strict allow-hook with `allowVerify: true` (MCP) / `--verify` (CLI) — so the interactive
   generator self-verifies its gates and the conductor no longer has to run every gate out-of-band.
+- **`build.env`** — string env vars merged over `process.env` and injected into build SDK
+  sessions, evaluator `run_command` spawns, and verify/measure command spawns. Use this for
+  per-project tool cache/user dirs (for example `HOME: /private/tmp` under a sandbox). Optional
+  `.sparra/environment.md` carries concise environment notes for writer prompts.
 - **`exercise.sandbox`** — `workspace-write` (default) | `read-only`. The sandbox a **Codex**
   evaluator's exercise runs under on a worktree boundary: `workspace-write` lets `npm test`/`tsc`
   write the scratch they need (network off; a source-integrity guard reverts+fails any

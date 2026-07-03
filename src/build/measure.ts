@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Ctx } from "../context.ts";
 import { runVerifyCommand, type CommandExecutor } from "./exec.ts";
 import { readText, writeText, stampFromDate } from "../util/io.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 /**
  * The post-accept MEASURE core: parse the project's structured metrics, diff them against a
@@ -294,6 +295,8 @@ export interface RunMeasureOptions {
   defaultGoal: Goal;
   /** compare-only: parse + diff + report, but DON'T write the baseline. */
   compareOnly?: boolean;
+  /** Environment for the spawned measure command, already merged over process.env by the caller. */
+  env?: Record<string, string>;
   /** Injectable clock for a deterministic artifact filename in tests. */
   now?: () => Date;
 }
@@ -316,7 +319,10 @@ export async function runMeasure(opts: RunMeasureOptions, deps: MeasureDeps): Pr
   };
 
   // 1) Run the command through the safe executor (its own value is the argv[0]-allowlist opt-in).
-  const outcome = await deps.exec(opts.cwd, opts.command, { allowPrefixes: [opts.command] });
+  const outcome = await deps.exec(opts.cwd, opts.command, {
+    allowPrefixes: [opts.command],
+    env: opts.env,
+  });
   if (!outcome.ran) {
     const reason = `command not run — unsafe for the harness executor: ${outcome.unsafeReason}`;
     const reportPath = await writeReport({ ran: false, ok: false, metrics: {}, deltas: [], regressions: [], baselineUpdated: false, reason });
@@ -374,6 +380,7 @@ export async function measureAcceptedItem(
       threshold: m.regressionThreshold,
       defaultGoal: m.defaultGoal,
       compareOnly: opts.compareOnly,
+      env: mergedBuildEnv(ctx.config),
       now: opts.now,
     },
     deps

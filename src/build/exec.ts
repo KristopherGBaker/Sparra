@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
+import { stringProcessEnv } from "./env.ts";
 
 /**
  * Harness-side (NO-model) command executor + the pure helpers around it:
@@ -32,7 +33,7 @@ export type ExecOutcome =
 export type CommandExecutor = (
   workspace: string,
   command: string,
-  opts?: { allowPrefixes?: string[] }
+  opts?: { allowPrefixes?: string[]; env?: Record<string, string> }
 ) => Promise<ExecOutcome>;
 
 /** Per-stream output cap (chars) — enough to diagnose, small enough for a prompt. */
@@ -178,7 +179,7 @@ export function unsafeExecReason(cmd: string, allowPrefixes: string[] = []): str
 export async function runVerifyCommand(
   workspace: string,
   command: string,
-  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn; allowPrefixes?: string[] } = {}
+  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn; allowPrefixes?: string[]; env?: Record<string, string> } = {}
 ): Promise<ExecOutcome> {
   const cmd = command.trim();
   const unsafe = unsafeExecReason(cmd, opts.allowPrefixes ?? []);
@@ -187,7 +188,11 @@ export async function runVerifyCommand(
   const spawnFn = opts.spawnFn ?? spawn; // injectable so tests can PROVE an unsafe command never spawns
   const argv = cmd.split(/\s+/); // safe: SHELL_METACHARS already rejected anything quote/expansion-shaped
   return await new Promise<ExecOutcome>((resolve) => {
-    const child = spawnFn(argv[0]!, argv.slice(1), { cwd: workspace, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnFn(argv[0]!, argv.slice(1), {
+      cwd: workspace,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: opts.env ?? stringProcessEnv(),
+    });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -297,7 +302,8 @@ export async function rerunVerifyCommands(
   reruns: number,
   exec: CommandExecutor,
   /** Project `build.verifyCommands` — the explicit opt-in past the executor's argv[0] allowlist. */
-  allowPrefixes: string[] = []
+  allowPrefixes: string[] = [],
+  env?: Record<string, string>
 ): Promise<RerunResult[]> {
   const results: RerunResult[] = [];
   for (const command of commands) {
@@ -305,7 +311,7 @@ export async function rerunVerifyCommands(
     let detail = "";
     let unsafe = false;
     for (let i = 0; i < reruns; i++) {
-      const o = await exec(workspace, command, { allowPrefixes });
+      const o = await exec(workspace, command, { allowPrefixes, env });
       if (!o.ran) {
         unsafe = true;
         detail = renderExecOutcome(o);

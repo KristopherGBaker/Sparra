@@ -13,6 +13,7 @@ import { classifyExec, extractVerifyCommands, renderExecOutcome, runVerifyComman
 import { contractModeClauses } from "./modeText.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 const AGREED = "CONTRACT: AGREED";
 const SECTION = "## AGREED CONTRACT";
@@ -101,6 +102,7 @@ export async function negotiateContract(
       effort: genRole.effort,
       cwd,
       tools: ["Read", "Glob", "Grep"],
+      env: mergedBuildEnv(ctx.config),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
       ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
@@ -122,6 +124,7 @@ export async function negotiateContract(
       effort: evalRole.effort,
       cwd,
       tools: ["Read", "Glob", "Grep"],
+      env: mergedBuildEnv(ctx.config),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
       ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
@@ -142,7 +145,10 @@ export async function negotiateContract(
       if (ctx.config.contract.probeVerifyCommands) {
         for (const cmd of extractVerifyCommands(proposal)) {
           // build.verifyCommands = the explicit opt-in past the executor's argv[0] allowlist.
-          const o = await exec(workspaceDir ?? ctx.root, cmd, { allowPrefixes: ctx.config.build.verifyCommands });
+          const o = await exec(workspaceDir ?? ctx.root, cmd, {
+            allowPrefixes: ctx.config.build.verifyCommands,
+            env: mergedBuildEnv(ctx.config),
+          });
           if (!o.ran || classifyExec(o) === "usage") brokenCommands.push(renderExecOutcome(o));
         }
       }

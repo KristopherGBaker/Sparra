@@ -18,6 +18,8 @@ import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
+import { mergedBuildEnv } from "./env.ts";
+import { environmentNotesSection } from "../environment.ts";
 
 export interface Deviation {
   summary: string;
@@ -79,10 +81,12 @@ export async function generateItem(args: {
   const map = await readText(ctx.paths.frozenMap);
   const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
   const conventions = isApplePlatform(ctx) ? `\n${appleConventions(ctx.config.exercise.ios.platform)}\n` : "";
+  const environment = await environmentNotesSection(ctx.paths);
 
   const task = `Implement work item ${item.id}: ${item.title}
 
 Build into: ${workspaceDir}
+${environment}
 
 AGREED CONTRACT (your spec — satisfy every assertion):
 ---
@@ -109,6 +113,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     cwd: workspaceDir,
     additionalDirectories: genReadDirs,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+    env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, "generator"),
     // Native-sandbox intent (Codex honors it; Claude ignores it). danger-full-access is
     // gated to a git worktree/branch boundary — the only safety wall on an autonomous run.

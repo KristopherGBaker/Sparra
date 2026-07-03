@@ -8,6 +8,7 @@ import { appendText, writeText } from "../util/io.ts";
 import { detail, info } from "../util/log.ts";
 import type { Deviation } from "./generate.ts";
 import type { WorkItem } from "./types.ts";
+import { mergedBuildEnv } from "./env.ts";
 
 /**
  * Persist deviations deterministically:
@@ -76,6 +77,7 @@ ${deviations.map((d) => `- [${d.scope}] ${d.summary} — ${d.rationale}`).join("
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,
+    env: mergedBuildEnv(ctx.config),
     tools: ["Read", "Edit", "Write"],
     permissionMode: "default",
     // Forbid role in the repo root: it edits PLAN.md (read by the builder), so deny on-disk holdout
