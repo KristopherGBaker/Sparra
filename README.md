@@ -85,6 +85,14 @@ sparra resume        # continue any phase from disk
 - **Filesystem is the source of truth.** Contracts, verdicts, traces, and memory all live in `.sparra/` on disk — resumable from any point, and it survives provider rate limits unattended. → [docs/configuration.md](docs/configuration.md)
 - **Self-improving.** `sparra reflect` reads the run's traces and proposes prompt edits you approve. → [docs/phases.md](docs/phases.md#self-improvement-outer-loop)
 
+## Adapt it to your stack
+
+Sparra is a harness, not a fixed pipeline. The [iOS/macOS support](docs/ios.md) is really *one worked example* of fitting it to a stack — a custom exerciser plus injected house conventions — and the same hooks let you fit it to yours, in any language:
+
+- **Exercise your way** — `exercise.mechanism: custom` runs your own shell recipe to build/run/probe the artifact (`cli` and `web` cover the common cases). → [docs/build-loop.md](docs/build-loop.md#exercisers)
+- **Your own verify + QA commands** — `build.verifyCommands` (how the generator checks itself) and `measure.command` (your project's benchmark/QA harness) are just your commands. → [docs/configuration.md](docs/configuration.md)
+- **Teach it your tooling** — hand any role a skill (`roles.<role>.skills`, a `SKILL.md` describing your build/test/deploy) and edit the role prompts in `.sparra/prompts` to inject your conventions. → [docs/backends.md](docs/backends.md#skills)
+
 ## Docs
 
 | | |

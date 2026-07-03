@@ -1,5 +1,7 @@
 # iOS / macOS projects
 
+> This is **one worked example** of adapting Sparra to a stack — a `custom`-style exerciser (`xcodebuildmcp`) plus injected house conventions and a `format.command`. The specific tooling and Swift conventions below reflect how the author builds Apple apps; treat them as a template. The same hooks — a custom exercise recipe, `build.verifyCommands`, per-role `skills`, and editable role prompts — let you fit Sparra to *your* toolchain in any language. See [Adapt it to your stack](../README.md#adapt-it-to-your-stack).
+
 Sparra builds and **exercises a real running Apple-platform app** (not just a diff): it builds, launches the app, drives the UI, screenshots it, and — because the evaluator is **multimodal** — *reads the screenshot* to judge it, plus a UI hierarchy for deterministic assertions. So it can verify UI changes, not just that the app compiles.
 
 Two platforms, set by **`exercise.ios.platform`**:
