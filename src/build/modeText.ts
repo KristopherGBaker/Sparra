@@ -32,7 +32,7 @@ export function selfVerifyGuidance(ctx: Ctx, allowVerify = false): string {
   if (!cmds.length || !(ctx.store.data.build.branch || allowVerify)) return "";
   return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash. Use these commands AS WRITTEN: ${cmds
     .slice(0, 6)
-    .join(", ")} — run them, READ the output, and FIX anything you broke. Tool output is TRUNCATED, so run each AS WRITTEN and read the tail/summary rather than piping/grepping/redirecting to inspect it (those forms are blocked and only burn turns). Do not report success on code you have not compiled/tested. ONLY these exact command forms are auto-approved: package-runner / path-qualified variants (\`npx tsc\`, \`./node_modules/.bin/vitest\`) and command chaining, redirects, network installs, or commits are NOT — they will be blocked, so don't substitute them. Writes stay inside your work tree.`;
+    .join(", ")} — run them, READ the output, and FIX anything you broke. Tool output is TRUNCATED, so run each AS WRITTEN and read the tail/summary rather than piping/grepping/redirecting to inspect it (those forms are blocked and only burn turns). Do not report success on code you have not compiled/tested. ONLY the exact commands listed above are auto-approved (a \`<cmd> -- <args>\` suffix like \`${cmds[0] ?? "npm test"} -- <file>\` is fine — it still starts with the allowed command); do NOT substitute a \`npx\`/\`./node_modules/.bin\` variant or wrap it in \`cd X &&\`/\`git -C <abs>\`/chaining/redirects/installs/commits — those are NOT approved, stall on the guard, and only burn turns. Writes stay inside your work tree.`;
 }
 
 /** The generator's deviation policy text, by mode + strictness. */
