@@ -17,7 +17,7 @@ describe("evaluator prompt — environmental blockers route to notes, not `block
   const ev = DEFAULT_PROMPTS.evaluator;
   it("keeps the could-not-run → exerciseStatus='blocked' inability path", () => {
     expect(ev).toContain("exerciseStatus='blocked'");
-    expect(ev).toContain("could not RUN due to ENVIRONMENT");
+    expect(ev).toContain("could not EXECUTE due to ENVIRONMENT");
   });
   it("routes the environmental blocker into `notes`, NOT `blocking`", () => {
     // (a) new distinction present.
@@ -25,6 +25,39 @@ describe("evaluator prompt — environmental blockers route to notes, not `block
     // (b) the old contradictory routing is GONE — without this, a builder could append (a) while
     // leaving the self-contradictory "name the blocker in `blocking`" text and still grep green.
     expect(ev).not.toContain("name the blocker in `blocking`");
+  });
+  it("carries UN-RUN ids in the schema and requires stating the un-run set", () => {
+    expect(ev).toContain("unrunAssertionIds");
+    expect(ev).toContain("State the un-run set explicitly");
+    expect(ev).toContain('"exerciseStatus": "ran" | "blocked" | "mixed"');
+  });
+});
+
+describe("contract-generator prompt — teardown-crashy sentinel output guidance", () => {
+  const cg = DEFAULT_PROMPTS["contract-generator"]!;
+  it("prefers artifact-emitted sentinel output once, in the existing verify-command clause", () => {
+    expect(cg).toContain("artifact-emitted sentinel output");
+    expect(cg).toContain("printed PASS/FAIL lines or result files");
+    expect(cg).toContain("exit code secondary");
+    expect(cg.match(/artifact-emitted sentinel output/g)?.length).toBe(1);
+  });
+});
+
+describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
+  it("documents verdict semantics and bumps the plugin version above 2026.7.3.2", () => {
+    const buildLoop = fs.readFileSync(path.join(process.cwd(), "docs/build-loop.md"), "utf8");
+    const skill = fs.readFileSync(path.join(process.cwd(), "skills/sparra/SKILL.md"), "utf8");
+    const diagnose = fs.readFileSync(path.join(process.cwd(), "skills/sparra/subskills/diagnose.md"), "utf8");
+    const marketplace = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".claude-plugin/marketplace.json"), "utf8"));
+
+    expect(buildLoop).toContain("UN-RUN");
+    expect(buildLoop).toContain("ran+blocked");
+    expect(buildLoop).toContain("`mixed`");
+    expect(skill).toContain("unrunAssertionIds");
+    expect(skill).toContain("exerciseStatus: mixed");
+    expect(diagnose).toContain("Verdict lists `unrunAssertionIds`");
+    expect(diagnose).toContain("all-UN-RUN verdict is inconclusive");
+    expect(marketplace.metadata.version).toBe("2026.7.3.4");
   });
 });
 

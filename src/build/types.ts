@@ -14,16 +14,20 @@ export interface WorkItem {
   gen?: "local" | "default";
 }
 
+export type ExerciseStatus = "ran" | "blocked" | "mixed";
+
 export interface Verdict {
   assertions: { id: number; pass: boolean; evidence: string }[];
+  /** Assertion ids the evaluator could not execute for an environment/tooling reason. These are
+   *  no-signal, distinct from failed assertions, and excluded from assertion-anchored caps. */
+  unrunAssertionIds?: number[];
   scores: { design: number; originality: number; craft: number; functionality: number };
   weightedTotal: number;
   verdict: "pass" | "fail";
-  /** Did the EXERCISE actually run? "ran" (default/absent) = a real behavioral grade. "blocked" =
-   *  the exercise could not run due to the ENVIRONMENT (sandbox/EPERM/missing tool/simulator), NOT
-   *  the artifact — an INCONCLUSIVE result: the build loop must not count it as a behavioral fail
-   *  or GAN-pivot on it. */
-  exerciseStatus?: "ran" | "blocked";
+  /** Did the EXERCISE actually run? "ran" (default/absent) = real observed commands; "mixed" =
+   *  some commands ran while some were environment-blocked; "blocked" = no command ran because of
+   *  ENVIRONMENT (sandbox/EPERM/missing tool/simulator), NOT the artifact — inconclusive. */
+  exerciseStatus?: ExerciseStatus;
   blocking: string[];
   notes: string;
   /** Set by the build loop when the generator's `assertionsClaimed` contradicted this verdict

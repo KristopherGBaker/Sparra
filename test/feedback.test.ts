@@ -43,6 +43,25 @@ describe("renderPatchFeedback — per-assertion evidence (pure function of the V
     expect(fb).not.toContain("ran sub, saw ok"); // passed assertion's evidence stays out
   });
 
+  it("separates UN-RUN assertions from failed assertion feedback", () => {
+    const fb = renderPatchFeedback(
+      mixedVerdict({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: 2, pass: false, evidence: "real failure" },
+          { id: 3, pass: false, evidence: "command not found in evaluator env" },
+        ],
+        unrunAssertionIds: [3],
+      })
+    );
+    const failedSection = fb.split("Un-run assertions")[0]!;
+    expect(failedSection).toContain("#2: real failure");
+    expect(failedSection).not.toContain("#3: command not found");
+    expect(fb).toContain("Un-run assertions (no signal");
+    expect(fb).toContain("#3: command not found in evaluator env");
+    expect(fb).not.toContain("ok");
+  });
+
   it("includes every blocking[] item (no regression from the ids-only format)", () => {
     const fb = renderPatchFeedback(mixedVerdict());
     expect(fb).toContain("- add returns the wrong sum");
@@ -228,6 +247,41 @@ describe("cmdBuild — feedback paths carry per-assertion evidence", () => {
     expect(round2).toContain("exercisable"); // framing preserved
     expect(round2).toContain("#2: ran add 2 3, saw 6");
     expect(round2).toContain("#4: crash: TypeError");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ALL-UN-RUN path: does not advance failed-round or pivot counters and feeds back no-signal ids", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    const feedbacks: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [item],
+      generateItem: async (args) => {
+        feedbacks.push(args.feedback);
+        return genOut();
+      },
+      evaluateItem: async () =>
+        evalOut(
+          mixedVerdict({
+            assertions: [
+              { id: 1, pass: false, evidence: "command not found" },
+              { id: 2, pass: false, evidence: "simulator unavailable" },
+            ],
+            unrunAssertionIds: [1, 2],
+            exerciseStatus: "mixed",
+            scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
+          })
+        ),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.failedRounds ?? 0).toBe(0);
+    expect(st.pivots).toBe(0);
+    expect(st.criterionFailStreak).toEqual({});
+    const round2 = feedbacks[1];
+    expect(round2).toContain("UN-RUN/no-signal");
+    expect(round2).toContain("Un-run assertions (no signal");
+    expect(round2).toContain("#1: command not found");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

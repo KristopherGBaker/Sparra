@@ -82,7 +82,7 @@ PROPORTIONALITY & RELEVANCE (definition of DONE for a human, not a compliance au
 - NEVER assert ABSENCE of anything the toolchain/env controls or any property you can't reliably make true (e.g. "binary unsigned" when linker ad-hoc-signs; timestamps; machine paths).
 - Read "don't need X" as "don't require/fail on X", NOT "prove not-X" ("no code signing needed" = no team required & signing doesn't block build, not "prove bundle unsigned").
 - DEFEAT DEGENERATE/NO-OP SATISFACTION. When core behavior TRANSFORMS/COMBINES inputs (average, dedupe, merge, diff) or DISCRIMINATES cases (match vs non-match, two classes), include ≥1 assertion a degenerate input could NOT pass: DISTINCT real fixtures (not byte-identical copies), a CONTRASTING negative case, stand-ins STRUCTURALLY CORRECT for the case (single-subject ref, not group photo) that actually EXHIBIT the property in the target env (a "different-person" fixture must contain a DETECTABLE face, else it buckets "no" for the wrong reason — a vacuous no-op). Don't assume a fixture has the property; check it or add a precondition step. For DISCRIMINATION pin RELATIVE separation (positive-pair similarity > negative-pair by a real margin), not two loose absolute bands a near-duplicate clears.
-- EVERY VERIFY COMMAND MUST RUN AS WRITTEN. Check each command in "I will verify by" against the real source/fixtures: every subcommand, flag, field, fixture path must exist as typed (the harness probes each command on agreement and bounces usage errors — flags/paths are still YOUR job). A broken verify step (e.g. \`enroll -o\` when enroll only takes \`--profile\`) false-fails AND gets copied into the shipped tests, so the artifact's own verification crashes as delivered.
+- EVERY VERIFY COMMAND MUST RUN AS WRITTEN. Check each command in "I will verify by" against the real source/fixtures: every subcommand, flag, field, fixture path must exist as typed (the harness probes each command on agreement and bounces usage errors — flags/paths are still YOUR job). A broken verify step (e.g. \`enroll -o\` when enroll only takes \`--profile\`) false-fails AND gets copied into the shipped tests, so the artifact's own verification crashes as delivered; for tools documented to crash on teardown, prefer artifact-emitted sentinel output (printed PASS/FAIL lines or result files) as the primary observable, exit code secondary.
 {{MODE_CLAUSES}}
 
 Respond to critique by REVISING, not defending. CUT assertions flagged as trivia/unsatisfiable rather than hardening them. When solid — faithful, proportionate, every verify command confirmed runnable, every discrimination fixture non-degenerate — end your message with the exact line: CONTRACT: AGREED`,
@@ -141,7 +141,7 @@ All three weigh heavily on functionality/craft.
 
 PROCESS:
 1. Run the contract's verify commands + committed tests AS WRITTEN first (repeatedly, per rule 1); only after recording the shipped path may you reproduce by hand. Run via \`mcp__exercise__run_command\` (not raw Bash) so the harness classifies exit codes and sets exerciseStatus — Bash-run commands are unobserved and fall back to self-report.
-2. Mark EVERY assertion PASS/FAIL with evidence (command + what you observed; no evidence → FAIL). A flaky/gamed/broken-as-shipped pass = FAIL — or, if you independently proved the behavior, record it met but list the broken harness in \`blocking\`. Never launder by rerunning, reinterpreting, or hand-fixing the invocation. If you genuinely could not RUN due to ENVIRONMENT (sandbox/EPERM, missing tool/simulator) not the artifact, set exerciseStatus='blocked', name the blocker in \`notes\` (NOT \`blocking\` — that lists artifact defects that must change to pass; a could-not-run is not one), and do NOT fail assertions or tank scores for unobservable behavior — blocked is inconclusive, not a failure. Set 'ran' whenever you exercised it.
+2. Mark EVERY assertion PASS/FAIL with evidence (command + what you observed; no evidence → FAIL). A flaky/gamed/broken-as-shipped pass = FAIL — or, if you independently proved the behavior, record it met but list the broken harness in \`blocking\`. Never launder by rerunning, reinterpreting, or hand-fixing the invocation. If a gate genuinely could not EXECUTE due to ENVIRONMENT (sandbox/EPERM, missing tool/simulator, command not found, killed process) not the artifact, mark that assertion UN-RUN in \`unrunAssertionIds\` with env evidence, name the blocker in \`notes\` (NOT \`blocking\`), and do NOT fail it or tank scores for unobservable behavior; if nothing ran set exerciseStatus='blocked' (inconclusive), if some gates ran set 'mixed', otherwise 'ran'. State the un-run set explicitly.
 3. Score each rubric criterion 0–100 on PRODUCT IMPACT (one sentence each), weighted by user impact: a broken/intermittent/degenerate-only/non-running-as-shipped core behavior is severe. An incidental assertion that never belonged (toolchain/build-setting trivia, an unsatisfiable 'prove not-X') is NOT a defect — note it, don't tank/fail an otherwise-correct, plan-satisfying artifact. ONE EXCEPTION: build settings that WEAKEN security/sandbox to pass a build (-disable-sandbox, ENABLE_USER_SCRIPT_SANDBOXING:NO, App Transport Security, entitlement hardening) are deviations to call out (blocking if they materially weaken the shipped artifact).
 4. Compute the weighted total.
 
@@ -149,10 +149,11 @@ OUTPUT — end with a fenced \`\`\`json block EXACTLY in this shape, nothing aft
 \`\`\`json
 {
   "assertions": [{"id": 1, "pass": true, "evidence": "ran X, saw Y"}],
+  "unrunAssertionIds": [2],
   "scores": {"design": 0, "originality": 0, "craft": 0, "functionality": 0},
   "weightedTotal": 0,
   "verdict": "pass" | "fail",
-  "exerciseStatus": "ran" | "blocked",
+  "exerciseStatus": "ran" | "blocked" | "mixed",
   "blocking": ["specific things that must change to pass"],
   "notes": "1-3 sentence summary"
 }

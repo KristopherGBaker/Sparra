@@ -141,8 +141,8 @@ The few that matter most:
   `git.branchPrefix`; a recorded `main` refuses) whose live git state matches
   (in-place runs never reset); each pivot also appends a per-item attempt ledger that fresh
   restarts see as a "PRIOR ATTEMPTS — do not repeat these approaches" section. `rubric.anchorFunctionality` (default true)
-  caps the functionality score at `round(100 × passed/total)` when any assertion failed
-  (ceiling only, noted in the verdict).
+  caps the functionality score at `round(100 × passed/runnable-total)` when any runnable assertion failed
+  (UN-RUN assertion ids are no-signal and excluded; ceiling only, noted in the verdict).
 - **`measure: { enabled, command, baselineFile, regressionThreshold, defaultGoal }`** — opt-in
   **post-accept QA step** (off by default). After an item is accepted, `measure.command` (a SINGLE
   argv command — no pipe/chain; its own value is the executor argv[0]-allowlist opt-in, like
@@ -226,7 +226,7 @@ ls .sparra/workitems/items.json .sparra/contracts .sparra/verdicts .sparra/trace
 ```
 Then, by symptom: decomposition shape → `workitems/items.json`; contract not converging →
 `contracts/<id>.contract.md`; low/failing score → `verdicts/<id>.r<n>.verdict.md` (blocking
-+ evidence); anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
+with failed assertion evidence + UN-RUN/no-signal ids); anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
 → `memory.md`.
 
 ## Hard-won gotchas (cheat sheet)
@@ -244,6 +244,9 @@ Then, by symptom: decomposition shape → `workitems/items.json`; contract not c
   scaled to the item — not build-setting/toolchain trivia. Over-spec is a review failure too.
 - **The evaluator won't pass a flaky artifact.** An intermittently-failing required check is
   an artifact defect, not "environmental" — rerun-to-green doesn't launder it.
+- **UN-RUN ≠ FAIL.** A verdict can list `unrunAssertionIds` when the evaluator environment
+  could not execute a gate; `exerciseStatus: mixed` means some gates ran and some were env-blocked,
+  while `blocked` means nothing ran. Treat UN-RUN as no signal, not a product failure.
 - **Never commits to your main branch.** Existing repos build on a worktree/branch; opt into
   per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
 - **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;

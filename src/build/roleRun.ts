@@ -20,7 +20,7 @@ export { makeHoldoutReadDecider };
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance } from "./modeText.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
+import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
@@ -212,6 +212,22 @@ function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
   return Math.round(total * 10) / 10;
 }
 
+function parseExerciseStatus(v: unknown): ExerciseStatus {
+  return v === "blocked" || v === "mixed" ? v : "ran";
+}
+
+function unrunIdsFrom(v: unknown): number[] {
+  const raw = v as { unrunAssertionIds?: unknown; unRunAssertionIds?: unknown; unrunAssertions?: unknown };
+  const arr = raw?.unrunAssertionIds ?? raw?.unRunAssertionIds ?? raw?.unrunAssertions;
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+}
+
+function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[]): Verdict["assertions"] {
+  const unrun = new Set(unrunIds);
+  return assertions.filter((a) => !unrun.has(a.id));
+}
+
 /** Fill the union of placeholders the standard role prompts use. Unknown placeholders are
  *  left visible (a misconfigured custom prompt should be obvious, not silently blanked). */
 async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: string, allowVerify = false): Promise<string> {
@@ -269,9 +285,8 @@ function redactVerdict(v: Verdict, holdoutText: string): Verdict {
  *  (from real `run_command`/`http_request` exit codes); when it's not "none" it OVERRIDES the
  *  model's self-reported `exerciseStatus`, so a model can't launder a harness-observed block into a
  *  pass — and so a blocked-but-unparseable verdict carries "blocked", not the hardcoded "ran". */
-function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "ran" | "none" = "none"): Verdict {
-  const decide = (modelStatus: "blocked" | "ran"): "blocked" | "ran" =>
-    harnessStatus !== "none" ? harnessStatus : modelStatus;
+export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: ExerciseStatus | "none" = "none"): Verdict {
+  const decide = (modelStatus: ExerciseStatus): ExerciseStatus => (harnessStatus !== "none" ? harnessStatus : modelStatus);
   const parsed = extractJsonWhere<Verdict>(
     resultText,
     (v) => v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v)
@@ -285,6 +300,7 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
       // A missing verdict is a real failure, not a block — UNLESS the harness observed a blocked
       // exercise (then it's inconclusive, not a behavioral fail to feed back).
       exerciseStatus: decide("ran"),
+      unrunAssertionIds: [],
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -301,26 +317,6 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
   // BEFORE computeWeighted so the weighted total reflects it; the interactive Verdict has no
   // capNote channel, so the note is appended to `notes` below.
   let capNote = "";
-  if (ctx.config.rubric.anchorFunctionality) {
-    const asserts = Array.isArray(parsed.assertions) ? parsed.assertions : [];
-    const passed = asserts.filter((a) => Boolean((a as { pass?: unknown })?.pass)).length;
-    if (asserts.length > 0 && passed < asserts.length) {
-      const cap = Math.round((100 * passed) / asserts.length);
-      if (parsed.scores.functionality > cap) {
-        capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${asserts.length} assertions passed — rubric.anchorFunctionality)`;
-        parsed.scores.functionality = cap;
-      }
-    }
-  }
-  const weighted = computeWeighted(ctx, parsed.scores);
-  const finalStatus = decide(parsed.exerciseStatus === "blocked" ? "blocked" : "ran");
-  // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), regardless of
-  // what the model claimed or the score, so an unverified item is never silently accepted. The
-  // harness-overridden status (not the raw self-report) gates the pass.
-  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass" && finalStatus !== "blocked";
-  // Normalize to the EXACT schema — the evaluator's JSON is untrusted model output, so
-  // drop any extra properties (e.g. a smuggled `holdoutQuote`) that would otherwise ride
-  // through to conductor-facing artifacts.
   const assertions = Array.isArray(parsed.assertions)
     ? parsed.assertions.map((a) => ({
         id: Number((a as { id?: unknown })?.id ?? 0),
@@ -328,8 +324,31 @@ function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: "blocked" | "
         evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
       }))
     : [];
+  const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
+  if (ctx.config.rubric.anchorFunctionality) {
+    const runnable = runnableAssertions(assertions, unrunAssertionIds);
+    const passed = runnable.filter((a) => a.pass).length;
+    if (runnable.length > 0 && passed < runnable.length) {
+      const cap = Math.round((100 * passed) / runnable.length);
+      if (parsed.scores.functionality > cap) {
+        capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${runnable.length} assertions passed${unrunAssertionIds.length ? `; ${unrunAssertionIds.length} un-run excluded` : ""} — rubric.anchorFunctionality)`;
+        parsed.scores.functionality = cap;
+      }
+    }
+  }
+  const weighted = computeWeighted(ctx, parsed.scores);
+  const finalStatus = decide(parseExerciseStatus(parsed.exerciseStatus));
+  // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), regardless of
+  // what the model claimed or the score, so an unverified item is never silently accepted. The
+  // harness-overridden status (not the raw self-report) gates the pass.
+  const allUnrun = assertions.length > 0 && runnableAssertions(assertions, unrunAssertionIds).length === 0;
+  const meets = weighted >= ctx.config.rubric.passThreshold && parsed.verdict === "pass" && finalStatus !== "blocked" && !allUnrun;
+  // Normalize to the EXACT schema — the evaluator's JSON is untrusted model output, so
+  // drop any extra properties (e.g. a smuggled `holdoutQuote`) that would otherwise ride
+  // through to conductor-facing artifacts.
   return {
     assertions,
+    unrunAssertionIds,
     scores: parsed.scores,
     weightedTotal: weighted,
     verdict: meets ? "pass" : "fail",
@@ -748,10 +767,11 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     result.verdict = verdict;
     result.ok = res.ok && verdict.verdict === "pass";
     if (req.out) {
-      const failed = verdict.assertions.filter((a) => !a.pass);
+      const unrun = new Set(verdict.unrunAssertionIds ?? []);
+      const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
       await writeText(
         req.out,
-        `# Verdict — ${roleKind} (${role.backend ?? "claude"}/${role.model})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length})\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`
+        `# Verdict — ${roleKind} (${role.backend ?? "claude"}/${role.model})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`
       );
       result.outPath = req.out;
     }

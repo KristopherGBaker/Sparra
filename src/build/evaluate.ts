@@ -17,7 +17,7 @@ import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./holdout.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
-import { RUBRIC_CRITERIA, type Verdict, type WorkItem } from "./types.ts";
+import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
 import { mergedBuildEnv } from "./env.ts";
 
@@ -38,6 +38,26 @@ function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
   const total =
     (scores.design * w.design + scores.originality * w.originality + scores.craft * w.craft + scores.functionality * w.functionality) / sum;
   return Math.round(total * 10) / 10;
+}
+
+function parseExerciseStatus(v: unknown): ExerciseStatus {
+  return v === "blocked" || v === "mixed" ? v : "ran";
+}
+
+function unrunIdsFrom(v: unknown): number[] {
+  const raw = v as { unrunAssertionIds?: unknown; unRunAssertionIds?: unknown; unrunAssertions?: unknown };
+  const arr = raw?.unrunAssertionIds ?? raw?.unRunAssertionIds ?? raw?.unrunAssertions;
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+}
+
+function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[]): Verdict["assertions"] {
+  const unrun = new Set(unrunIds);
+  return assertions.filter((a) => !unrun.has(a.id));
+}
+
+function allAssertionsUnrun(assertions: Verdict["assertions"], unrunIds: number[]): boolean {
+  return assertions.length > 0 && runnableAssertions(assertions, unrunIds).length === 0;
 }
 
 /**
@@ -168,8 +188,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   // verifications actually ran (from real exit codes); when it's not "none" it OVERRIDES the
   // model's `exerciseStatus`, on both the parsed and the no-parseable-verdict paths below.
   const harnessStatus = exerciser.exerciseStatus();
-  const decideStatus = (modelStatus: "blocked" | "ran"): "blocked" | "ran" =>
-    harnessStatus !== "none" ? harnessStatus : modelStatus;
+  const decideStatus = (modelStatus: ExerciseStatus): ExerciseStatus => (harnessStatus !== "none" ? harnessStatus : modelStatus);
 
   let verdict: Verdict;
   let capNote = ""; // set when the anchor cap actually lowered the functionality score
@@ -183,6 +202,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
       // A missing verdict is a real failure, not a block — UNLESS the harness observed a blocked
       // exercise (then it's inconclusive, not a behavioral fail to feed back).
       exerciseStatus: decideStatus("ran"),
+      unrunAssertionIds: [],
       blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."],
       notes: "no verdict parsed",
     };
@@ -198,11 +218,20 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     // to anchor to; also guards the division).
     if (ctx.config.rubric.anchorFunctionality) {
       const asserts = Array.isArray(parsed.assertions) ? parsed.assertions : [];
-      const passed = asserts.filter((a) => Boolean((a as { pass?: unknown })?.pass)).length;
-      if (asserts.length > 0 && passed < asserts.length) {
-        const cap = Math.round((100 * passed) / asserts.length);
+      const unrunIds = unrunIdsFrom(parsed);
+      const runnable = runnableAssertions(
+        asserts.map((a) => ({
+          id: Number((a as { id?: unknown })?.id ?? 0),
+          pass: Boolean((a as { pass?: unknown })?.pass),
+          evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
+        })),
+        unrunIds
+      );
+      const passed = runnable.filter((a) => a.pass).length;
+      if (runnable.length > 0 && passed < runnable.length) {
+        const cap = Math.round((100 * passed) / runnable.length);
         if (parsed.scores.functionality > cap) {
-          capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${asserts.length} assertions passed — rubric.anchorFunctionality)`;
+          capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${runnable.length} assertions passed${unrunIds.length ? `; ${unrunIds.length} un-run excluded` : ""} — rubric.anchorFunctionality)`;
           parsed.scores.functionality = cap;
         }
       }
@@ -213,13 +242,23 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     // A BLOCKED exercise is inconclusive — it can NEVER be a pass (we couldn't verify), so an
     // unverified item is never silently accepted regardless of the model's verdict or score. The
     // harness-overridden status (not the raw self-report) gates the pass.
-    const finalStatus = decideStatus(parsed.exerciseStatus === "blocked" ? "blocked" : "ran");
+    const finalStatus = decideStatus(parseExerciseStatus(parsed.exerciseStatus));
     const isBlocked = finalStatus === "blocked";
+    const assertions = Array.isArray(parsed.assertions)
+      ? parsed.assertions.map((a) => ({
+          id: Number((a as { id?: unknown })?.id ?? 0),
+          pass: Boolean((a as { pass?: unknown })?.pass),
+          evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
+        }))
+      : [];
+    const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
+    const allUnrun = allAssertionsUnrun(assertions, unrunAssertionIds);
     verdict = {
-      assertions: Array.isArray(parsed.assertions) ? parsed.assertions : [],
+      assertions,
+      unrunAssertionIds,
       scores: parsed.scores,
       weightedTotal: weighted,
-      verdict: modelSaidPass && meetsThreshold && !isBlocked ? "pass" : "fail",
+      verdict: modelSaidPass && meetsThreshold && !isBlocked && !allUnrun ? "pass" : "fail",
       exerciseStatus: finalStatus,
       blocking: Array.isArray(parsed.blocking) ? parsed.blocking : [],
       notes: parsed.notes ?? "",
@@ -271,10 +310,14 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   }
   const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(resultText, holdoutText) : resultText;
 
-  const failedAssertions = verdict.assertions.filter((a) => !a.pass);
+  const unrunIds = verdict.unrunAssertionIds ?? [];
+  const unrun = new Set(unrunIds);
+  const failedAssertions = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
+  const unrunAssertions = verdict.assertions.filter((a) => unrun.has(a.id));
+  const runnableCount = verdict.assertions.length - unrunAssertions.length;
   await writeText(
     ctx.paths.verdictFile(item.id, round),
-    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${verdict.assertions.length})\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
+    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
   );
 
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);

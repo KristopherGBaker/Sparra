@@ -110,4 +110,36 @@ describe("updateStreaksAndDecide", () => {
       item = makeItem(result.streaks);
     }
   });
+
+  it("all-UN-RUN assertions never pivot and never advance a streak", () => {
+    const cfg = defaultConfig();
+    const allUnrun: Verdict = {
+      ...makeVerdict({ design: 0, originality: 0, craft: 0, functionality: 0 }),
+      assertions: [
+        { id: 1, pass: false, evidence: "command not found" },
+        { id: 2, pass: false, evidence: "CoreSimulator unavailable" },
+      ],
+      unrunAssertionIds: [1, 2],
+      exerciseStatus: "mixed",
+    };
+    const item = makeItem({ design: 2 });
+    const result = updateStreaksAndDecide(item, allUnrun, cfg);
+    expect(result.pivot).toBe(false);
+    expect(result.streaks.design).toBe(2);
+  });
+
+  it("mixed status alone does not block normal scoring when there are observed failures", () => {
+    const cfg = defaultConfig();
+    const mixedObservedFail: Verdict = {
+      ...makeVerdict({ design: 40, originality: 70, craft: 80, functionality: 75 }),
+      assertions: [
+        { id: 1, pass: false, evidence: "observed product failure" },
+        { id: 2, pass: false, evidence: "command not found" },
+      ],
+      unrunAssertionIds: [2],
+      exerciseStatus: "mixed",
+    };
+    const result = updateStreaksAndDecide(makeItem({}), mixedObservedFail, cfg);
+    expect(result.streaks.design).toBe(1);
+  });
 });

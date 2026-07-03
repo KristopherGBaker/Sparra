@@ -28,12 +28,26 @@ export interface FeedbackOptions {
 /** `#<id>: <evidence>` lines for FAILED assertions only, evidence capped + marked. */
 function failedAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): string[] {
   const cap = opts.evidenceCap ?? EVIDENCE_CAP;
+  const unrun = new Set(verdict.unrunAssertionIds ?? []);
   return verdict.assertions
-    .filter((a) => !a.pass)
+    .filter((a) => !a.pass && !unrun.has(a.id))
     .map((a) => {
       const evidence = (a.evidence ?? "").trim();
       const capped = evidence.length > cap ? evidence.slice(0, cap) + TRUNCATION_MARKER : evidence;
       return `#${a.id}: ${capped || "(no evidence recorded)"}`;
+    });
+}
+
+/** UN-RUN assertions are no-signal environment/tooling misses, not behavioral failures. */
+function unrunAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): string[] {
+  const cap = opts.evidenceCap ?? EVIDENCE_CAP;
+  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  return verdict.assertions
+    .filter((a) => unrun.has(a.id))
+    .map((a) => {
+      const evidence = (a.evidence ?? "").trim();
+      const capped = evidence.length > cap ? evidence.slice(0, cap) + TRUNCATION_MARKER : evidence;
+      return `#${a.id}: ${capped || "(environment prevented execution)"}`;
     });
 }
 
@@ -49,10 +63,12 @@ function calibrationLine(verdict: Verdict): string {
 /** Blocking items + per-failed-assertion evidence — the shared body of every feedback kind. */
 function verdictBody(verdict: Verdict, opts: FeedbackOptions = {}): string {
   const failed = failedAssertionLines(verdict, opts);
+  const unrun = unrunAssertionLines(verdict, opts);
   const blocking = verdict.blocking.map((x) => `- ${x}`).join("\n");
   return (
     `blocking issues from the evaluator:\n${blocking || verdict.notes || "- (none listed — see failed assertions)"}` +
     `\nFailed assertions (id: observed evidence):\n${failed.join("\n") || "(see verdict)"}` +
+    (unrun.length ? `\nUn-run assertions (no signal; environment/tooling could not execute):\n${unrun.join("\n")}` : "") +
     calibrationLine(verdict)
   );
 }
@@ -79,10 +95,12 @@ export function renderPivotFeedback(
  *  exercisability; include failed-assertion evidence only when the verdict carries some. */
 export function renderBlockedFeedback(verdict: Verdict, opts: FeedbackOptions = {}): string {
   const failed = failedAssertionLines(verdict, opts);
+  const unrun = unrunAssertionLines(verdict, opts);
   const why = (verdict.blocking.slice(0, 3).join("; ") || verdict.notes).slice(0, 300);
   return (
     `The exercise could NOT run (blocked): ${why}. This is NOT a behavioral failure — ensure the artifact is exercisable (its tests/build can actually run) so it can be verified.` +
     (failed.length ? `\nWhat the evaluator observed (id: evidence):\n${failed.join("\n")}` : "") +
+    (unrun.length ? `\nUn-run assertions (no signal; environment/tooling could not execute):\n${unrun.join("\n")}` : "") +
     calibrationLine(verdict)
   );
 }

@@ -169,6 +169,81 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("parses un-run assertion ids and excludes them from the functionality cap denominator", async () => {
+    const { ctx, dir } = await makeCtx();
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: 2, pass: true, evidence: "ok" },
+          { id: 3, pass: false, evidence: "observed failure" },
+          { id: 4, pass: false, evidence: "xcrun simctl unavailable in evaluator env" },
+        ],
+        unrunAssertionIds: [4],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 95 },
+        verdict: "fail",
+        blocking: ["real assertion 3 failed"],
+        notes: "assertion 4 UN-RUN: CoreSimulator unavailable",
+      }) +
+      "\n```";
+    const out = await run(ctx, dir, recorder(json), cleanIntegrityDeps);
+    expect(out.verdict.unrunAssertionIds).toEqual([4]);
+    expect(out.verdict.scores.functionality).toBe(67); // 2/3 runnable, not 2/4
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toContain("un-run assertions: #4");
+    expect(written).toContain("2/3 assertions passed; 1 un-run excluded");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("model pass with passing runnable assertions plus an un-run id remains pass", async () => {
+    const { ctx, dir } = await makeCtx();
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: 2, pass: true, evidence: "ok" },
+          { id: 3, pass: false, evidence: "simulator unavailable" },
+        ],
+        unrunAssertionIds: [3],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 90 },
+        verdict: "pass",
+        exerciseStatus: "ran",
+        blocking: [],
+        notes: "assertion 3 UN-RUN: simulator unavailable",
+      }) +
+      "\n```";
+    const out = await runWithExerciser(recorder(json), "ran", dir, ctx);
+    expect(out.verdict.verdict).toBe("pass");
+    expect(out.verdict.unrunAssertionIds).toEqual([3]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("all-un-run verdict is inconclusive and never normalizes to pass", async () => {
+    const { ctx, dir } = await makeCtx();
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: 1, pass: false, evidence: "command not found" },
+          { id: 2, pass: false, evidence: "CoreSimulator dead" },
+        ],
+        unrunAssertionIds: [1, 2],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 90 },
+        verdict: "pass",
+        exerciseStatus: "mixed",
+        blocking: [],
+        notes: "all gates UN-RUN in evaluator environment",
+      }) +
+      "\n```";
+    const out = await runWithExerciser(recorder(json), "mixed", dir, ctx);
+    expect(out.verdict.exerciseStatus).toBe("mixed");
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.scores.functionality).toBe(90); // no runnable denominator, so no cap
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("grants exerciseScratch on a REAL linked worktree with state.build.branch UNSET (Item E, anti-no-op)", async () => {
     const { ctx, dir } = await makeCtx();
     // A real offline git repo + linked worktree; only local `git` runs (no model/network).
@@ -200,14 +275,14 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
 
   // A stub exerciser that reports a fixed harness status — no real run_command needed (the faked
   // session never calls the tools, so the real exerciser would always report "none").
-  const stubExerciser = (status: "blocked" | "ran" | "none"): Exerciser => ({
+  const stubExerciser = (status: "blocked" | "ran" | "mixed" | "none"): Exerciser => ({
     mcpServers: {},
     allowedTools: ["mcp__exercise__run_command"],
     guidance: "",
     exerciseStatus: () => status,
   });
 
-  async function runWithExerciser(rec: ReturnType<typeof recorder>, status: "blocked" | "ran" | "none", dir: string, ctx: Ctx) {
+  async function runWithExerciser(rec: ReturnType<typeof recorder>, status: "blocked" | "ran" | "mixed" | "none", dir: string, ctx: Ctx) {
     return evaluateItem({
       ctx,
       item: ITEM,
@@ -237,6 +312,56 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     const { ctx, dir } = await makeCtx();
     const out = await runWithExerciser(recorder(blockedJson), "ran", dir, ctx);
     expect(out.verdict.exerciseStatus).toBe("ran");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("harness 'mixed' OVERRIDES model status and remains gradeable", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await runWithExerciser(recorder(PASS_JSON), "mixed", dir, ctx);
+    expect(out.verdict.exerciseStatus).toBe("mixed");
+    expect(out.verdict.verdict).toBe("pass");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("real run_command aggregation produces mixed and does not fail from an un-runnable command alone", async () => {
+    const { ctx, dir } = await makeCtx();
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      // Drive the REAL MCP handler from buildExerciser: one observed run + one env-blocked command.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const server = (p.mcpServers?.exercise as any);
+      const runCommand = server.instance._registeredTools.run_command.handler;
+      await runCommand({ command: "echo ok" }, {});
+      await runCommand({ command: "this-binary-does-not-exist-xyz" }, {});
+      return {
+        ok: true,
+        subtype: "success",
+        resultText: PASS_JSON,
+        sessionId: "mixed",
+        costUsd: 0,
+        tokens: 5,
+        numTurns: 1,
+        hitMaxTurns: false,
+        hitBudget: false,
+        errors: [],
+        tracePath: "",
+      };
+    };
+    const out = await evaluateItem({
+      ctx,
+      item: ITEM,
+      contractText: "contract",
+      workspaceDir: dir,
+      round: 1,
+      traceDir: path.join(dir, "trace"),
+      traceSeq: 1,
+      runSessionFn: fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(calls).toHaveLength(1);
+    expect(out.verdict.exerciseStatus).toBe("mixed");
+    expect(out.verdict.verdict).toBe("pass");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

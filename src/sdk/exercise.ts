@@ -3,6 +3,7 @@ import { createSdkMcpServer, tool, type McpServerConfig } from "@anthropic-ai/cl
 import { z } from "zod";
 import type { ExerciseMechanism, SparraConfig } from "../config.ts";
 import { mergedBuildEnv, stringProcessEnv } from "../build/env.ts";
+import type { ExerciseStatus } from "../build/types.ts";
 
 /** What the evaluator gets to EXERCISE the artifact, chosen by config.exercise.mechanism. */
 export interface Exerciser {
@@ -14,11 +15,12 @@ export interface Exerciser {
   /**
    * The HARNESS's deterministic verdict on whether the exercise actually ran, aggregated from
    * every `run_command`/`http_request` the evaluator invoked through this exerciser:
-   * "blocked" if any was a sandbox/missing-tool/permission block, "ran" if ≥1 ran and none blocked,
-   * "none" if it never used the tools (e.g. it only used raw Bash, which we don't observe). This
-   * OVERRIDES the model's self-report so a model can't launder a blocked command into a pass.
+   * "blocked" if all observations were sandbox/missing-tool/permission blocks, "mixed" if some
+   * commands ran and some blocked, "ran" if ≥1 ran and none blocked, "none" if it never used the
+   * tools (e.g. it only used raw Bash, which we don't observe). This OVERRIDES the model's
+   * self-report so a model can't launder a blocked command into a pass.
    */
-  exerciseStatus(): "blocked" | "ran" | "none";
+  exerciseStatus(): ExerciseStatus | "none";
 }
 
 /**
@@ -56,10 +58,13 @@ export function classifyExerciseExit(r: { code: number; stderr: string; timedOut
   return hasBlockSignature(r.stderr) ? "blocked" : "ran";
 }
 
-/** Pure: aggregate per-command classifications — blocked if ANY blocked, ran if ≥1 and none blocked, else none. */
-export function exerciseStatusFromObservations(obs: ("blocked" | "ran")[]): "blocked" | "ran" | "none" {
-  if (obs.some((o) => o === "blocked")) return "blocked";
-  if (obs.length > 0) return "ran";
+/** Pure: aggregate per-command classifications — all-blocked stays blocked; ran+blocked is mixed. */
+export function exerciseStatusFromObservations(obs: ("blocked" | "ran")[]): ExerciseStatus | "none" {
+  const blocked = obs.some((o) => o === "blocked");
+  const ran = obs.some((o) => o === "ran");
+  if (blocked && ran) return "mixed";
+  if (blocked) return "blocked";
+  if (ran) return "ran";
   return "none";
 }
 
@@ -113,7 +118,7 @@ export function iosGuidance(config: SparraConfig): string {
   // via an XCUITest target (the simulator screenshot/ui-automation tooling does not apply).
   if (platform === "macos") return macosGuidance(cli, schemeHint);
   if (!cli.trim()) {
-    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL. Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
+    return `This is an Apple-platform app. Use run_command/Bash to drive xcodebuild + xcrun simctl (scheme: ${schemeHint}, simulator: "${simHint}"). Build, boot the simulator, install & launch, then exercise. Pipe \`xcodebuild\` through \`xcbeautify -qq\` for concise logs — \`set -o pipefail; xcodebuild … | xcbeautify -qq\` (pipefail so a build failure still surfaces; re-run without \`-qq\`/xcbeautify for full logs when diagnosing; if xcbeautify isn't installed, use plain xcodebuild — don't fail over it). For UI work, screenshot with \`xcrun simctl io booted screenshot <file>\` INTO the artifact dir and OPEN it with the Read tool to judge the UI visually; back every UI assertion with a screenshot you viewed — no evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN). Native builds are slow: pass a generous timeout_ms (up to the 600000 max).`;
   }
   return `This is an Apple-platform app (iOS/macOS/etc.). EXERCISE the real running app — never grade the diff.
 
@@ -139,7 +144,7 @@ For UI changes (the important part — you are MULTIMODAL, use it):
 - Use the UI hierarchy / describe-ui output for DETERMINISTIC assertions (e.g. "a control labelled 'Sign In' is visible and enabled") and cite it as evidence. Screenshots justify taste; the hierarchy justifies pass/fail.
 - Capture logs when behavior is dynamic.
 
-Every UI assertion in the contract must be backed by a screenshot you viewed or a hierarchy entry you found. No evidence → FAIL.`;
+Every UI assertion in the contract must be backed by a screenshot you viewed or a hierarchy entry you found. No evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN).`;
 }
 
 /**
@@ -167,7 +172,7 @@ Observe & DRIVE the UI — the macOS way (you are MULTIMODAL; use it):
 - LIVE visual sanity: with the app launched, \`screencapture -x -o <file>\` (whole screen) or window-targeted (\`-l<windowID>\` from \`CGWindowListCopyWindowInfo\`/\`osascript\`) into a TEMP dir, then Read it. Screenshots justify taste; XCUITest assertions justify pass/fail.
 - Capture logs when behavior is dynamic. Don't rely on AX/osascript synthetic events as the drive mechanism (they need interactive Accessibility permission and are unreliable headless) — use XCUITest.
 
-Every UI assertion in the contract must be backed by an XCUITest assertion you ran or a screenshot you viewed. No evidence → FAIL.`;
+Every UI assertion in the contract must be backed by an XCUITest assertion you ran or a screenshot you viewed. No evidence → FAIL unless the gate could not execute for an environment reason (mark UN-RUN).`;
 }
 
 /**

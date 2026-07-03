@@ -59,9 +59,15 @@ describe("classifyExerciseExit — deterministic block vs ran (precedence)", () 
 });
 
 describe("exerciseStatusFromObservations — aggregator", () => {
-  it("any blocked ⇒ blocked", () => {
-    expect(exerciseStatusFromObservations(["ran", "blocked", "ran"])).toBe("blocked");
+  it("all blocked ⇒ blocked", () => {
     expect(exerciseStatusFromObservations(["blocked"])).toBe("blocked");
+    expect(exerciseStatusFromObservations(["blocked", "blocked"])).toBe("blocked");
+  });
+  it("ran + blocked ⇒ mixed", () => {
+    const status = exerciseStatusFromObservations(["ran", "blocked", "ran"]);
+    expect(status).toBe("mixed");
+    expect(status).not.toBe("blocked");
+    expect(status).not.toBe("ran");
   });
   it("≥1 obs, none blocked ⇒ ran", () => {
     expect(exerciseStatusFromObservations(["ran", "ran"])).toBe("ran");
@@ -96,10 +102,10 @@ describe("Exerciser — records via the REAL run_command handler", () => {
     expect(ex.exerciseStatus()).toBe("ran");
   });
 
-  it("any blocked across multiple commands wins (blocked)", async () => {
+  it("ran plus blocked across multiple commands returns mixed", async () => {
     const ex = buildExerciser(defaultConfig(), "/tmp");
     await callRunCommand(ex, "echo ok");
     await callRunCommand(ex, "this-binary-does-not-exist-xyz");
-    expect(ex.exerciseStatus()).toBe("blocked");
+    expect(ex.exerciseStatus()).toBe("mixed");
   });
 });

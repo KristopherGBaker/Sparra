@@ -20,6 +20,11 @@ export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config
   if (verdict.exerciseStatus === "blocked") {
     return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
   }
+  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(a.id));
+  if (allAssertionsUnrun) {
+    return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
+  }
   const streaks = { ...item.criterionFailStreak };
   let pivot = false;
   let criterion: string | undefined;

@@ -993,6 +993,28 @@ export async function cmdBuild(
         fresh = false;
         continue;
       }
+      const unrunIds = new Set(ev.verdict.unrunAssertionIds ?? []);
+      const allUnrun =
+        ev.verdict.assertions.length > 0 &&
+        ev.verdict.assertions.every((a) => unrunIds.has(a.id));
+      if (allUnrun) {
+        warn(`${item.id}: all contract assertions were UN-RUN in round ${st.round} — no behavioral signal; not counting as a failed round or pivoting.`);
+        await d.appendLearning(ctx.paths, {
+          item: item.id,
+          kind: "note",
+          detail: `round ${st.round}: all assertions UN-RUN (inconclusive) — ${(ev.verdict.notes || ev.verdict.blocking.join("; ")).slice(0, 200)}`,
+          at: stamp(),
+        });
+        await ctx.store.save();
+        if (overBudget(st)) {
+          await haltOnBudget("evaluate");
+          break;
+        }
+        if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        feedback = `The evaluator could not execute any contract assertion in its environment; this is UN-RUN/no-signal, not a behavioral failure.\n${renderPatchFeedback(ev.verdict)}`;
+        fresh = false;
+        continue;
+      }
 
       noteFailedRound();
       const decision = updateStreaksAndDecide(st, ev.verdict, ctx.config);

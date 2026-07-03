@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, makeHoldoutReadDecider, type RoleKind } from "../src/build/roleRun.ts";
+import { runRole, makeHoldoutReadDecider, parseVerdict, type RoleKind } from "../src/build/roleRun.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -98,6 +98,34 @@ describe("runRole — holdout wall", () => {
       runRole({ ctx, roleKind: "evaluator", brief: "Grade it.", holdoutPath: path.join(dir, "nope.md"), runSessionFn: rec.fn })
     ).rejects.toThrow(/holdout path not found/i);
     expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("parseVerdict — un-run parity", () => {
+  it("parses un-run ids and excludes them from the assertion cap denominator", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const text =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: 2, pass: true, evidence: "ok" },
+          { id: 3, pass: false, evidence: "observed failure" },
+          { id: 4, pass: false, evidence: "command not found" },
+        ],
+        unrunAssertionIds: [4],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 95 },
+        verdict: "fail",
+        exerciseStatus: "mixed",
+        blocking: [],
+        notes: "n",
+      }) +
+      "\n```";
+    const verdict = parseVerdict(ctx, text, "mixed");
+    expect(verdict.unrunAssertionIds).toEqual([4]);
+    expect(verdict.exerciseStatus).toBe("mixed");
+    expect(verdict.scores.functionality).toBe(67);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
