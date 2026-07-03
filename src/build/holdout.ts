@@ -60,7 +60,21 @@ export function assertNoHoldoutLeak(role: string, prompt: string, holdoutText: s
  *  HOLDOUT.md`). Used by BOTH the interactive role-runner and the autonomous build-loop forbid
  *  roles (generator/reviewer/contract/decompose), so the wall is code-enforced everywhere.
  *  (Claude backend only; Codex ignores hooks — the prompt-wall + scope exclusion + verdict
- *  redaction are the guarantees there, and a cwd-resident holdout stays reachable on Codex.) */
+ *  redaction are the guarantees there, and a cwd-resident holdout stays reachable on Codex.)
+ *
+ *  Decisions are made on the paths a call will actually TOUCH, not on incidental substrings of the
+ *  tool input — so a Grep whose content regex or a Glob whose filename merely mentions "holdout"
+ *  (legitimate source like `src/build/holdout.ts` / `redactHoldout`) is NOT blocked, while real
+ *  reads of a protected artifact still are:
+ *    - Read: blocked when the target IS / sits under a holdout artifact.
+ *    - Grep: the content `pattern` is never inspected (a regex can't read outside the search root);
+ *      blocked only when the effective root reaches the holdout, or a path-shaped file filter
+ *      (`glob`) names an artifact (judged as a Glob pattern).
+ *    - Glob: the pattern IS path-shaped — blocked when any brace alternative resolves (with `..`
+ *      and absolute prefixes applied) to/under an artifact, names a protected segment, or — being
+ *      recursive (`**`) — descends into one. A pathless Glob of innocent explicit files is allowed
+ *      even at a holdout-bearing cwd.
+ *    - Bash: best-effort and path-based (see below). */
 export function makeHoldoutReadDecider(
   ctx: Ctx,
   workspace: string,
@@ -83,42 +97,111 @@ export function makeHoldoutReadDecider(
     const abs = resolve(t);
     return protectedFiles.has(abs) || within(abs, sparraDir);
   };
-  // A recursive SEARCH (Glob/Grep) reaches the holdout when its root is the holdout scope OR
-  // CONTAINS it — so block when the search root is, sits under, or is an ANCESTOR of a holdout
-  // artifact. A pathless Glob/Grep searches the cwd, so the cwd is the root then (this is the
-  // pathless-search leak: contract/decomposer run with cwd = the holdout-bearing repo root).
+  // A recursive SEARCH ROOT (the Grep `path`, else the cwd) reaches the holdout when it IS the
+  // holdout scope, sits UNDER it, or CONTAINS it (is an ancestor) — the search descends into it.
+  // A pathless Grep searches the cwd, so the cwd is the root then (this is the pathless-search leak:
+  // contract/decomposer run with cwd = the holdout-bearing repo root).
   const blockedSearchRoot = (abs: string) =>
     protectedFiles.has(abs) || within(abs, sparraDir) || artifacts.some((a) => within(a, abs));
-  // A search PATTERN that names the holdout/.sparra (e.g. `**/HOLDOUT.md`, `.sparra/**`) is blocked
-  // regardless of where it's rooted.
-  const patternRefsHoldout = (pat: string): boolean =>
-    pat.includes(sparraBase) || pat.toLowerCase().includes("holdout") || [...basenames].some((b) => pat.includes(b));
-  // BEST-EFFORT Bash matcher. A string blocklist can't be airtight against a shell on a backend
-  // with no FS sandbox (string concatenation `cat ".sp""arra/…"`, an interpreter that assembles the
-  // path, etc. evade any substring check) — the authoritative wall for Bash is that the holdout
-  // lives OUTSIDE the role's cwd/read scope + the prompt wall + verdict redaction. We still raise
-  // the bar well past literal `cat .sparra/HOLDOUT.md`: deny the dir name, the basenames, a
-  // case-insensitive "holdout", AND any HIDDEN-path glob (`.s*`, `.[a-z]*`, `.*`) that could expand
-  // into the dotted .sparra dir or a dotfile holdout.
+
+  // Expand shell brace alternatives (`{a,b}` → ["a","b"]); handles nesting and multiple groups.
+  const expandBraces = (pat: string): string[] => {
+    const open = pat.indexOf("{");
+    if (open === -1) return [pat];
+    let depth = 0;
+    let close = -1;
+    for (let k = open; k < pat.length; k++) {
+      if (pat[k] === "{") depth++;
+      else if (pat[k] === "}" && --depth === 0) {
+        close = k;
+        break;
+      }
+    }
+    if (close === -1) return [pat]; // unbalanced → treat literally
+    const pre = pat.slice(0, open);
+    const post = pat.slice(close + 1);
+    const alts: string[] = [];
+    let d = 0;
+    let start = 0;
+    const body = pat.slice(open + 1, close);
+    for (let k = 0; k <= body.length; k++) {
+      const c = body[k];
+      if (c === "{") d++;
+      else if (c === "}") d--;
+      if (k === body.length || (c === "," && d === 0)) {
+        alts.push(body.slice(start, k));
+        start = k + 1;
+      }
+    }
+    return alts.flatMap((a) => expandBraces(pre + a + post));
+  };
+
+  // Does one brace-expanded GLOB alternative resolve onto a protected artifact? Decide on the path
+  // it targets, not its text: a literal `.sparra`/protected-basename segment names an artifact; the
+  // literal prefix (up to the first wildcard) is resolved (applying `..`/absolute) to the dir the
+  // glob scans from — deny when that dir IS/UNDER an artifact, or when a recursive `**` would
+  // descend into an artifact contained beneath it.
+  const altHitsArtifact = (alt: string, root: string): boolean => {
+    const segs = alt.split("/").filter((s) => s !== "" && s !== ".");
+    if (segs.some((s) => s === sparraBase || basenames.has(s))) return true;
+    const literal: string[] = [];
+    let sawWildcard = false;
+    for (const s of segs) {
+      if (/[*?[\]]/.test(s)) {
+        sawWildcard = true;
+        break;
+      }
+      literal.push(s);
+    }
+    const globstar = segs.some((s) => s.includes("**")); // a `**` anywhere means unbounded recursion
+    const base = path.isAbsolute(alt)
+      ? path.resolve("/" + literal.join("/"))
+      : path.resolve(root, literal.join("/"));
+    if (!sawWildcard) return protectedFiles.has(base) || within(base, sparraDir); // concrete target
+    if (protectedFiles.has(base) || within(base, sparraDir)) return true; // scans from inside an artifact
+    return globstar && artifacts.some((a) => within(a, base)); // `**` descends into a contained artifact
+  };
+  const globHitsArtifact = (pattern: string, root: string): boolean =>
+    expandBraces(pattern).some((alt) => altHitsArtifact(alt, root));
+
+  // BEST-EFFORT, PATH-BASED Bash matcher. A shell on a backend with no FS sandbox can always read an
+  // absolute path or assemble one from pieces (`cat ".sp""arra/…"`, an interpreter, etc.), so no
+  // string check is airtight — the authoritative wall is that the holdout lives OUTSIDE the role's
+  // cwd/read scope + the prompt wall + verdict redaction. We deny commands that reference a protected
+  // artifact BY PATH: the `.sparra` dir (name or absolute), a protected basename (`HOLDOUT.md` /
+  // `HOLDOUT.frozen.md` / the explicit holdout), or a hidden-path glob (`.s*`, `.[a-z]*`, `.*`) that
+  // could expand into the dotted `.sparra`. We deliberately do NOT block on a bare case-insensitive
+  // "holdout" substring — that false-blocked legitimate source (`src/build/holdout.ts`,
+  // `redactHoldout`); a command naming a real holdout ARTIFACT still trips the checks above.
   const hiddenGlob = /(?:^|[\s'"=:(<>|&/])\.[A-Za-z0-9_]*[*?[]/; // a dot-prefixed token containing a glob metachar
   const bashBlocked = (cmd: string): boolean => {
     if (cmd.includes(sparraDir) || cmd.includes(sparraBase)) return true;
-    if (cmd.toLowerCase().includes("holdout")) return true;
     if ([...basenames].some((b) => cmd.includes(b))) return true;
     return hiddenGlob.test(cmd);
   };
   const DENY = "Holdout/.sparra is evaluator-only and not readable by this role.";
+  const DENY_ROOT =
+    "Search is rooted at a holdout-bearing dir (it contains .sparra) — pass an explicit non-holdout subdir path like src/ instead.";
   return (tool, input) => {
-    const i = input as { file_path?: string; path?: string; pattern?: string; command?: string } | undefined;
+    const i = input as
+      | { file_path?: string; path?: string; pattern?: string; glob?: string; command?: string }
+      | undefined;
     if (tool === "Read") {
       const target = i?.file_path ?? i?.path;
       if (target && blockedReadTarget(target)) return DENY;
     }
-    if (tool === "Glob" || tool === "Grep") {
-      // Pathless search → the cwd is the search root (where the leak lives).
-      const root = resolve(i?.path ?? i?.file_path ?? workspace);
-      if (blockedSearchRoot(root)) return DENY;
-      if (i?.pattern && patternRefsHoldout(i.pattern)) return DENY;
+    if (tool === "Grep") {
+      // Content `pattern` is never inspected; deny only on the search root or a path-shaped filter.
+      const root = resolve(i?.path ?? workspace);
+      if (blockedSearchRoot(root)) return DENY_ROOT;
+      if (i?.glob && globHitsArtifact(i.glob, root)) return DENY;
+    }
+    if (tool === "Glob") {
+      // The pattern IS path-shaped — decide on the targets it resolves to, not the root shape.
+      const root = resolve(i?.path ?? workspace);
+      if (i?.pattern) {
+        if (globHitsArtifact(i.pattern, root)) return DENY;
+      } else if (blockedSearchRoot(root)) return DENY_ROOT; // pattern-less Glob → fall back to the root rule
     }
     if (tool === "Bash" && bashBlocked(i?.command ?? "")) return DENY;
     return null;

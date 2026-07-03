@@ -672,7 +672,9 @@ describe("runRole — holdout never reaches the conductor", () => {
     expect(deny("Bash", { command: "cat .s*/*OUT*" })).toBeTruthy();
     expect(deny("Bash", { command: "cd .sp* && cat *.md" })).toBeTruthy();
     expect(deny("Bash", { command: "cat .*/HOLD*" })).toBeTruthy();
-    expect(deny("Bash", { command: "head -5 holdout.md" })).toBeTruthy(); // case-insensitive
+    // `head -5 holdout.md` is now ALLOWED: `holdout.md` is not a protected basename (`HOLDOUT.md`)
+    // and Bash is path-based — it only tripped the removed case-insensitive "holdout" substring check.
+    expect(deny("Bash", { command: "head -5 holdout.md" })).toBeNull();
     // Ordinary verify/build commands (no hidden-glob, no holdout/.sparra token) still pass through.
     expect(deny("Bash", { command: "npm test" })).toBeNull();
     expect(deny("Bash", { command: "ls src/*.ts" })).toBeNull();
