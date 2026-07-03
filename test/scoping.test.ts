@@ -216,6 +216,69 @@ describe("denyBashMutation", () => {
   it("allows non-Bash tools unconditionally", () => {
     expect(denyBashMutation("Write", { file_path: "/tmp/x" }, [])).toBeNull();
   });
+
+  it("U1: allows fd-dups (2>&1, 1>&2, 2>&-) — no file written", () => {
+    expect(denyBashMutation("Bash", { command: "npm test 2>&1 | wc -l" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "ls -la 2>&1" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 1>&2" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>&-" }, [])).toBeNull();
+  });
+
+  it("U1: allows /dev/null targets — no file written", () => {
+    expect(denyBashMutation("Bash", { command: "cmd 2>/dev/null" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd >/dev/null" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 1>/dev/null 2>&1" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd &>/dev/null" }, [])).toBeNull();
+  });
+
+  it("U1: still blocks a redirect to a real file", () => {
+    expect(denyBashMutation("Bash", { command: "foo > out.txt" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo x >> log" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2> err.log" }, [])).not.toBeNull();
+  });
+
+  it("U1 anti-gaming: a mixed fd-dup/dev-null + real file write is still blocked", () => {
+    expect(denyBashMutation("Bash", { command: "cmd > out.txt 2>&1" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo x 2>&1 > /tmp/leak" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>/dev/null > out.txt" }, [])).not.toBeNull();
+  });
+
+  it("U1 3c: `>&FILE` combined redirect to a filename is still blocked", () => {
+    expect(denyBashMutation("Bash", { command: "echo hi >&out.txt" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi >& out.txt" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi 1>& out.txt" }, [])).not.toBeNull();
+  });
+
+  it("U1 3c: descriptor dup/close (`n>&m`/`n>&-`) remains allowed", () => {
+    expect(denyBashMutation("Bash", { command: "cmd 2>&1" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 1>&2" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>&-" }, [])).toBeNull();
+  });
+
+  it("U1 3d: anchored harmless tokens — real filenames starting with a harmless token are blocked", () => {
+    expect(denyBashMutation("Bash", { command: "cmd >/dev/null.txt" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>/dev/nullish" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd &>/dev/null.log" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi >&2file" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi 2>&1file" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi 2>&-file" }, [])).not.toBeNull();
+  });
+
+  it("U1 3d: genuine harmless forms stay allowed after anchoring", () => {
+    expect(denyBashMutation("Bash", { command: "cmd >/dev/null" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd &>/dev/null" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd >/dev/null 2>&1" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "echo hi >&2" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>&1" }, [])).toBeNull();
+    expect(denyBashMutation("Bash", { command: "cmd 2>&-" }, [])).toBeNull();
+  });
+
+  it("U1: other mutators unchanged (mv, git push/checkout, tee)", () => {
+    expect(denyBashMutation("Bash", { command: "mv a b" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "git push" }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "git checkout ." }, [])).not.toBeNull();
+    expect(denyBashMutation("Bash", { command: "tee f" }, [])).not.toBeNull();
+  });
 });
 
 describe("firstDeny", () => {

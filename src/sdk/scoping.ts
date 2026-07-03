@@ -142,9 +142,14 @@ export function allowReadInScope(toolName: string, input: any, readScopes: strin
 export function denyBashMutation(toolName: string, input: any, extra: string[]): string | null {
   if (toolName !== "Bash") return null;
   const cmd = String(input?.command ?? "");
-  const mutators = ["rm ", "mv ", "git commit", "git push", "git checkout", ">", ">>", "tee ", "sed -i", ...extra];
+  const mutators = ["rm ", "mv ", "git commit", "git push", "git checkout", "tee ", "sed -i", ...extra];
   const hit = mutators.find((bad) => bad && cmd.includes(bad));
-  return hit ? `Read-mostly phase: Bash mutation blocked ("${hit}").` : null;
+  if (hit) return `Read-mostly phase: Bash mutation blocked ("${hit}").`;
+  // A redirect only mutates when it targets a real file — strip harmless fd-dups (`2>&1`)
+  // and `/dev/null` targets first, THEN a remaining bare `>`/`>>` means a file write.
+  const stripped = cmd.replace(/\d*>&(?:\d+|-)(?![\w.-])|[0-9&]*>{1,2}\s*\/dev\/null(?![\w.-])/g, "");
+  if (/>/.test(stripped)) return `Read-mostly phase: Bash mutation blocked (file redirect ">").`;
+  return null;
 }
 
 /**
