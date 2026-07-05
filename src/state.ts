@@ -20,6 +20,12 @@ export interface ItemState {
   pivots: number;
   /** Consecutive rounds each rubric criterion stayed below the pivot threshold. */
   criterionFailStreak: Record<string, number>;
+  /** Consecutive rounds each ASSERTION (keyed by id) has FAILED — the finer-grained companion to
+   *  `criterionFailStreak`. Drives the escalation register: once an id reaches
+   *  `build.assertionEscalateAfter`, the patch feedback uncaps its evidence + demands a root-cause
+   *  diagnosis. Advanced only on evaluated, non-blocked, non-all-un-run rounds (un-run ids excluded);
+   *  reset to `{}` on a GAN pivot alongside `criterionFailStreak`. */
+  assertionFailStreak?: Record<string, number>;
   lastScore?: number;
   /** Cumulative USD spent on this item across all rounds (feeds the budget guard). */
   costUsd?: number;

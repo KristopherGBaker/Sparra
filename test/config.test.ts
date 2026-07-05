@@ -121,6 +121,30 @@ describe("build.zeroCostTokenCap knob", () => {
   });
 });
 
+describe("build.assertionEscalateAfter knob (U2)", () => {
+  it("defaults to 2", () => {
+    expect(defaultConfig().build.assertionEscalateAfter).toBe(2);
+  });
+
+  it("a YAML override (including 0 = disabled) is parsed and respected, siblings preserved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-config-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    fs.writeFileSync(paths.config, "build:\n  assertionEscalateAfter: 0\n");
+    const cfg = await loadConfig(paths);
+    expect(cfg.build.assertionEscalateAfter).toBe(0);
+    expect(cfg.build.maxRoundsPerItem).toBe(defaultConfig().build.maxRoundsPerItem);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a partial YAML override preserves sibling build knobs (deepMerge)", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { build: { assertionEscalateAfter: 4 } });
+    expect(merged.build.assertionEscalateAfter).toBe(4);
+    expect(merged.build.escalateAfterRounds).toBe(defaultConfig().build.escalateAfterRounds);
+    expect(merged.build.verifyCommands).toEqual(defaultConfig().build.verifyCommands);
+  });
+});
+
 describe("build.preflightVerify knob", () => {
   it("defaults to false (off)", () => {
     expect(defaultConfig().build.preflightVerify).toBe(false);

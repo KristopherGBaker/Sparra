@@ -118,6 +118,12 @@ The few that matter most:
   generator switches to the stronger `escalation` role for the remaining rounds — per-item,
   one-way, new session on the switch, memory note appended. Blocked and limit-retried rounds
   don't count; the escalated role's own `fallback` still applies on a limit. `0` = off (default).
+- **`build.assertionEscalateAfter`** — per-**assertion** feedback escalation (K, default `2`; `0`
+  disables). Once the SAME contract assertion FAILS K consecutive rounds, its next **patch**
+  feedback UNCAPS that assertion's evidence and prepends a **diagnose-first** instruction naming the
+  id — a register between a plain patch and a full GAN pivot. Pairs with **error-biased evidence
+  truncation** (over-cap evidence keeps the error-bearing tail, not a blind head-slice). Blocked/
+  all-un-run rounds don't advance the streak; a pivot resets it. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
   to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Only single,

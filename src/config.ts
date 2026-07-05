@@ -201,6 +201,16 @@ export interface SparraConfig {
      */
     escalateAfterRounds: number;
     /**
+     * Per-ASSERTION escalation threshold (K). Once the SAME contract assertion FAILS this many
+     * consecutive evaluated rounds, its next patch feedback ESCALATES: the harness uncaps that
+     * assertion's evidence (no per-assertion cap) and prepends a diagnose-first instruction naming
+     * the id ("state the root cause of #N before editing"). Other assertions stay capped. A register
+     * between a plain patch and a full GAN pivot — it does not touch the pivot/blocked/un-run/review
+     * branches. Blocked and all-un-run rounds don't advance assertion streaks; a pivot resets them.
+     * Default 2; 0 disables escalation (feedback stays the normal patch feedback).
+     */
+    assertionEscalateAfter: number;
+    /**
      * Per-item cumulative USD budget guard. The loop "starts closed": when an
      * item's accumulated cost crosses this cap it halts as BUDGET_EXCEEDED and the
      * run moves on to the next item. Set to 0 to explicitly opt out (no cap).
@@ -483,6 +493,8 @@ export function defaultConfig(): SparraConfig {
       maxTurnsPerSession: 60,
       // Quality escalation is off by default; pair a >0 value with roles.generator.escalation.
       escalateAfterRounds: 0,
+      // Per-assertion feedback escalation after K consecutive same-assertion fails (0 disables).
+      assertionEscalateAfter: 2,
       maxBudgetUsdPerItem: 5,
       maxTokensPerItem: 0,
       zeroCostTokenCap: 0,

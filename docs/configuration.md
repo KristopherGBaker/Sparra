@@ -98,6 +98,12 @@ build:
   escalateAfterRounds: 0      # quality escalation: after this many FAILED rounds on an item, switch
                               #   its generator to roles.<generator>.escalation for the remaining
                               #   rounds (blocked/limit-retried rounds don't count); 0 = off
+  assertionEscalateAfter: 2   # per-ASSERTION feedback escalation (K): once the SAME contract
+                              #   assertion FAILS this many consecutive rounds, its next patch
+                              #   feedback UNCAPS that assertion's evidence + prepends a diagnose-first
+                              #   instruction naming the id — a register between a plain patch and a
+                              #   full GAN pivot (blocked/all-un-run rounds don't count; a pivot
+                              #   resets the streaks); 0 = disabled
   maxBudgetUsdPerItem: 5      # notional USD cap (tokens × list price); 0 = no cap
   maxTokensPerItem: 0         # direct token ceiling — the lever on a subscription/Codex; 0 = no cap
   zeroCostTokenCap: 0         # fallback token ceiling when USD cap is active but reported cost is

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { updateStreaksAndDecide } from "../src/build/pivot.ts";
+import { updateStreaksAndDecide, updateAssertionStreaks, assertionsToEscalate } from "../src/build/pivot.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { ItemState } from "../src/state.ts";
 import type { Verdict } from "../src/build/types.ts";
@@ -141,5 +141,120 @@ describe("updateStreaksAndDecide", () => {
     };
     const result = updateStreaksAndDecide(makeItem({}), mixedObservedFail, cfg);
     expect(result.streaks.design).toBe(1);
+  });
+});
+
+function assertionItem(streaks: Record<string, number> = {}): ItemState {
+  return { status: "building", round: 1, pivots: 0, criterionFailStreak: {}, assertionFailStreak: streaks };
+}
+
+function assertionVerdict(assertions: Verdict["assertions"], over: Partial<Verdict> = {}): Verdict {
+  return {
+    assertions,
+    scores: { design: 40, originality: 40, craft: 40, functionality: 40 },
+    weightedTotal: 40,
+    verdict: "fail",
+    blocking: [],
+    notes: "",
+    ...over,
+  };
+}
+
+describe("updateAssertionStreaks — per-assertion fail streaks (U2)", () => {
+  it("increments a FAILED assertion's streak and resets a PASSED one", () => {
+    const item = assertionItem({ "2": 1, "3": 4 });
+    const v = assertionVerdict([
+      { id: 2, pass: false, evidence: "still wrong" }, // fail → 1→2
+      { id: 3, pass: true, evidence: "now ok" }, // pass → reset to 0
+    ]);
+    const out = updateAssertionStreaks(item, v);
+    expect(out["2"]).toBe(2);
+    expect(out["3"]).toBe(0);
+  });
+
+  it("resets a previously-tracked id that is NOT failing this round (passed) — no stale streak", () => {
+    // Prior {2:2, 3:1}; only #3 fails now (#2 passes) → #3 → 2, #2 must drop to 0, not keep 2.
+    const item = assertionItem({ "2": 2, "3": 1 });
+    const v = assertionVerdict([
+      { id: 2, pass: true, evidence: "fixed" },
+      { id: 3, pass: false, evidence: "still failing" },
+    ]);
+    const out = updateAssertionStreaks(item, v);
+    expect(out["3"]).toBe(2);
+    expect(out["2"]).toBe(0); // reset, not the stale 2 (would spuriously escalate otherwise)
+  });
+
+  it("resets a previously-tracked id that is ABSENT from this round's assertions entirely", () => {
+    // Prior {2:2, 3:1}; the verdict this round contains ONLY #3 (failing). #2 is gone → reset to 0.
+    const item = assertionItem({ "2": 2, "3": 1 });
+    const v = assertionVerdict([{ id: 3, pass: false, evidence: "still failing" }]);
+    const out = updateAssertionStreaks(item, v);
+    expect(out["3"]).toBe(2);
+    expect(out["2"]).toBe(0); // absent = not failing → reset, no stale streak
+  });
+
+  it("starts a fresh assertion at streak 1 on its first failure", () => {
+    const out = updateAssertionStreaks(assertionItem(), assertionVerdict([{ id: 5, pass: false, evidence: "boom" }]));
+    expect(out["5"]).toBe(1);
+  });
+
+  it("a BLOCKED verdict advances NO assertion streak (mirrors the pivot guard)", () => {
+    const item = assertionItem({ "2": 2 });
+    const v = assertionVerdict([{ id: 2, pass: false, evidence: "x" }], { exerciseStatus: "blocked" });
+    expect(updateAssertionStreaks(item, v)).toEqual({ "2": 2 }); // unchanged
+  });
+
+  it("does NOT mutate the item's stored streak map (returns a fresh object)", () => {
+    const stored = { "2": 1 };
+    const item = assertionItem(stored);
+    updateAssertionStreaks(item, assertionVerdict([{ id: 2, pass: false, evidence: "x" }]));
+    expect(stored).toEqual({ "2": 1 }); // original untouched
+  });
+
+  it("6b: an UN-RUN assertion neither increments nor triggers a streak", () => {
+    const item = assertionItem({ "1": 1 });
+    const v = assertionVerdict(
+      [
+        { id: 1, pass: false, evidence: "command not found" },
+        { id: 2, pass: false, evidence: "real fail" },
+      ],
+      { unrunAssertionIds: [1], exerciseStatus: "mixed" }
+    );
+    const out = updateAssertionStreaks(item, v);
+    expect(out["1"]).toBe(1); // un-run: left untouched, NOT incremented
+    expect(out["2"]).toBe(1); // the run failure advances
+  });
+
+  it("6b: an ALL-un-run verdict leaves assertionFailStreak unchanged", () => {
+    const item = assertionItem({ "1": 1, "2": 2 });
+    const v = assertionVerdict(
+      [
+        { id: 1, pass: false, evidence: "not found" },
+        { id: 2, pass: false, evidence: "no simulator" },
+      ],
+      { unrunAssertionIds: [1, 2], exerciseStatus: "mixed" }
+    );
+    expect(updateAssertionStreaks(item, v)).toEqual({ "1": 1, "2": 2 });
+  });
+});
+
+describe("assertionsToEscalate — escalation trigger set (U2)", () => {
+  const v = assertionVerdict([
+    { id: 2, pass: false, evidence: "a" },
+    { id: 3, pass: false, evidence: "b" },
+    { id: 4, pass: true, evidence: "ok" },
+  ]);
+
+  it("returns failed ids at/over the threshold; passing ids and below-threshold ids excluded", () => {
+    expect(assertionsToEscalate({ "2": 2, "3": 1 }, v, 2)).toEqual([2]);
+  });
+
+  it("disabled (after <= 0) never escalates, even at a high streak", () => {
+    expect(assertionsToEscalate({ "2": 9 }, v, 0)).toEqual([]);
+  });
+
+  it("6b: an un-run failing id cannot escalate even at a high streak", () => {
+    const unrun = assertionVerdict([{ id: 2, pass: false, evidence: "not found" }], { unrunAssertionIds: [2] });
+    expect(assertionsToEscalate({ "2": 9 }, unrun, 2)).toEqual([]);
   });
 });

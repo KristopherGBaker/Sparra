@@ -17,7 +17,7 @@ import { evaluateItem } from "../build/evaluate.ts";
 import { reviewItem } from "../build/review.ts";
 import type { ReviewOutput } from "../build/review.ts";
 import type { Deviation } from "../build/generate.ts";
-import { updateStreaksAndDecide } from "../build/pivot.ts";
+import { updateStreaksAndDecide, updateAssertionStreaks, assertionsToEscalate } from "../build/pivot.ts";
 import { maybeResetWorkspace } from "../build/reset.ts";
 import { recordAttempt, attemptFailure, renderPriorAttempts, APPROACH_CAP } from "../build/attempts.ts";
 import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from "../build/feedback.ts";
@@ -1067,6 +1067,7 @@ export async function cmdBuild(
       noteFailedRound();
       const decision = updateStreaksAndDecide(st, ev.verdict, ctx.config);
       st.criterionFailStreak = decision.streaks;
+      st.assertionFailStreak = updateAssertionStreaks(st, ev.verdict);
       await ctx.store.save();
 
       if (overBudget(st)) {
@@ -1078,6 +1079,7 @@ export async function cmdBuild(
       if (decision.pivot) {
         st.pivots += 1;
         st.criterionFailStreak = {};
+        st.assertionFailStreak = {};
         // Attempt ledger: what this discarded attempt tried (the generator's own report) and why
         // it failed (top blocking items — Verdict fields only, already holdout-redacted). The
         // NEXT fresh generate renders these as PRIOR ATTEMPTS so it can't repeat the approach.
@@ -1098,8 +1100,16 @@ export async function cmdBuild(
         });
       } else {
         fresh = false;
-        feedback = renderPatchFeedback(ev.verdict);
-        detail(`${item.id}: patching for round ${st.round + 1}.`);
+        // Escalation register (between patch and pivot): assertions that have failed the SAME check
+        // for `build.assertionEscalateAfter` consecutive rounds get UNCAPPED evidence + a
+        // diagnose-first instruction naming them, so a thrashing generator stops patching symptoms.
+        const escalateIds = assertionsToEscalate(st.assertionFailStreak ?? {}, ev.verdict, ctx.config.build.assertionEscalateAfter);
+        feedback = renderPatchFeedback(ev.verdict, escalateIds.length ? { escalateAssertionIds: escalateIds } : {});
+        if (escalateIds.length) {
+          detail(`${item.id}: escalating assertion(s) ${escalateIds.map((i) => `#${i}`).join(", ")} (streak ≥ ${ctx.config.build.assertionEscalateAfter}) for round ${st.round + 1}.`);
+        } else {
+          detail(`${item.id}: patching for round ${st.round + 1}.`);
+        }
       }
       void dev;
     }

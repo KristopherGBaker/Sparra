@@ -242,6 +242,112 @@ describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
   });
 });
 
+describe("cmdBuild — per-assertion escalation register (U2)", () => {
+  const longEvidence = "diagnostic detail ".repeat(30) + "TRAILING-ROOT-CAUSE"; // > EVIDENCE_CAP
+  function patchFailEval(): EvalOutput {
+    return {
+      verdict: {
+        assertions: [{ id: 2, pass: false, evidence: longEvidence }],
+        scores: { design: 60, originality: 60, craft: 60, functionality: 60 }, // all >= pivot threshold → patch, not pivot
+        weightedTotal: 40,
+        verdict: "fail",
+        blocking: ["assertion 2 keeps failing"],
+        notes: "n",
+      },
+      raw: "",
+      sessionId: "e",
+      costUsd: 0.001,
+      tokens: 100,
+    };
+  }
+
+  it("escalates after K same-assertion fails: round-3 feedback uncaps #2's evidence + diagnose-first; earlier round not escalated", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3, assertionEscalateAfter: 2 });
+    const feedbacks: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async (args) => {
+        feedbacks.push(args.feedback);
+        return genOut();
+      },
+      evaluateItem: async () => patchFailEval(),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.assertionFailStreak?.["2"]).toBeGreaterThanOrEqual(2);
+    // Feedback delivered into round 3's generate was computed once #2's streak hit K=2.
+    expect(feedbacks[2]).toContain("DIAGNOSE FIRST");
+    expect(feedbacks[2]).toContain("#2");
+    expect(feedbacks[2]).toContain(longEvidence); // uncapped
+    // Round 2's feedback (streak only 1) is a plain, capped patch.
+    expect(feedbacks[1]).not.toContain("DIAGNOSE FIRST");
+    expect(feedbacks[1]).not.toContain(longEvidence);
+    expect(feedbacks[1]).toContain(TRUNCATION_MARKER);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("disabled (assertionEscalateAfter:0): never escalates even after repeated same-assertion fails", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3, assertionEscalateAfter: 0 });
+    const feedbacks: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async (args) => {
+        feedbacks.push(args.feedback);
+        return genOut();
+      },
+      evaluateItem: async () => patchFailEval(),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    for (const fb of feedbacks) {
+      if (!fb) continue;
+      expect(fb).not.toContain("DIAGNOSE FIRST");
+      expect(fb).not.toContain(longEvidence);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reset on GAN pivot: the generate right after the pivot sees an empty assertionFailStreak (cleared with criterionFailStreak)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, assertionEscalateAfter: 2 });
+    const streaksAtGen: Record<string, number>[] = [];
+    const critAtGen: Record<string, number>[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => [items[0]!],
+      generateItem: async () => {
+        const s = ctx.store.data.build.items["item-001"];
+        streaksAtGen.push({ ...(s?.assertionFailStreak ?? {}) });
+        critAtGen.push({ ...(s?.criterionFailStreak ?? {}) });
+        return genOut();
+      },
+      // Same criterion (craft) below threshold every round → GAN pivot at N=3; #2 fails every round.
+      evaluateItem: async () => ({
+        verdict: {
+          assertions: [{ id: 2, pass: false, evidence: "still broken" }],
+          scores: { design: 80, originality: 80, craft: 10, functionality: 80 },
+          weightedTotal: 40,
+          verdict: "fail",
+          blocking: ["b"],
+          notes: "n",
+        },
+        raw: "",
+        sessionId: "e",
+        costUsd: 0.001,
+        tokens: 100,
+      }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.pivots).toBeGreaterThanOrEqual(1);
+    // Round 3's generate saw a growing streak; round 4's (right after the pivot) saw both maps reset.
+    expect(streaksAtGen[2]).toEqual({ "2": 2 });
+    expect(streaksAtGen[3]).toEqual({});
+    expect(critAtGen[3]).toEqual({});
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("cmdBuild — cross-run memory on pivot (CHANGE 3)", () => {
   it("writes a pivot learning to memory.md and injects prior learnings into the next item's prompt input", async () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4 });

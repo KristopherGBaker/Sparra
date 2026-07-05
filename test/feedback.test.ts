@@ -6,6 +6,7 @@ import {
   renderPatchFeedback,
   renderPivotFeedback,
   renderBlockedFeedback,
+  truncateEvidence,
   EVIDENCE_CAP,
   TRUNCATION_MARKER,
 } from "../src/build/feedback.ts";
@@ -68,13 +69,14 @@ describe("renderPatchFeedback — per-assertion evidence (pure function of the V
     expect(fb).toContain("- process crashes on empty input");
   });
 
-  it("caps long evidence at the cap with a truncation marker; the full text is absent", () => {
-    const long = "x".repeat(EVIDENCE_CAP) + "TAIL-THAT-MUST-NOT-APPEAR";
+  it("caps long evidence with a truncation marker; the full un-elided text is absent", () => {
+    // A no-error blob far over the cap → head + marker + tail, marker present, full text gone.
+    const long = "x".repeat(EVIDENCE_CAP * 2) + "MIDDLE-CONTENT-DROPPED" + "y".repeat(EVIDENCE_CAP * 2);
     const v = mixedVerdict({ assertions: [{ id: 7, pass: false, evidence: long }] });
     const fb = renderPatchFeedback(v);
-    expect(fb).toContain("x".repeat(EVIDENCE_CAP) + TRUNCATION_MARKER);
-    expect(fb).not.toContain(long); // full text absent
-    expect(fb).not.toContain("TAIL-THAT-MUST-NOT-APPEAR");
+    expect(fb).toContain(TRUNCATION_MARKER);
+    expect(fb).not.toContain(long); // full contiguous text absent (it was elided)
+    expect(fb).not.toContain("MIDDLE-CONTENT-DROPPED"); // the elided middle is gone
   });
 
   it("keeps a readable fallback when no assertions failed", () => {
@@ -145,6 +147,92 @@ describe("calibration nudge — claimMismatches surfaced once via the shared bod
     const fb = renderPatchFeedback(mixedVerdict({ claimMismatches: cm }));
     // The line is built solely from ids; the ids named are NOT echoes of assertion evidence.
     expect(fb).toContain("you claimed pass on #3, #5");
+  });
+});
+
+describe("truncateEvidence — error-biased head+tail window (U2)", () => {
+  it("keeps the trailing ERROR line when evidence exceeds the cap (mutation: head-only drops it)", () => {
+    const evidence = "context ".repeat(60) + "\nEXPECTED 6 but got 5 — the actual failing line";
+    expect(evidence.length).toBeGreaterThan(EVIDENCE_CAP);
+    const out = truncateEvidence(evidence, EVIDENCE_CAP);
+    expect(out).toContain("EXPECTED 6 but got 5 — the actual failing line");
+    expect(out).toContain(TRUNCATION_MARKER);
+    // A blind head-only slice would end at cap and NOT contain the trailing error line.
+    expect(evidence.slice(0, EVIDENCE_CAP)).not.toContain("EXPECTED 6 but got 5");
+  });
+
+  it("evidence AT or UNDER the cap is byte-identical (no marker, no window)", () => {
+    const atCap = "z".repeat(EVIDENCE_CAP);
+    expect(truncateEvidence(atCap, EVIDENCE_CAP)).toBe(atCap);
+    const under = "short evidence line";
+    expect(truncateEvidence(under, EVIDENCE_CAP)).toBe(under);
+    expect(truncateEvidence(atCap, EVIDENCE_CAP)).not.toContain(TRUNCATION_MARKER);
+  });
+
+  it("bounded: kept text (excluding the marker) never exceeds the cap; marker present", () => {
+    const huge = "line error here\n".repeat(200); // way over cap, error on every line
+    const out = truncateEvidence(huge, EVIDENCE_CAP);
+    expect(out).toContain(TRUNCATION_MARKER);
+    const kept = out.split(TRUNCATION_MARKER).join(""); // head + tail without the marker
+    expect(kept.length).toBeLessThanOrEqual(EVIDENCE_CAP);
+  });
+
+  it("deterministic: identical input → identical output across repeated calls", () => {
+    const evidence = "a".repeat(400) + "\nFAIL: boom\n" + "b".repeat(400);
+    const a = truncateEvidence(evidence, EVIDENCE_CAP);
+    const b = truncateEvidence(evidence, EVIDENCE_CAP);
+    expect(a).toBe(b);
+  });
+
+  it("pulls the tail back to an error line the default tail window would just miss", () => {
+    // Big head, then the error line, then ~195 chars of frames: a plain 65%-of-cap tail keeps only
+    // the frames; the error-bias extension grows the tail (still within cap) to re-include the line.
+    const evidence = "H".repeat(400) + "\nERROR: root cause is X\n" + "    at frame\n".repeat(15);
+    const out = truncateEvidence(evidence, EVIDENCE_CAP);
+    expect(out).toContain("ERROR: root cause is X");
+    // Sanity: a naive last-195-chars tail would NOT have contained it.
+    expect(evidence.slice(evidence.length - 195)).not.toContain("ERROR: root cause is X");
+  });
+});
+
+describe("renderPatchFeedback — escalation register (U2, assertion 7 & 8)", () => {
+  const longEvidence = "detail ".repeat(80) + "TAIL-MARK"; // > cap
+  function escVerdict(): Verdict {
+    return mixedVerdict({
+      assertions: [
+        { id: 2, pass: false, evidence: longEvidence }, // escalated
+        { id: 4, pass: false, evidence: "y".repeat(EVIDENCE_CAP + 50) + "CAPPED-TAIL" }, // NOT escalated
+      ],
+    });
+  }
+
+  it("escalated id: FULL uncapped evidence + a diagnose-first instruction naming #id", () => {
+    const fb = renderPatchFeedback(escVerdict(), { escalateAssertionIds: [2] });
+    expect(fb).toContain(longEvidence); // full, uncapped
+    expect(fb).toContain("DIAGNOSE FIRST");
+    expect(fb).toContain("ROOT CAUSE");
+    expect(fb).toContain("#2");
+  });
+
+  it("a non-escalated failing assertion in the same verdict stays CAPPED", () => {
+    const fb = renderPatchFeedback(escVerdict(), { escalateAssertionIds: [2] });
+    expect(fb).toContain(TRUNCATION_MARKER); // #4 was truncated
+    expect(fb).not.toContain("y".repeat(EVIDENCE_CAP + 50) + "CAPPED-TAIL"); // full #4 text absent
+  });
+
+  it("disabled/no ids: no diagnose-first prefix, no uncap — byte-identical to a plain patch", () => {
+    const v = escVerdict();
+    expect(renderPatchFeedback(v, { escalateAssertionIds: [] })).toBe(renderPatchFeedback(v));
+    expect(renderPatchFeedback(v)).not.toContain("DIAGNOSE FIRST");
+    // #2's full long evidence is truncated when NOT escalated.
+    expect(renderPatchFeedback(v)).not.toContain(longEvidence);
+  });
+
+  it("deterministic under escalation: same verdict + ids → identical string", () => {
+    const v = escVerdict();
+    expect(renderPatchFeedback(v, { escalateAssertionIds: [2] })).toBe(
+      renderPatchFeedback(v, { escalateAssertionIds: [2] })
+    );
   });
 });
 
