@@ -34,6 +34,11 @@ export interface ItemState {
   failedRounds?: number;
   /** This item's generator switched to its `escalation` role (per-item, one-way). */
   escalated?: boolean;
+  /** Consecutive PREFLIGHT bounces since the evaluator last ran (`build.preflightVerify`). A
+   *  preflight bounce fires only while this is 0; it's reset to 0 the moment an evaluator round
+   *  runs, so the gate can never bounce the item twice without the evaluator weighing in. Durable
+   *  so the one-bounce cap survives a resume (a rebuild seeded post-bounce goes to the evaluator). */
+  preflightBounces?: number;
   /** Attempt ledger: one entry per GAN pivot ({round, approach, failure}, capped — see
    *  build/attempts.ts). Rendered into the FRESH restart's prompt as "PRIOR ATTEMPTS" so a
    *  pivot can't silently repeat a failed approach. Built ONLY from the generator's own report

@@ -125,6 +125,12 @@ The few that matter most:
   worktree boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
   strict allow-hook with `allowVerify: true` (MCP) / `--verify` (CLI) — so the interactive
   generator self-verifies its gates and the conductor no longer has to run every gate out-of-band.
+- **`build.preflightVerify`** — off by default. When on, after each generation and **before** the
+  evaluator, the harness runs the contract's own *"I will verify by"* commands via the safe
+  executor; a deterministic **behavioral** failure **skips the evaluator that round** and bounces
+  back to the generator with the (holdout-redacted) output — so a generation that fails its own
+  gates never costs a full evaluator session. usage/unsafe/all-green fall through to the evaluator;
+  capped at one bounce before an evaluator round must run.
 - **`build.env`** — string env vars merged over `process.env` and injected into build SDK
   sessions, evaluator `run_command` spawns, and verify/measure command spawns. Use this for
   per-project tool cache/user dirs (for example `HOME: /private/tmp` under a sandbox). Optional

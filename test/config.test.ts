@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { deepMerge, defaultConfig, writeDefaultConfig, type SparraConfig } from "../src/config.ts";
+import { deepMerge, defaultConfig, loadConfig, writeDefaultConfig, type SparraConfig } from "../src/config.ts";
 import { allowVerifyBash } from "../src/sdk/scoping.ts";
 import { Paths } from "../src/paths.ts";
 
@@ -118,6 +118,32 @@ describe("build.zeroCostTokenCap knob", () => {
     expect(merged.build.zeroCostTokenCap).toBe(750_000);
     expect(merged.build.maxTokensPerItem).toBe(defaultConfig().build.maxTokensPerItem);
     expect(merged.build.maxBudgetUsdPerItem).toBe(defaultConfig().build.maxBudgetUsdPerItem);
+  });
+});
+
+describe("build.preflightVerify knob", () => {
+  it("defaults to false (off)", () => {
+    expect(defaultConfig().build.preflightVerify).toBe(false);
+  });
+
+  it("a YAML config with preflightVerify: true is parsed and respected, siblings preserved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-config-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    fs.writeFileSync(paths.config, "build:\n  preflightVerify: true\n");
+    const cfg = await loadConfig(paths);
+    expect(cfg.build.preflightVerify).toBe(true);
+    // A partial override must not clobber unrelated build knobs.
+    expect(cfg.build.maxRoundsPerItem).toBe(defaultConfig().build.maxRoundsPerItem);
+    expect(cfg.build.flakinessReruns).toBe(defaultConfig().build.flakinessReruns);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a partial YAML override preserves sibling build knobs (deepMerge)", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { build: { preflightVerify: true } });
+    expect(merged.build.preflightVerify).toBe(true);
+    expect(merged.build.maxTokensPerItem).toBe(defaultConfig().build.maxTokensPerItem);
+    expect(merged.build.verifyCommands).toEqual(defaultConfig().build.verifyCommands);
   });
 });
 

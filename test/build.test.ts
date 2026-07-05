@@ -16,6 +16,7 @@ import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
 import { generateItem, type GenerateOutput } from "../src/build/generate.ts";
 import type { EvalOutput } from "../src/build/evaluate.ts";
+import type { CommandExecutor, ExecOutcome } from "../src/build/exec.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
 import type { LimitHit } from "../src/sdk/backend.ts";
 
@@ -1421,6 +1422,182 @@ describe("cmdBuild — assertionsClaimed calibration gap surfaced (Q7c)", () => 
     expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(false);
     const mem = fs.existsSync(ctx.paths.memory) ? fs.readFileSync(ctx.paths.memory, "utf8") : "";
     expect(mem).not.toContain("calibration gap");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — pre-evaluator preflight gate (build.preflightVerify)", () => {
+  // A contract whose "I will verify by" section yields exactly one runnable command.
+  const CONTRACT = "# Contract\n\n## I will verify by\n- `npm test`\n";
+  const contractDeps = (): Partial<BuildDeps> => ({
+    ...baseDeps(),
+    negotiateContract: async () => ({ text: CONTRACT, agreed: true, tracesUsed: 0 }),
+    decompose: async () => [items[0]!],
+  });
+  // Outcome factories for the injected executor spy.
+  const behavioral = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 1, stdout: "", stderr: "1 failing test", timedOut: false });
+  const okOutcome = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 0, stdout: "ok", stderr: "", timedOut: false });
+  const usage = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 127, stdout: "", stderr: "npm: command not found", timedOut: false });
+  const unsafe = (command: string): ExecOutcome => ({ ran: false, command, unsafeReason: "argv[0] is not a known build/test runner" });
+  const execSpy = (calls: string[], out: (c: string) => ExecOutcome): CommandExecutor =>
+    async (_ws, command) => { calls.push(command); return out(command); };
+
+  it("disabled by default: ZERO preflight executor calls, evaluateItem runs normally (mutation: forcing the branch on breaks this)", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0 }); // preflightVerify defaults false
+    const execCalls: string[] = [];
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy(execCalls, behavioral),
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(execCalls).toEqual([]); // no preflight (and rerun gate off) → zero executor calls
+    expect(evalCalls).toBe(1);
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("enabled + behavioral fail: SKIPS evaluateItem this round and bounces with the exec output as the NEXT round's feedback", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    const execCalls: string[] = [];
+    let evalCalls = 0;
+    const genFeedback: (string | undefined)[] = [];
+    const evalCountAtGen: number[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy(execCalls, behavioral),
+      generateItem: async (args) => { genFeedback.push(args.feedback); evalCountAtGen.push(evalCalls); return genOut(); },
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    // Round 1 bounced: the evaluator had NOT run by the time round 2 generated.
+    expect(evalCountAtGen).toEqual([0, 0]);
+    expect(execCalls).toContain("npm test");
+    // Round 2's generator feedback carries the failing command's rendered output.
+    expect(genFeedback[1]).toContain("npm test");
+    expect(genFeedback[1]).toContain("exit 1");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("enabled + all-ok: proceeds to evaluateItem (no bounce)", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    const execCalls: string[] = [];
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy(execCalls, okOutcome),
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(execCalls).toEqual(["npm test"]); // preflight ran once
+    expect(evalCalls).toBe(1); // then evaluated (no bounce)
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("enabled + usage outcome does NOT bounce (broken command is not a gate fail) → evaluateItem still runs", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], usage),
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(evalCalls).toBe(1);
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("enabled + unsafe/never-ran outcome does NOT bounce → evaluateItem still runs", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], unsafe),
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(evalCalls).toBe(1);
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("cap: an ALWAYS-failing preflight bounces ONCE then the next generation proceeds to evaluateItem (mutation: no cap → bounces forever, eval never runs)", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    let evalCalls = 0;
+    let genCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], behavioral), // ALWAYS behavioral-fails
+      generateItem: async () => { genCalls++; return genOut(); },
+      evaluateItem: async () => { evalCalls++; return evalOut(false); },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(genCalls).toBe(2); // both rounds generated
+    expect(evalCalls).toBe(1); // round 1 bounced, round 2 forced to the evaluator by the cap
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("cap is durable across resume: seeded with a recorded bounce, a resumed still-failing preflight proceeds to evaluateItem (no re-bounce)", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 3, flakinessReruns: 0, preflightVerify: true });
+    // Seed the post-bounce durable state a prior process would have persisted. A preset runId
+    // marks this as a RESUME (not a fresh run), so the seeded item state is not wiped.
+    ctx.store.data.build.runId = "build-resume";
+    ctx.store.data.build.items["item-001"] = {
+      status: "building", round: 1, pivots: 0, criterionFailStreak: {}, costUsd: 0, tokensUsed: 0, preflightBounces: 1,
+    };
+    let evalCalls = 0;
+    let genCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], behavioral), // preflight still failing
+      generateItem: async () => { genCalls++; return genOut(); },
+      evaluateItem: async () => { evalCalls++; return evalOut(true); },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(genCalls).toBe(1); // the resumed generation
+    expect(evalCalls).toBe(1); // went straight to the evaluator (did NOT bounce again)
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("holdout redaction: the bounced feedback is passed through redactHoldout (holdout text absent, redaction marker present)", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    const HOLDOUT_LINE = "The secret acceptance probe expects sentinel-XYZ output";
+    fs.writeFileSync(ctx.paths.holdout, `# Holdout\n- ${HOLDOUT_LINE}\n`);
+    const leaky = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 1, stdout: "", stderr: `assertion failed: ${HOLDOUT_LINE}`, timedOut: false });
+    const genFeedback: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], leaky),
+      generateItem: async (args) => { genFeedback.push(args.feedback); return genOut(); },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(genFeedback[1]).toBeTruthy();
+    expect(genFeedback[1]).not.toContain(HOLDOUT_LINE);
+    expect(genFeedback[1]).toContain("[redacted: holdout]");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("framing: the bounced feedback names a PREFLIGHT failure, not an evaluator verdict", async () => {
+    const { ctx, dir } = await makeCtx({ maxRoundsPerItem: 2, flakinessReruns: 0, preflightVerify: true });
+    const genFeedback: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...contractDeps(),
+      execVerifyCommand: execSpy([], behavioral),
+      generateItem: async (args) => { genFeedback.push(args.feedback); return genOut(); },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(genFeedback[1]).toMatch(/PREFLIGHT/);
+    expect(genFeedback[1]).toMatch(/your OWN verify commands failed/i);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

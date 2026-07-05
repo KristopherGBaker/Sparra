@@ -288,6 +288,18 @@ export interface SparraConfig {
      * demotes the same way; only all-runs-exit-0 keeps the pass. Default 2; 0 = off.
      */
     flakinessReruns: number;
+    /**
+     * Pre-evaluator PREFLIGHT gate (no model): after each generation and BEFORE the adversarial
+     * evaluator, run the contract's OWN "I will verify by" commands once via the safe executor.
+     * On a deterministic BEHAVIORAL failure (a command ran, exited nonzero, and is not a broken/
+     * usage or unsafe command) the round SKIPS the evaluator and bounces straight back to the
+     * generator with the (holdout-redacted) command output — so a generation that fails its own
+     * gates never costs a full evaluator session. Capped at ONE bounce before an evaluator round
+     * must run (so preflight can never loop the item without the evaluator weighing in). usage/
+     * unsafe/all-green outcomes fall through to the evaluator unchanged. Off by default — with the
+     * knob unset a round makes zero preflight executor calls and evaluates exactly as today.
+     */
+    preflightVerify: boolean;
   };
 
   format: {
@@ -490,6 +502,9 @@ export function defaultConfig(): SparraConfig {
         "make test", "make build", "make check",
       ],
       flakinessReruns: 2,
+      // Off by default: opting in bounces a generation that fails its own verify commands
+      // straight back to the generator, skipping (and saving) an evaluator session that round.
+      preflightVerify: false,
     },
     format: { enabled: true, command: "", autodetect: true },
     // Off by default: measure runs the project's OWN QA harness after accept (signal, non-blocking).

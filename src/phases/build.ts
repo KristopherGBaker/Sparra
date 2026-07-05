@@ -27,7 +27,7 @@ import { recordDeviations, reconcilePlan } from "../build/reconcile.ts";
 import { measureAcceptedItem, renderMeasureLearning } from "../build/measure.ts";
 import { diffClaims, renderClaimGap } from "../build/claims.ts";
 import { assertNoHoldoutLeak, readHoldout, redactHoldout } from "../build/holdout.ts";
-import { extractVerifyCommands, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
+import { classifyExec, extractVerifyCommands, renderExecOutcome, rerunVerifyCommands, runVerifyCommand, type CommandExecutor } from "../build/exec.ts";
 import { mergedBuildEnv } from "../build/env.ts";
 import {
   writeContractPause,
@@ -793,6 +793,55 @@ export async function cmdBuild(
 
       const dev = await d.recordDeviations(ctx, item, gen.deviations);
 
+      // ── Pre-evaluator PREFLIGHT gate (config-gated, no model). BETWEEN generation and the
+      // adversarial evaluator: run the contract's OWN "I will verify by" commands once via the
+      // safe executor. On a DETERMINISTIC behavioral failure (ran, nonzero, not usage/unsafe) skip
+      // the evaluator this round and bounce back to the generator with the (holdout-redacted)
+      // command output — a generation that fails its own gates never costs a full evaluator
+      // session. Capped at ONE bounce before the evaluator MUST run (durable `preflightBounces`,
+      // reset once the evaluator runs), so preflight can never loop the item without the evaluator
+      // weighing in. all-green / usage (broken command) / unsafe (never-ran) fall through to the
+      // evaluator unchanged — only a real gate failure short-circuits. Round accounting mirrors a
+      // failed eval round: it reuses this round's `st.round` increment and counts as a failed round.
+      if (ctx.config.build.preflightVerify && (st.preflightBounces ?? 0) === 0) {
+        const preflightOutcomes = [];
+        for (const command of extractVerifyCommands(contract.text)) {
+          preflightOutcomes.push(
+            await d.execVerifyCommand(workspaceDir, command, {
+              allowPrefixes: ctx.config.build.verifyCommands, // same opt-in the rerun gate passes
+              env: mergedBuildEnv(ctx.config),
+            })
+          );
+        }
+        // A bounce fires ONLY on a real behavioral fail (ran + nonzero + not a usage signature).
+        // usage (command broken as written) and unsafe/never-ran are NOT gate failures here.
+        const preflightFails = preflightOutcomes.filter((o) => o.ran && classifyExec(o) === "behavioral");
+        if (preflightFails.length) {
+          st.preflightBounces = (st.preflightBounces ?? 0) + 1;
+          noteFailedRound();
+          warn(
+            `${item.id}: PREFLIGHT bounce in round ${st.round} — ${preflightFails.length} of the contract's own verify command(s) failed deterministically; skipping the evaluator this round.`
+          );
+          await d.appendLearning(ctx.paths, {
+            item: item.id,
+            kind: "failed",
+            detail: `round ${st.round}: preflight bounce — ${preflightFails.map((o) => o.command).join("; ").slice(0, 200)}`,
+            at: stamp(),
+          });
+          await ctx.store.save();
+          if (st.round < ctx.config.build.maxRoundsPerItem) {
+            // Frame it as a PREFLIGHT failure (not an evaluator verdict) and route it through the
+            // SAME holdout-redaction wall the evaluator feedback uses.
+            feedback = redactHoldout(
+              `PREFLIGHT FAILURE — your OWN verify commands failed deterministically BEFORE evaluation (this is NOT an adversarial-evaluator verdict). The harness ran the contract's "I will verify by" commands via the safe executor and one or more failed; fix these so your own gates pass, then generation proceeds to the evaluator:\n${preflightFails.map((o) => renderExecOutcome(o)).join("\n")}`,
+              await readHoldout(ctx)
+            );
+            fresh = false;
+          }
+          continue; // skip evaluateItem this round — bounce straight back to the generator
+        }
+      }
+
       const evalPick = pickRole(ctx.config.roles.evaluator, limitedUntil, Date.now());
       if (evalPick.usedFallback) info(`${item.id}: ${backendKey(ctx.config.roles.evaluator)} limited — evaluating with fallback ${evalPick.role.model}.`);
       const ev = await d.evaluateItem({
@@ -815,6 +864,10 @@ export async function cmdBuild(
       const el = await onLimit(st, evalPick.role, ev.limitHit, `${item.id} evaluate`);
       if (el === "halt") { stopRun = true; break; }
       if (el === "retry") continue;
+
+      // The evaluator weighed in this round — clear the consecutive preflight-bounce counter so a
+      // LATER generation can preflight-bounce again (the cap is one bounce per evaluator round).
+      st.preflightBounces = 0;
 
       st.lastScore = ev.verdict.weightedTotal;
 

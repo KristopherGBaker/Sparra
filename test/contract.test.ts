@@ -16,6 +16,18 @@ import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
  * command executor are BOTH dependency-injected fakes; no live model calls, no real spawns.
  */
 
+/** Compare two dotted numeric versions (e.g. "2026.7.5.2"): >0 if a>b, 0 if equal, <0 if a<b.
+ *  Segment-wise numeric so the plugin-version assertion tolerates forward bumps. */
+function cmpDottedVersion(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return Math.sign(d);
+  }
+  return 0;
+}
+
 async function makeCtx(withHoldout = false): Promise<{ ctx: Ctx; root: string; wt: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-probe-root-"));
   const wt = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-probe-wt-"));
@@ -406,7 +418,8 @@ describe("U-B delta-critique — prompt + skill + docs", () => {
     expect(skill).toMatch(/delta instruction/i); // …and state the delta instruction
     expect(skill).toMatch(/inline/i); // forbid role can't read .sparra/ — inline it
     const mkt = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".claude-plugin/marketplace.json"), "utf8"));
-    expect(mkt.metadata.version).toBe("2026.7.5.1");
+    // The version bumped by this item is a FLOOR, not an exact pin — later items only move it up.
+    expect(cmpDottedVersion(mkt.metadata.version, "2026.7.5.1")).toBeGreaterThanOrEqual(0);
   });
 
   it("docs/build-loop.md documents the delta-critique protocol (assertion 7)", () => {

@@ -16,6 +16,18 @@ import {
 import { cmdPrompts } from "../src/phases/prompts.ts";
 import type { Ctx } from "../src/context.ts";
 
+/** Compare two dotted numeric versions (e.g. "2026.7.5.2"): >0 if a>b, 0 if equal, <0 if a<b.
+ *  Segment-wise numeric so the plugin-version assertions tolerate forward bumps. */
+function cmpDottedVersion(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return Math.sign(d);
+  }
+  return 0;
+}
+
 async function tmpPaths(): Promise<{ dir: string; paths: Paths }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-prompts-"));
   const paths = new Paths(dir);
@@ -68,7 +80,9 @@ describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
     expect(skill).toContain("exerciseStatus: mixed");
     expect(diagnose).toContain("Verdict lists `unrunAssertionIds`");
     expect(diagnose).toContain("all-UN-RUN verdict is inconclusive");
-    expect(marketplace.metadata.version).toBe("2026.7.5.1");
+    // The plugin version only moves forward — assert it is strictly ABOVE the floor this test
+    // documents, not pinned to one exact string (later items legitimately bump it further).
+    expect(cmpDottedVersion(marketplace.metadata.version, "2026.7.3.2")).toBeGreaterThan(0);
   });
 });
 
