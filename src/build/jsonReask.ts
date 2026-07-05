@@ -10,6 +10,18 @@ import type { RunSessionParams } from "../sdk/session.ts";
 export const REPORT_REASK_PROMPT =
   "Your previous reply had no parseable report JSON. Re-emit ONLY the JSON block per your instructions — nothing else.";
 
+/**
+ * The evaluator's WRONG-SHAPE verdict re-ask: a JSON block WAS emitted but it fails `isVerdict`
+ * (e.g. missing/non-object `scores`, missing `verdict`/`weightedTotal`). A generic "re-emit the
+ * block" can't fix a block that was already emitted, so this NAMES the specific required fields
+ * the best verdict-like candidate is missing/invalid (computed by the caller) — while still
+ * instructing "re-emit ONLY the JSON block". Kept here so the paragraph lives in one place.
+ */
+export function verdictReaskPrompt(missingFields: string[]): string {
+  const fields = missingFields.length ? missingFields.join(", ") : "scores, verdict";
+  return `Your previous reply had a JSON block but of the wrong shape — the verdict is missing or has an invalid value for: ${fields}. Re-emit ONLY the JSON verdict block per your instructions, with the required field(s) present and valid — nothing else.`;
+}
+
 /** A report re-ask needs exactly ONE turn: enough to re-emit the block, not enough to re-enter
  *  work. The role-runner's cap-death re-ask pins this so a session resumed after a cap can't
  *  quietly keep building past the cap it just hit. */

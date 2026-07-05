@@ -564,6 +564,107 @@ describe("evaluateItem — JSON re-ask on no-parseable-verdict (Q7d)", () => {
   });
 });
 
+describe("evaluateItem — TARGETED re-ask on a WRONG-SHAPE verdict (U-C #7)", () => {
+  /** Fake session returning texts[i] on the i-th call (last repeats); optionally sets limitHit. */
+  function seqRecorder(texts: string[], opts: { costUsd?: number; limitHit?: boolean } = {}) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const i = calls.length;
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: texts[Math.min(i, texts.length - 1)]!, sessionId: `s${i}`,
+        costUsd: opts.costUsd ?? 0, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+        ...(opts.limitHit ? { limitHit: { kind: "usage", raw: "usage limit" } as RunResult["limitHit"] } : {}),
+      };
+    };
+    return { calls, fn };
+  }
+
+  async function runSeq(ctx: Ctx, dir: string, rec: ReturnType<typeof seqRecorder>) {
+    return evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps,
+    });
+  }
+
+  // GAMEABILITY FIXTURE: incidental command-output JSON (no rubric fields) FIRST and LAST, with a
+  // wrong-shaped verdict-like block (has `verdict`, NO `scores`) in the MIDDLE — so a naive
+  // first/last-block impl derives fields from the incidental block, not the verdict candidate.
+  const GAMEABLE_WRONG_SHAPE =
+    "I ran the suite:\n```json\n" +
+    '{"command":"npm test","exitCode":0,"stdout":"5 passing"}\n```\n' +
+    "My assessment:\n```json\n" +
+    '{"verdict":"fail","blocking":["broken"],"notes":"n"}\n```\n' +
+    "Final status:\n```json\n" +
+    '{"command":"echo done","exitCode":0}\n```';
+
+  it("names the field missing from the VERDICT-LIKE candidate (scores), NOT the incidental block (kills first/last-block impls)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, "still garbage"]);
+    await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2); // exactly one targeted re-ask
+    expect(rec.calls[1]!.resume).toBe("s0"); // same resumed session
+    const prompt = rec.calls[1]!.prompt!;
+    expect(prompt).toContain("Re-emit ONLY the JSON");
+    // The named missing field(s) come from the candidate (`scores`), not the incidental object.
+    const fieldList = prompt.split("invalid value for:")[1]!.split(".")[0]!;
+    expect(fieldList).toContain("scores");
+    expect(fieldList).not.toContain("verdict"); // candidate HAS verdict → naive [scores,verdict] must fail
+    expect(fieldList).not.toContain("command"); // never fields derived from the incidental block
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a valid verdict on the wrong-shape re-ask is parsed and used (no forced FAIL)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, PASS_JSON]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    expect(out.verdict.verdict).toBe("pass");
+    expect(out.verdict.notes).not.toBe("no verdict parsed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("wrong-shape re-ask still invalid → forced-FAIL fallback unchanged", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, "no json at all"]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.notes).toBe("no verdict parsed");
+    expect(out.verdict.blocking.join(" ")).toContain("parseable JSON verdict");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("budget-exhausted → NO wrong-shape re-ask (guard holds)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, PASS_JSON], { costUsd: 99 });
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.verdict.verdict).toBe("fail");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("limitHit set → NO wrong-shape re-ask (the fallback chain owns provider limits)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, PASS_JSON], { limitHit: true });
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.verdict.verdict).toBe("fail");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("build.jsonReask:false → NO wrong-shape re-ask", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.jsonReask = false;
+    const rec = seqRecorder([GAMEABLE_WRONG_SHAPE, PASS_JSON]);
+    const out = await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.verdict.verdict).toBe("fail");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("evaluateItem — assertion-anchored functionality cap (Q4, rubric.anchorFunctionality)", () => {
   // Verdict JSON with a chosen assertion pass/fail mix + a chosen functionality score.
   const verdictJson = (passes: boolean[], functionality: number, others = 90) =>

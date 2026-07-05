@@ -12,6 +12,7 @@ import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { budgetExceeded, costUsdOrZero } from "./budget.ts";
 import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
+import { verdictReaskPrompt } from "./jsonReask.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -58,6 +59,38 @@ function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[
 
 function allAssertionsUnrun(assertions: Verdict["assertions"], unrunIds: number[]): boolean {
   return assertions.length > 0 && runnableAssertions(assertions, unrunIds).length === 0;
+}
+
+/** How much verdict signal an object carries: any of `scores` (object), `verdict`, `weightedTotal`. */
+function verdictSignal(o: Record<string, unknown>): number {
+  return (o.scores && typeof o.scores === "object" ? 1 : 0) + ("verdict" in o ? 1 : 0) + ("weightedTotal" in o ? 1 : 0);
+}
+
+/** Among all parsed JSON blocks, the one bearing the MOST verdict signal — so an incidental
+ *  command-output/config object (zero signal) is never mistaken for the verdict. Returns undefined
+ *  when NO block carries any signal (then the wrong-shape re-ask falls back to the generic prompt). */
+function bestVerdictLike(blocks: unknown[]): Record<string, unknown> | undefined {
+  let best: Record<string, unknown> | undefined;
+  let bestScore = 0;
+  for (const b of blocks) {
+    if (!b || typeof b !== "object") continue;
+    const o = b as Record<string, unknown>;
+    const s = verdictSignal(o);
+    if (s > bestScore) {
+      bestScore = s;
+      best = o;
+    }
+  }
+  return best;
+}
+
+/** Which required verdict fields the candidate is missing/invalid — distinguishing a missing/
+ *  non-object `scores` from a missing `verdict`/`weightedTotal` — to name in the targeted re-ask. */
+function missingVerdictFields(candidate: Record<string, unknown>): string[] {
+  const missing: string[] = [];
+  if (!candidate.scores || typeof candidate.scores !== "object") missing.push("scores");
+  if (!("verdict" in candidate) && !("weightedTotal" in candidate)) missing.push("verdict");
+  return missing;
 }
 
 /**
@@ -160,19 +193,29 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v);
   let parsed = extractJsonWhere<Verdict>(resultText, isVerdict);
 
-  // JSON re-ask (build.jsonReask): ONLY when the reply has no parseable JSON at all — a JSON
-  // block of the wrong shape goes straight to today's forced-FAIL fallback ("re-emit the JSON
-  // block" can't fix a block that was already emitted). ONE resumed re-emit call inside this
-  // step; never on a provider-limit reply (the round loop's fallback chain owns those), and
-  // skipped when this session already exhausted the item budget.
+  // JSON re-ask (build.jsonReask): resume the session ONCE when we couldn't parse a verdict.
+  // Two shapes: NO parseable JSON at all → a generic "re-emit the JSON block" prompt; a JSON
+  // block of the WRONG shape (≥1 block but none passes isVerdict) → a TARGETED prompt naming the
+  // required fields the best verdict-like candidate is missing (a generic re-ask can't fix a
+  // block that was already emitted). ONE resumed re-emit call inside this step; never on a
+  // provider-limit reply (the round loop's fallback chain owns those), and skipped when this
+  // session already exhausted the item budget. If the re-ask still yields no valid verdict,
+  // behavior is today's forced-FAIL fallback below (unchanged).
   const itemBudget = args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
-  const noJson = extractAllJson(resultText).length === 0;
-  if (!parsed && noJson && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
-    warn(`Evaluator for ${item.id} returned no parseable verdict — re-asking once for the JSON block.`);
+  const allBlocks = extractAllJson(resultText);
+  const noJson = allBlocks.length === 0;
+  if (!parsed && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
+    const candidate = noJson ? undefined : bestVerdictLike(allBlocks);
+    const reaskPrompt = candidate
+      ? verdictReaskPrompt(missingVerdictFields(candidate))
+      : "Your previous reply had no parseable JSON verdict. Re-emit ONLY the JSON block per your instructions — nothing else.";
+    warn(
+      `Evaluator for ${item.id} returned ${candidate ? "a wrong-shape" : "no parseable"} verdict — re-asking once for the JSON block.`
+    );
     const retry = await run({
       ...baseReq,
       role: `evaluator-${item.id}-r${round}-reask`,
-      prompt: "Your previous reply had no parseable JSON verdict. Re-emit ONLY the JSON block per your instructions — nothing else.",
+      prompt: reaskPrompt,
       resume: res.sessionId,
     });
     costUsd += costUsdOrZero(retry.costUsd);
