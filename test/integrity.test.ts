@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { snapshotArtifact, enforceArtifactIntegrity, type IntegrityDeps } from "../src/build/integrity.ts";
+import { snapshotArtifact, enforceArtifactIntegrity, isBuildCachePath, type IntegrityDeps } from "../src/build/integrity.ts";
 
 /** An in-memory fake IntegrityDeps so the guard is exercised with no real git/fs.
  *  `tracked` is the artifact surface (what `git ls-files …` would list, relative to ws).
@@ -117,5 +117,78 @@ describe("source-integrity guard (snapshotArtifact + enforceArtifactIntegrity)",
     expect(mutated).toEqual(["assets/i.png", "src/u.ts"]);
     expect(ctx.files.get("assets/i.png")!.equals(png)).toBe(true); // byte-identical
     expect(ctx.files.get("src/u.ts")!.equals(unicode)).toBe(true);
+  });
+});
+
+describe("build-cache exclusion (isBuildCachePath + guard integration)", () => {
+  it("isBuildCachePath matches the documented cache relpaths and nothing else", () => {
+    // .cache/clang/ModuleCache as any segment run; .build/DerivedData as any segment; .swiftpm-home/ leading.
+    for (const yes of [
+      ".swiftpm-home/config.json",
+      ".swiftpm-home/.cache/clang/ModuleCache/x-ABC/mod.pcm",
+      ".build/debug/App.o",
+      "sub/.build/x.o",
+      "App/DerivedData/Build/Products/x",
+      "nested/.cache/clang/ModuleCache/y.pcm",
+      "./.build/x.o", // leading ./ normalized away
+    ]) {
+      expect(isBuildCachePath(yes)).toBe(true);
+    }
+    // Windows-style separators normalize too.
+    expect(isBuildCachePath("sub\\.build\\x.o")).toBe(true);
+    expect(isBuildCachePath(".swiftpm-home\\a\\b")).toBe(true);
+    // Real graded source (incl. lookalikes) is NOT excluded.
+    for (const no of [
+      "src/App.swift",
+      "src/build/integrity.ts", // ".build" only as a substring, not a segment
+      "docs/DerivedDataNotes.md", // "DerivedData" only as a substring
+      ".cache/clang/other/x", // wrong tail
+      "swiftpm-home/x", // no leading dot
+    ]) {
+      expect(isBuildCachePath(no)).toBe(false);
+    }
+  });
+
+  it("an evaluator writing ONLY excluded cache paths yields an empty mutated list (created/modified/deleted)", () => {
+    const ctx = fakeDeps(
+      WS,
+      { "src/App.swift": "APP", ".build/old.o": "OLD", ".swiftpm-home/existing": "E" },
+      ["src/App.swift", ".build/old.o", ".swiftpm-home/existing"]
+    );
+    const snap = snapshotArtifact(WS, ctx.deps);
+    ctx.files.set(".swiftpm-home/.cache/clang/ModuleCache/m.pcm", Buffer.from("new")); // created
+    ctx.files.set(".build/old.o", Buffer.from("rebuilt")); // modified
+    ctx.files.delete(".swiftpm-home/existing"); // deleted
+    const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
+    expect(mutated).toEqual([]); // no integrity violation
+    // Excluded paths are left exactly as the build left them (not restored/removed).
+    expect(ctx.files.get(".build/old.o")!.toString()).toBe("rebuilt");
+    expect(ctx.files.has(".swiftpm-home/.cache/clang/ModuleCache/m.pcm")).toBe(true);
+    expect(ctx.files.has(".swiftpm-home/existing")).toBe(false);
+    expect(ctx.writes).toEqual([]);
+    expect(ctx.removes).toEqual([]);
+  });
+
+  it("a real source mutation alongside excluded cache writes reports ONLY the source", () => {
+    const ctx = fakeDeps(WS, { "src/App.swift": "APP" }, ["src/App.swift"]);
+    const snap = snapshotArtifact(WS, ctx.deps);
+    ctx.files.set("src/App.swift", Buffer.from("HACKED")); // real graded-source edit
+    ctx.files.set(".build/debug/App.o", Buffer.from("obj")); // legit build cache
+    ctx.files.set(".swiftpm-home/.cache/clang/ModuleCache/m.pcm", Buffer.from("mc"));
+    const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
+    expect(mutated).toEqual(["src/App.swift"]); // only the source trips the guard
+    expect(ctx.files.get("src/App.swift")!.toString()).toBe("APP"); // reverted
+    expect(ctx.files.has(".build/debug/App.o")).toBe(true); // cache untouched
+    expect(ctx.files.has(".swiftpm-home/.cache/clang/ModuleCache/m.pcm")).toBe(true);
+  });
+
+  it("an excluded path present at snapshot then modified is not restored-and-reported (snapshot/enforce agree)", () => {
+    const ctx = fakeDeps(WS, { "src/App.swift": "APP", ".build/x.o": "V1" }, ["src/App.swift", ".build/x.o"]);
+    const snap = snapshotArtifact(WS, ctx.deps);
+    expect(snap.files.has(".build/x.o")).toBe(false); // excluded from the protected set on the snapshot side
+    ctx.files.set(".build/x.o", Buffer.from("V2"));
+    const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
+    expect(mutated).toEqual([]);
+    expect(ctx.files.get(".build/x.o")!.toString()).toBe("V2"); // left as rebuilt, not reverted to V1
   });
 });

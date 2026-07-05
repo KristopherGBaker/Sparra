@@ -35,10 +35,38 @@ export interface SourceSnapshot {
   files: Map<string /*relpath*/, Buffer /*bytes*/>;
 }
 
+/**
+ * Built-in exclusion for well-known compiler/module-cache relpaths. These are the evaluator's OWN
+ * build-cache writes (a legit `swift build` emits `.swiftpm-home/.cache/clang/ModuleCache/…`,
+ * `.build/…`, DerivedData/…) — NOT edits to the graded artifact source — so the guard must ignore
+ * them regardless of whether the project's `.gitignore` happens to cover them. Match semantics:
+ *   - `.cache/clang/ModuleCache` as ANY path segment run (matches `**​/.cache/clang/ModuleCache/**`);
+ *   - `.build` as ANY path segment (matches `**​/.build/**` and a leading `.build/`);
+ *   - `DerivedData` as ANY path segment (matches `**​/DerivedData/**`);
+ *   - a leading `.swiftpm-home/` prefix.
+ * Separators are normalized so it works on the forward-slash relpaths git emits (and Windows `\`).
+ */
+export function isBuildCachePath(rel: string): boolean {
+  const norm = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+  const segs = norm.split("/");
+  if (norm.startsWith(".swiftpm-home/")) return true;
+  if (segs.includes(".build") || segs.includes("DerivedData")) return true;
+  // `.cache/clang/ModuleCache` as a consecutive segment run.
+  for (let i = 0; i + 2 < segs.length; i++) {
+    if (segs[i] === ".cache" && segs[i + 1] === "clang" && segs[i + 2] === "ModuleCache") return true;
+  }
+  return false;
+}
+
+/** The artifact surface minus build-cache paths (applied identically in snapshot + enforce). */
+function artifactSurface(workspace: string, deps: IntegrityDeps): string[] {
+  return deps.listArtifactFiles(workspace).filter((rel) => !isBuildCachePath(rel));
+}
+
 /** Capture the artifact surface before an exercise that may write. */
 export function snapshotArtifact(workspace: string, deps: IntegrityDeps): SourceSnapshot {
   const files = new Map<string, Buffer>();
-  for (const rel of deps.listArtifactFiles(workspace)) {
+  for (const rel of artifactSurface(workspace, deps)) {
     const content = deps.readFile(path.resolve(workspace, rel));
     if (content !== null) files.set(rel, content);
   }
@@ -50,7 +78,7 @@ export function snapshotArtifact(workspace: string, deps: IntegrityDeps): Source
  *  were mutated (empty = clean). The runner treats a non-empty result as an integrity violation. */
 export function enforceArtifactIntegrity(workspace: string, before: SourceSnapshot, deps: IntegrityDeps): string[] {
   const mutated = new Set<string>();
-  const current = new Set(deps.listArtifactFiles(workspace));
+  const current = new Set(artifactSurface(workspace, deps));
 
   // Restore anything in the snapshot that changed or vanished (byte-exact comparison).
   for (const [rel, content] of before.files) {
