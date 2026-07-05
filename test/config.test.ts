@@ -48,6 +48,30 @@ describe("exercise.sandbox knob", () => {
   });
 });
 
+describe("build.distillTechnique knob", () => {
+  it("defaults to false", () => {
+    expect(defaultConfig().build.distillTechnique).toBe(false);
+  });
+
+  it("a partial YAML override to true is respected and keeps sibling build.* knobs", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { build: { distillTechnique: true } });
+    expect(merged.build.distillTechnique).toBe(true);
+    // Sibling build.* knobs survive the partial merge.
+    expect(merged.build.maxRoundsPerItem).toBe(defaultConfig().build.maxRoundsPerItem);
+    expect(merged.build.preflightVerify).toBe(false);
+  });
+
+  it("is loaded from a YAML config file (loadConfig parses + respects the override)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-config-"));
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    fs.writeFileSync(paths.config, "build:\n  distillTechnique: true\n");
+    const cfg = await loadConfig(paths);
+    expect(cfg.build.distillTechnique).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("exercise.ios.visual knob", () => {
   it("defaults to true", () => {
     expect(defaultConfig().exercise.ios.visual).toBe(true);

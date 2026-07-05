@@ -135,6 +135,12 @@ build:
                               #   output — so a gen that fails its own gates never costs an evaluator
                               #   session. usage/unsafe/all-green fall through to eval; capped at one
                               #   bounce before the evaluator must run; false (default) = off
+  distillTechnique: false     # on item terminal (pass OR fail) distill ONE transferable TECHNIQUE —
+                              #   what FIXED (or was tried on) the item — from the item's durable round
+                              #   history (last report + attempt ledger) and append it to memory.md as a
+                              #   marked (`technique:`), holdout-redacted `note`, within the existing
+                              #   memory caps. Deterministic (no model call), never the score/bookkeeping,
+                              #   once per item across resume; false (default) = memory exactly as today
   extraReadDirs: []           # extra dirs the build may READ (e.g. ["~/.cache/models"]) — for big
                               # assets you don't want in git; pre-stage once, no commit, no network
 

@@ -42,7 +42,7 @@ import {
   type Decision,
 } from "../build/interactive.ts";
 import type { LimitHit } from "../sdk/backend.ts";
-import { appendLearning, readMemory, hasLearning } from "../memory.ts";
+import { appendLearning, readMemory, hasLearning, hasTechniqueNote, distillTechnique } from "../memory.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 import type { WorkItem } from "../build/types.ts";
 import type { RoleConfig } from "../config.ts";
@@ -302,6 +302,29 @@ export async function cmdBuild(
     return true;
   };
 
+  // Config-gated (`build.distillTechnique`) terminal step: distill ONE transferable technique from
+  // the item's durable round history and append it as a MARKED, holdout-redacted `note` — never the
+  // score. Deterministic (no model). Dedup keys on the technique marker in memory.md (NOT the `note`
+  // kind, which collides with the abandonment/blocked/escalation notes), so it runs EXACTLY ONCE per
+  // item terminal even across a crash/resume or an autonomous failed-item retry. Best-effort: a
+  // failure here never blocks acceptance or terminalization (appendLearning already swallows its own).
+  const maybeDistillTechnique = async (
+    st: ItemState,
+    item: WorkItem,
+    status: "passed" | "failed"
+  ): Promise<void> => {
+    if (!ctx.config.build.distillTechnique) return;
+    try {
+      if (await hasTechniqueNote(ctx.paths, item.id)) return;
+      const detail = distillTechnique({ item: item.id, status, lastReport: st.lastReport, attempts: st.attempts });
+      if (!detail) return;
+      const redacted = redactHoldout(detail, await readHoldout(ctx));
+      await d.appendLearning(ctx.paths, { item: item.id, kind: "note", detail: redacted, at: stamp() });
+    } catch {
+      // memory is best-effort; a distillation hiccup must never break the build.
+    }
+  };
+
   // The "passed" memory line for an autonomously-accepted item, reconstructable from durable
   // state alone — so a resume that finishes a crashed/deferred acceptance records the same
   // learning the inline accept would have (a commit-gate / crash defers the memory step to a
@@ -419,6 +442,8 @@ export async function cmdBuild(
       if (!(await hasLearning(ctx.paths, item.id, "passed"))) {
         await d.appendLearning(ctx.paths, { item: item.id, kind: "passed", detail: opts.memoryDetail ?? passedDetail(st), at: stamp() });
       }
+      // Alongside the `passed` line: the config-gated transferable technique (own marker-based dedup).
+      await maybeDistillTechnique(st, item, "passed");
       acc.memoryAppended = true;
       await ctx.store.save();
     }
@@ -1150,6 +1175,8 @@ export async function cmdBuild(
           at: stamp(),
         });
       }
+      // Alongside the failed/inconclusive line: the config-gated transferable technique from history.
+      await maybeDistillTechnique(st, item, "failed");
     }
     await ctx.store.save();
 

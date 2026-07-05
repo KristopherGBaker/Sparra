@@ -310,6 +310,15 @@ export interface SparraConfig {
      * knob unset a round makes zero preflight executor calls and evaluates exactly as today.
      */
     preflightVerify: boolean;
+    /**
+     * On item terminal (pass or fail) distill ONE transferable TECHNIQUE — what FIXED (or was tried
+     * on) the item — from the item's durable round history and append it to memory.md as a marked,
+     * holdout-redacted `note` learning, within the existing memory caps. Deterministic (no model
+     * call), never the score/bookkeeping, once per item across resume. Off by default — with the
+     * knob unset memory content is exactly as today (no extra note appended). See
+     * `memory.distillTechnique` / docs/build-loop.md.
+     */
+    distillTechnique: boolean;
   };
 
   format: {
@@ -517,6 +526,8 @@ export function defaultConfig(): SparraConfig {
       // Off by default: opting in bounces a generation that fails its own verify commands
       // straight back to the generator, skipping (and saving) an evaluator session that round.
       preflightVerify: false,
+      // Off by default: opting in appends one distilled, transferable technique note per item terminal.
+      distillTechnique: false,
     },
     format: { enabled: true, command: "", autodetect: true },
     // Off by default: measure runs the project's OWN QA harness after accept (signal, non-blocking).

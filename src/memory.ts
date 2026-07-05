@@ -147,6 +147,110 @@ export async function hasLearning(paths: Paths, item: string, kind: LearningKind
   return splitMemory(text).entries.some((ln) => ln.includes(needle));
 }
 
+/**
+ * Distinguishing marker every distilled-technique `note` line begins with, so its once-only dedup
+ * can key on THIS (not the `note` kind, which the abandonment/blocked/escalation/inconclusive
+ * learnings also use). Read this in memory.md as `… · NOTE: technique: <what fixed it>`.
+ */
+export const TECHNIQUE_MARKER = "technique:";
+/** Hard char cap on a distilled technique detail (marker included). Small — it's one transferable line. */
+export const TECHNIQUE_CAP = 200;
+
+/** Durable item state the pure distiller reads — item id, terminal status, last report, attempt ledger. */
+export interface TechniqueInput {
+  item: string;
+  status: "passed" | "failed";
+  lastReport?: string;
+  attempts?: { round: number; approach: string; failure: string }[];
+}
+
+// A whole sentence that is pure bookkeeping (score/cost/round tally) — never transferable, dropped.
+const BOOKKEEPING_SENTENCE = /\b(scored?|accepted in round|budget|spent|pivot)\b|\$\s*\d/i;
+// Residual score/cost tokens scrubbed from a surviving sentence, defensively (the token "score" and
+// any score-adjacent number never leak, but legitimate non-score numbers — "2 passes", an API name — stay).
+const SCORE_TOKENS: RegExp[] = [
+  /\bscored?\b[^.;\n]*?\b\d+\b/gi, // "scored 87", "score of 87"
+  /\bscored?\b/gi,
+  /\$\s*\d[\d,]*(?:\.\d+)?/g, // "$0.41"
+];
+// Substrings that hint a sentence describes HOW something was fixed/built (a transferable technique),
+// used only to RANK candidate sentences so the salient one survives the 2-line cap.
+const TECHNIQUE_HINTS = [
+  "fix", "use", "add", "seed", "annotat", "guard", "wrap", "mock", "stub", "apply", "await",
+  "order", "before", "after", "inject", "actor", "cap", "redact", "dedup", "key", "escape",
+  "handle", "ensure", "call", "assert", "pattern", "approach", "replace", "strip", "match",
+  "parse", "race", "timeout", "flag", "hook", "gate", "await", "isolate", "reset",
+];
+
+const sentencesOf = (text: string): string[] =>
+  text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const hintScore = (s: string): number => {
+  const lc = s.toLowerCase();
+  return TECHNIQUE_HINTS.reduce((n, h) => n + (lc.includes(h) ? 1 : 0), 0);
+};
+
+const scrubScore = (s: string): string => {
+  let out = s;
+  for (const re of SCORE_TOKENS) out = out.replace(re, "");
+  return out.replace(/\s{2,}/g, " ").replace(/\s+([.;,])/g, "$1").trim();
+};
+
+/**
+ * Pure, deterministic technique distiller: from ONLY durable item state (id, terminal status, the
+ * generator's last report, the attempt ledger) return a single 1–2-line transferable TECHNIQUE — what
+ * FIXED (or was tried on) the item — marked with `TECHNIQUE_MARKER` and capped to `TECHNIQUE_CAP`, or
+ * `null` when there's nothing to distill (empty/absent report AND no attempts, or only bookkeeping).
+ * No model call, no randomness, no clock — identical input always yields an identical string. The
+ * output never carries the token "score", bookkeeping phrasing, or a score-adjacent number, but does
+ * NOT strip legitimate non-score numbers (an API name, "2 passes").
+ */
+export function distillTechnique(input: TechniqueInput): string | null {
+  // Both durable fields feed the distiller: the last report first, then each recorded attempt's
+  // approach/failure — so a FAILED item with an empty report still distills from its history.
+  const sources: string[] = [];
+  if (input.lastReport?.trim()) sources.push(input.lastReport);
+  for (const a of input.attempts ?? []) {
+    if (a.approach?.trim()) sources.push(a.approach);
+    else if (a.failure?.trim()) sources.push(a.failure);
+  }
+  if (sources.length === 0) return null;
+
+  const candidates = sentencesOf(sources.join(" ")).filter((s) => !BOOKKEEPING_SENTENCE.test(s));
+  if (candidates.length === 0) return null;
+
+  // Rank by technique-hint density (stable index tie-break for determinism), keep the top 2, then
+  // restore their original order so the line reads naturally and preserves the distinctive terms.
+  const ranked = candidates
+    .map((s, i) => ({ s, i, score: hintScore(s) }))
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .slice(0, 2)
+    .sort((a, b) => a.i - b.i)
+    .map((x) => x.s);
+
+  const body = scrubScore(ranked.join(" "));
+  if (!body) return null;
+  const detail = `${TECHNIQUE_MARKER} ${body}`;
+  return detail.length > TECHNIQUE_CAP ? detail.slice(0, TECHNIQUE_CAP).trimEnd() : detail;
+}
+
+/**
+ * True when memory.md already holds a distilled-technique `note` (a `TECHNIQUE_MARKER` line) for
+ * `item`. The terminal distillation uses this as its once-only idempotency guard — keyed on the
+ * MARKER, not `hasLearning(item, "note")`, which would collide with the other `note` learnings and
+ * let an unrelated note suppress the technique (or a resume double-append it). File-based, so it
+ * holds even when a durable flag save was lost to a crash.
+ */
+export async function hasTechniqueNote(paths: Paths, item: string): Promise<boolean> {
+  const text = await readText(paths.memory);
+  if (!text) return false;
+  const needle = `${item} · NOTE:`;
+  return splitMemory(text).entries.some((ln) => ln.includes(needle) && ln.includes(TECHNIQUE_MARKER));
+}
+
 /** Read memory.md back as injectable text (most-recent-first cap by chars). Returns "" if empty. */
 export async function readMemory(paths: Paths, caps: MemoryCaps = DEFAULT_CAPS): Promise<string> {
   const text = await readText(paths.memory);

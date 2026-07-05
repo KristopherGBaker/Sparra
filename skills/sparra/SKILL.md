@@ -141,6 +141,12 @@ The few that matter most:
   back to the generator with the (holdout-redacted) output — so a generation that fails its own
   gates never costs a full evaluator session. usage/unsafe/all-green fall through to the evaluator;
   capped at one bounce before an evaluator round must run.
+- **`build.distillTechnique`** — off by default. When on, at each item terminal (pass **or** fail)
+  the harness distills **one** 1–2 line transferable **technique** (what FIXED / was tried on the
+  item) from the item's durable round history (last report + attempt ledger) and appends it to
+  `memory.md` as a `technique:`-marked, holdout-redacted `note` — deterministic (no model call),
+  **never the score/bookkeeping**, once per item across resume (dedup keys on the marker). With it
+  unset, memory content is exactly as today.
 - **`build.env`** — string env vars merged over `process.env` and injected into build SDK
   sessions, evaluator `run_command` spawns, and verify/measure command spawns. Use this for
   per-project tool cache/user dirs (for example `HOME: /private/tmp` under a sandbox). Optional

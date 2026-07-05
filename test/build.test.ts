@@ -12,6 +12,7 @@ import { maybeResetWorkspace, type ResetDeps } from "../src/build/reset.ts";
 import { APPROACH_CAP, FAILURE_CAP } from "../src/build/attempts.ts";
 import { TRUNCATION_MARKER } from "../src/build/feedback.ts";
 import { defaultConfig, type SparraConfig } from "../src/config.ts";
+import { TECHNIQUE_MARKER } from "../src/memory.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
 import { generateItem, type GenerateOutput } from "../src/build/generate.ts";
@@ -1748,6 +1749,142 @@ describe("cmdBuild — pre-evaluator preflight gate (build.preflightVerify)", ()
     await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(genFeedback[1]).toMatch(/PREFLIGHT/);
     expect(genFeedback[1]).toMatch(/your OWN verify commands failed/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — terminal technique distillation (build.distillTechnique)", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  const TECH_REPORT = "Fixed the flaky UI read by adding @MainActor to the assertion so it runs on the main actor.";
+  // Count the distilled-technique NOTE lines in memory.md (marker-keyed, so unrelated notes don't count).
+  const countTechniqueNotes = (mem: string): number =>
+    mem.split("\n").filter((l) => l.includes("· NOTE:") && l.includes(TECHNIQUE_MARKER)).length;
+
+  // Assertion 6 — OFF (default): the terminal memory equals baseline; NO technique note appears.
+  it("off (default): no technique note is appended, memory carries only the usual passed line", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    expect(ctx.config.build.distillTechnique).toBe(false); // default
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: TECH_REPORT }),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/PASSED:/); // the usual accepted line is still there
+    expect(mem).not.toContain(TECHNIQUE_MARKER); // …and NO technique note
+    expect(countTechniqueNotes(mem)).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Assertion 7 (passed path) — ON: exactly ONE marked technique note, preserving the technique.
+  it("on: a PASSED item appends exactly one marked technique note that preserves the technique", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, distillTechnique: true });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: TECH_REPORT }),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(countTechniqueNotes(mem)).toBe(1);
+    expect(mem).toContain("@MainActor"); // the distinctive technique survived
+    expect(mem).not.toMatch(/NOTE: technique:[^\n]*\bscore\b/i); // never the score
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Assertion 7 (failed path) — ON: a FAILED item also appends exactly ONE marked technique note.
+  it("on: a FAILED item appends exactly one marked technique note", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, distillTechnique: true });
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: TECH_REPORT }),
+      evaluateItem: async () => evalOut(false), // never passes → terminal FAILED
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("failed");
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/FAILED:/); // the usual failed line is still there
+    expect(countTechniqueNotes(mem)).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Assertion 7 (resume) — a resumed PASSED terminal with the technique note already present
+  // does not double-append (the marker dedup, not `hasLearning(item,"note")`).
+  it("on: a resumed passed acceptance does not double-append the technique note", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, distillTechnique: true });
+    ctx.store.data.build.runId = "build-resume";
+    ctx.store.data.build.workspaceDir = dir;
+    // Seed a passed item whose acceptance is mid-finish (memory step not yet done)…
+    ctx.store.data.build.items["item-001"] = {
+      status: "passed",
+      round: 1,
+      pivots: 0,
+      criterionFailStreak: {},
+      lastReport: TECH_REPORT,
+      acceptance: { reconciled: true, committed: true, memoryAppended: false },
+    };
+    // …and pre-seed BOTH the passed line and the technique note (as a prior, crashed attempt would have).
+    fs.writeFileSync(
+      ctx.paths.memory,
+      `# Sparra memory\n\n- [2026-06-24] item-001 · PASSED: accepted in round 1.\n- [2026-06-24] item-001 · NOTE: ${TECHNIQUE_MARKER} add @MainActor to the assertion.\n`
+    );
+    await ctx.store.save();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: TECH_REPORT }),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(countTechniqueNotes(mem)).toBe(1); // still exactly one — the resume did not re-append
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Assertion 8 — dedup keys on the MARKER, not the kind: an unrelated pre-existing NOTE for the
+  // same item neither suppresses the technique note nor lets it duplicate on a re-run.
+  it("on: an unrelated pre-existing note does not suppress the technique note (marker-keyed dedup)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, distillTechnique: true });
+    // An unrelated NOTE for the SAME item already in memory (would fool a hasLearning(item,"note") guard).
+    fs.writeFileSync(
+      ctx.paths.memory,
+      "# Sparra memory\n\n- [2026-06-24] item-001 · NOTE: some unrelated calibration note.\n"
+    );
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ report: TECH_REPORT }),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toContain("some unrelated calibration note"); // the unrelated note is preserved
+    expect(countTechniqueNotes(mem)).toBe(1); // and the technique note WAS appended (not suppressed)
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Assertion 9 — the appended technique note is holdout-redacted (holdout text absent).
+  it("on: the technique note is passed through redactHoldout (holdout text absent)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2, distillTechnique: true });
+    const HOLDOUT_LINE = "The sentinel token ABC appears in the output stream";
+    fs.writeFileSync(ctx.paths.holdout, `# Holdout\n- ${HOLDOUT_LINE}\n`);
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      // The generator's own report happens to echo the holdout wording.
+      generateItem: async () => genOut({ report: `${HOLDOUT_LINE} after wiring the check.` }),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(countTechniqueNotes(mem)).toBe(1);
+    expect(mem).not.toContain(HOLDOUT_LINE); // holdout text scrubbed…
+    expect(mem).toContain("[redacted: holdout]"); // …via redactHoldout
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

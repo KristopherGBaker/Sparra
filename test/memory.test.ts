@@ -3,7 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Paths } from "../src/paths.ts";
-import { appendLearning, readMemory, formatLearning, capEntries, memorySection } from "../src/memory.ts";
+import {
+  appendLearning,
+  readMemory,
+  formatLearning,
+  capEntries,
+  memorySection,
+  distillTechnique,
+  hasTechniqueNote,
+  TECHNIQUE_CAP,
+  TECHNIQUE_MARKER,
+} from "../src/memory.ts";
 
 describe("formatLearning", () => {
   it("renders a compact one-line entry and collapses whitespace", () => {
@@ -93,6 +103,115 @@ describe("memory stays bounded", () => {
     expect(text).toMatch(/older learnings summarized/);
     expect(text).toContain("item-99"); // newest retained
     expect(text).not.toContain("item-0 "); // oldest collapsed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("distillTechnique (pure)", () => {
+  // Assertion 2 — preserves the DISTINCTIVE technique across two different reports (not a constant).
+  it("returns two different, technique-preserving strings for two distinct reports", () => {
+    const a = distillTechnique({
+      item: "item-001",
+      status: "passed",
+      lastReport: "Fixed the flaky UI read by adding @MainActor to the assertion so it runs on the main actor.",
+    });
+    const b = distillTechnique({
+      item: "item-002",
+      status: "passed",
+      lastReport: "Seed the fixture before enroll so the recognizer has a known face to match against.",
+    });
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toBe(b);
+    // Each keeps its own distinctive term — a hardcoded/generic constant would fail this.
+    expect(a).toMatch(/@MainActor/);
+    expect(b!.toLowerCase()).toContain("seed the fixture before enroll");
+    // Each begins with the marker and is at most 2 lines within the char cap.
+    for (const out of [a!, b!]) {
+      expect(out.startsWith(TECHNIQUE_MARKER)).toBe(true);
+      expect(out.split("\n").length).toBeLessThanOrEqual(2);
+      expect(out.length).toBeLessThanOrEqual(TECHNIQUE_CAP);
+    }
+  });
+
+  // Assertion 3 — BOTH durable fields are used: attempts feed the distiller when the report is empty.
+  it("distills from the attempts ledger when the report is empty, and returns null when there is nothing", () => {
+    const fromAttempts = distillTechnique({
+      item: "item-003",
+      status: "failed",
+      lastReport: "",
+      attempts: [
+        { round: 1, approach: "Wrapped the enroll call in a retry loop but the race persisted.", failure: "still flaky" },
+      ],
+    });
+    expect(fromAttempts).not.toBeNull();
+    expect(fromAttempts!.toLowerCase()).toContain("enroll");
+
+    expect(distillTechnique({ item: "item-004", status: "failed", lastReport: "", attempts: [] })).toBeNull();
+    expect(distillTechnique({ item: "item-004", status: "failed" })).toBeNull();
+    expect(distillTechnique({ item: "item-004", status: "passed", lastReport: "   \n  " })).toBeNull();
+  });
+
+  // Assertion 4 — never the score / bookkeeping, but legitimate non-score numbers survive.
+  it("strips the score, cost, and bookkeeping phrasing but keeps legitimate numbers", () => {
+    const out = distillTechnique({
+      item: "item-005",
+      status: "passed",
+      lastReport:
+        "Used the ArcFace embedding and made 2 passes over the index to dedup matches. Scored 87 after $0.41 spent, accepted in round 2.",
+    });
+    expect(out).not.toBeNull();
+    expect(out!.toLowerCase()).not.toContain("score");
+    expect(out).not.toContain("87");
+    expect(out).not.toContain("$0.41");
+    expect(out!.toLowerCase()).not.toContain("spent");
+    expect(out!.toLowerCase()).not.toContain("accepted in round");
+    // Legitimate technique numbers/terms are NOT banned.
+    expect(out).toContain("ArcFace");
+    expect(out).toContain("2 passes");
+  });
+
+  // Assertion 5 — pure & deterministic.
+  it("is deterministic: identical input yields an identical string", () => {
+    const input = {
+      item: "item-006",
+      status: "passed" as const,
+      lastReport: "Added a guard to redact the holdout and dedup on the marker before the append.",
+      attempts: [{ round: 1, approach: "Tried a naive kind-based dedup which collided.", failure: "collision" }],
+    };
+    const first = distillTechnique(input);
+    expect(first).not.toBeNull();
+    for (let i = 0; i < 5; i++) expect(distillTechnique(input)).toBe(first);
+  });
+
+  // Assertion 10 — the cap (marker included) is respected even for a very long report.
+  it("caps the distilled detail (marker included) at TECHNIQUE_CAP", () => {
+    const long = "Refactored the parser to handle the nested brace expansion before matching. ".repeat(20);
+    const out = distillTechnique({ item: "item-007", status: "passed", lastReport: long });
+    expect(out).not.toBeNull();
+    expect(out!.length).toBeLessThanOrEqual(TECHNIQUE_CAP);
+    expect(out!.startsWith(TECHNIQUE_MARKER)).toBe(true);
+  });
+});
+
+describe("hasTechniqueNote (marker-keyed dedup)", () => {
+  it("detects only a technique-marked note for the item, not other notes or other items", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mem-"));
+    const paths = new Paths(dir);
+    // An unrelated note for the same item must NOT count as a technique note.
+    await appendLearning(paths, { item: "item-001", kind: "note", detail: "human-abandoned round 2.", at: "2026-06-24T00:00:00Z" });
+    expect(await hasTechniqueNote(paths, "item-001")).toBe(false);
+    // The technique note for item-001 does.
+    await appendLearning(paths, { item: "item-001", kind: "note", detail: `${TECHNIQUE_MARKER} add @MainActor to the assertion.`, at: "2026-06-24T00:00:00Z" });
+    expect(await hasTechniqueNote(paths, "item-001")).toBe(true);
+    // …but not for a different item.
+    expect(await hasTechniqueNote(paths, "item-002")).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns false when there is no memory file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mem-"));
+    expect(await hasTechniqueNote(new Paths(dir), "item-001")).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

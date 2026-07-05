@@ -151,6 +151,15 @@ It runs `measure.command` (a single argv command, no-shell — its own value is 
 ## Cross-run memory
 `.sparra/memory.md` is a durable, append-only log of short learnings (what was tried, and whether it passed / failed / pivoted / ran out of budget). Every autonomous role reads it at the start of each item so prior failures inform new work; `sparra reflect` appends to it. It's capped — oldest entries collapse into a one-line summary so it never grows unbounded.
 
+### Terminal technique distillation (`build.distillTechnique`, off by default)
+The default `passed` / `failed` learnings are bookkeeping ("accepted in round 2 (score 87); $0.41 spent") — near-zero transfer value. With `build.distillTechnique: true`, on each item terminal (pass **or** fail) Sparra also distills **one** 1–2 line transferable **technique** — what FIXED (or was tried on) the item — from the item's durable round history (the generator's last report + the attempt ledger), and appends it as a `note` learning. The distilled line:
+- is a **deterministic** extraction (no model call on the terminal path — a model-backed distiller is a later swap behind the same call site);
+- is about the **technique, never the score** — the score, cost, and bookkeeping phrasing (and the score number) are stripped, while legitimate non-score numbers (an API name, "2 passes") are kept;
+- carries a distinguishing **`technique:` marker** so its once-only dedup keys on that marker (not the `note` kind, which the abandonment/blocked/escalation notes also use) — it runs **exactly once per item terminal** across crash/resume;
+- is **holdout-redacted** (run through `redactHoldout` before append) and obeys the **existing memory caps** (no new cap surface).
+
+With the knob unset, memory content is exactly as today (no extra note appended).
+
 ## Durable acceptance / resume
 Accepting an item runs three side effects — **reconcile** PLAN.md, **commit**, append the `passed`
 **memory** learning — and Sparra guarantees each happens **exactly once**, even if the process is
