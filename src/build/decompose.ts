@@ -56,7 +56,9 @@ ${plan}
 ---
 ${map ? `CODEBASE_MAP (existing project — conform to this):\n---\n${map.slice(0, 6000)}\n---\n` : ""}
 Output ONLY a fenced \`\`\`json block: an array of objects with fields:
-  id (e.g. "item-001"), title, summary, dependsOn (array of ids), rationale${genFieldDoc}
+  id (e.g. "item-001"), title, summary, dependsOn (array of ids), rationale, relevantPaths (OPTIONAL
+  array of repo-relative file paths most relevant to this item; the generator prefers these seams of
+  the codebase map — omit when unsure, never invent paths)${genFieldDoc}
 Order matters: earlier items should not depend on later ones.`;
 
   info("Decomposing frozen plan into work items…");
@@ -101,6 +103,10 @@ Order matters: earlier items should not depend on later ones.`;
     rationale: it.rationale ?? "",
     // Only honor the tag when a local generator is configured; never invent it otherwise.
     ...(hasLocal && it.gen === "local" ? { gen: "local" as const } : {}),
+    // Keep relevantPaths only when it's a non-empty array of strings; omit otherwise (never invent).
+    ...(Array.isArray(it.relevantPaths) && it.relevantPaths.length > 0 && it.relevantPaths.every((p) => typeof p === "string")
+      ? { relevantPaths: it.relevantPaths as string[] }
+      : {}),
   }));
   await writeJson(ctx.paths.workitemsFile, normalized);
   info(`Decomposed into ${normalized.length} work items.`);

@@ -128,6 +128,43 @@ describe("negotiateContract — harness verify-probe on agreement", () => {
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
+  it("wires item.relevantPaths through selectMapContext: contract-generator prompt prefers the named section + lists the file", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const LATE = "## src/build/late.ts\nSENTINEL_LATE marks the tricky seam for this item.\n";
+    const MAP = "# Overview\n" + "unrelated filler describing other modules.\n".repeat(120) + LATE;
+    fs.mkdirSync(path.dirname(ctx.paths.frozenMap), { recursive: true });
+    fs.writeFileSync(ctx.paths.frozenMap, MAP);
+    expect(MAP.indexOf("SENTINEL_LATE")).toBeGreaterThan(4000); // past the contract head cap
+
+    const session = fakeSession(() => "mytool run");
+    const exec: CommandExecutor = async (_ws, cmd) => behavioral(cmd);
+    await negotiateContract(
+      ctx, { ...item, relevantPaths: ["src/build/late.ts"] }, wt, 1, "", wt, session.fn, exec
+    );
+    const gen = session.calls.filter((c) => c.role === "contract-generator")[0]!;
+    expect(gen.prompt).toContain("Files most relevant to this item:");
+    expect(gen.prompt).toContain("- src/build/late.ts");
+    expect(gen.prompt).toContain("SENTINEL_LATE"); // the targeted section a head-slice would drop
+    expect(gen.prompt).not.toContain(MAP.slice(0, 200)); // NOT the blind head (targeting displaced it)
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("absent relevantPaths → the contract-generator sees the blind head-slice (byte-for-byte today)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const MAP = "# Overview\n" + "unrelated filler describing other modules.\n".repeat(120) + "## src/build/late.ts\nSENTINEL_LATE seam.\n";
+    fs.mkdirSync(path.dirname(ctx.paths.frozenMap), { recursive: true });
+    fs.writeFileSync(ctx.paths.frozenMap, MAP);
+    const session = fakeSession(() => "mytool run");
+    const exec: CommandExecutor = async (_ws, cmd) => behavioral(cmd);
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, exec);
+    const gen = session.calls.filter((c) => c.role === "contract-generator")[0]!;
+    expect(gen.prompt).toContain(MAP.slice(0, 4000));
+    expect(gen.prompt).not.toContain("Files most relevant to this item:");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
   it("respects maxNegotiationRounds when the probe keeps bouncing (forced non-agreed convergence)", async () => {
     const { ctx, root, wt } = await makeCtx();
     ctx.config.contract.maxNegotiationRounds = 2;

@@ -99,6 +99,10 @@ The few that matter most:
 - **`roles.generatorLocal`** + work-item **`gen: "local"`** — hybrid builds: tagged items build on
   a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;
   edit tags in `items.json`. See `docs/backends.md`.
+- **Work-item `relevantPaths`** — optional array of repo-relative files the decomposer names as most
+  relevant to an item; the generator/contract-generator then prefer the CODEBASE_MAP section(s)
+  covering those seams (plus a listing of the files) over a blind head-slice of the map. Paths only —
+  no file bodies. Omitted → the head-slice (unchanged). Editable in `items.json`. See `docs/build-loop.md`.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem` / `zeroCostTokenCap`** — per-item caps;
   crossing USD/tokens halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
   `zeroCostTokenCap` applies only when the USD cap is active, cost reports zero/unknown, and

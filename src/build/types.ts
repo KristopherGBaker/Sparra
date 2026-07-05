@@ -12,6 +12,14 @@ export interface WorkItem {
    * items.json before building.
    */
   gen?: "local" | "default";
+  /**
+   * Optional repo-relative paths most relevant to this item. The decomposer may name them so the
+   * generator and contract-generator prefer the CODEBASE_MAP section(s) covering these seams (plus a
+   * short listing of the files) over a blind head-slice of the map — see `selectMapContext`. Omitted
+   * when the decomposer is unsure; absent → the head-slice, byte-for-byte today's behavior. Paths
+   * only — file bodies are never injected. The human can override in items.json before building.
+   */
+  relevantPaths?: string[];
 }
 
 export type ExerciseStatus = "ran" | "blocked" | "mixed";

@@ -1442,6 +1442,50 @@ describe("decompose — DEFAULT_PROMPTS prompt + build.maxItems clamp (Q7a)", ()
     expect(rec2.calls[0]!.systemPrompt).toBe("CUSTOM DECOMPOSER PROMPT\n");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  /** Decomposer emitting an arbitrary item shape (to exercise relevantPaths normalization, U5). */
+  function decomposeItems(rawItems: unknown[]) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: "```json\n" + JSON.stringify(rawItems) + "\n```", sessionId: "d",
+        costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    return { calls, fn };
+  }
+
+  it("documents relevantPaths as an OPTIONAL field in the decomposer prompt", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = decomposeItems([{ id: "item-001", title: "t", summary: "", dependsOn: [], rationale: "" }]);
+    await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    expect(rec.calls[0]!.prompt).toContain("relevantPaths (OPTIONAL");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("preserves a valid non-empty relevantPaths array on the normalized item (mirrors gen)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = decomposeItems([
+      { id: "item-001", title: "t", summary: "", dependsOn: [], rationale: "", relevantPaths: ["src/a.ts", "src/b.ts"] },
+    ]);
+    const result = await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    expect(result[0]!.relevantPaths).toEqual(["src/a.ts", "src/b.ts"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("omits relevantPaths when absent, empty, or non-array (never invents it)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = decomposeItems([
+      { id: "item-001", title: "absent", summary: "", dependsOn: [], rationale: "" },
+      { id: "item-002", title: "empty", summary: "", dependsOn: [], rationale: "", relevantPaths: [] },
+      { id: "item-003", title: "nonarray", summary: "", dependsOn: [], rationale: "", relevantPaths: "src/a.ts" },
+      { id: "item-004", title: "nonstring", summary: "", dependsOn: [], rationale: "", relevantPaths: [1, 2] },
+    ]);
+    const result = await decompose(ctx, path.join(dir, "trace"), true, dir, rec.fn);
+    for (const it of result) expect(it).not.toHaveProperty("relevantPaths");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 // ───────────────────────────── Q7c: assertionsClaimed → calibration gap ─────────────────────────────

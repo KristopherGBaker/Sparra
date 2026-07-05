@@ -20,9 +20,12 @@ From the project root (the dir you ran `sparra` in):
    `costUsd` is `$0` for Codex roles (it reports tokens) — look at `tokensUsed`. `waitingUntil`/`limitedRoles` appear when `build.autoRestart` paused the run on a provider limit (see signatures).
 
 2. **`.sparra/workitems/items.json`** — the decomposition. Check the *shape*: how many items,
-   and whether any are setup/verification-only (a smell — see signatures).
+   and whether any are setup/verification-only (a smell — see signatures). Each item carries
+   `id`/`title`/`summary`/`dependsOn`/`rationale` and the optional `gen` (hybrid routing) and
+   `relevantPaths` (files whose CODEBASE_MAP sections the generator/contract prefer over the
+   head-slice) — both human-editable here before building.
    ```bash
-   node -e "const a=require('./.sparra/workitems/items.json');console.log('count',a.length);a.forEach(i=>console.log(' -',i.id,'|',i.title,'| deps',JSON.stringify(i.dependsOn)))"
+   node -e "const a=require('./.sparra/workitems/items.json');console.log('count',a.length);a.forEach(i=>console.log(' -',i.id,'|',i.title,'| deps',JSON.stringify(i.dependsOn),'| paths',JSON.stringify(i.relevantPaths||[])))"
    ```
 
 3. **`.sparra/contracts/<id>.contract.md`** — the full generator↔evaluator negotiation for

@@ -12,6 +12,7 @@ import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider, redactHoldout
 import { classifyExec, extractVerifyCommands, renderExecOutcome, runVerifyCommand, type CommandExecutor } from "./exec.ts";
 import { buildDropGuardReport, findUncitedDrops } from "./dropGuard.ts";
 import { contractModeClauses } from "./modeText.ts";
+import { selectMapContext } from "./mapContext.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
 import { mergedBuildEnv } from "./env.ts";
@@ -109,7 +110,7 @@ export async function negotiateContract(
     // unless a critique point names it (the drop guard below enforces this runner-side).
     const prevProposal = proposal;
     const answeredCritique = critique;
-    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${map.slice(0, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. PATCH it — REVISE to address every point, but keep every existing assertion/scope item VERBATIM unless a critique point names it (or its section); don't rewrite from the critique. End with a short list of dropped/changed assertions, each tied to the critique point that justifies it, or "none dropped".\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
+    const genTask = `Work item ${item.id}: ${item.title}\n${item.summary}\n\nFROZEN PLAN (prior):\n---\n${plan.slice(0, 5000)}\n---\n${map ? `CODEBASE_MAP (conform to this):\n---\n${selectMapContext(map, item.relevantPaths, 4000)}\n---\n` : ""}${memory}${round > 1 ? `\nThe evaluator critiqued your previous proposal. PATCH it — REVISE to address every point, but keep every existing assertion/scope item VERBATIM unless a critique point names it (or its section); don't rewrite from the critique. End with a short list of dropped/changed assertions, each tied to the critique point that justifies it, or "none dropped".\n\nPREVIOUS PROPOSAL:\n${proposal}\n\nEVALUATOR CRITIQUE:\n${critique}\n` : ""}\nPropose the contract now.`;
 
     assertNoHoldoutLeak("contract-generator", genTask, holdout);
     const genRes = await run({

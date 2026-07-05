@@ -115,6 +115,42 @@ describe("generateItem — Apple conventions injection", () => {
   });
 });
 
+describe("generateItem — targeted map context (relevantPaths, U5)", () => {
+  // A frozen map whose section for the named path sits PAST the 5000-char generator head cap.
+  const LATE = "## src/build/late.ts\nSENTINEL_LATE marks the tricky seam for this item.\n";
+  const MAP = "# Overview\n" + "unrelated filler describing other modules.\n".repeat(140) + LATE;
+
+  it("wires item.relevantPaths through selectMapContext: prefers the named section + lists the file", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    fs.writeFileSync(ctx.paths.frozenMap, MAP);
+    expect(MAP.indexOf("SENTINEL_LATE")).toBeGreaterThan(5000); // past the head cap
+    let prompt = "";
+    await generateItem({
+      ctx, item: { ...item, relevantPaths: ["src/build/late.ts"] },
+      contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (prompt = p.prompt)),
+    });
+    expect(prompt).toContain("Files most relevant to this item:");
+    expect(prompt).toContain("- src/build/late.ts");
+    expect(prompt).toContain("SENTINEL_LATE");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent relevantPaths → the blind head-slice, byte-for-byte today (no late seam, no listing)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    fs.writeFileSync(ctx.paths.frozenMap, MAP);
+    let prompt = "";
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (prompt = p.prompt)),
+    });
+    expect(prompt).toContain(MAP.slice(0, 5000));
+    expect(prompt).not.toContain("Files most relevant to this item:");
+    expect(prompt).not.toContain("SENTINEL_LATE");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("generateItem — JSON re-ask + assertionsClaimed (Q7 c/d)", () => {
   const REPORT_JSON =
     '```json\n{"report":"did it","deviations":[],"assertionsClaimed":[{"id":1,"claim":"pass","how":"ran tests"}]}\n```';
