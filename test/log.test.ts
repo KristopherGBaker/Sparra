@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { banner, info, ok, warn, err, step, detail } from "../src/util/log.ts";
+import { banner, info, ok, warn, err, step, detail, raw } from "../src/util/log.ts";
 
 // Every output function in the logger, exercised as a group so the gate is checked uniformly.
 const logFns: Array<(msg: string) => void> = [banner, info, ok, warn, err, step, detail];
@@ -70,5 +70,41 @@ describe("log gate under vitest", () => {
     expect(s.outCalls()).toBe(logFns.length - 1);
     expect(s.err()).toContain("visible");
     expect(s.out()).toContain("visible");
+  });
+
+  it("raw() writes nothing under vitest when the escape hatch is unset", () => {
+    process.env.VITEST = "true";
+    delete process.env.SPARRA_LOG_IN_TESTS;
+    const s = spyStreams();
+
+    raw("--- diff\n+++ candidate\n");
+    s.restore();
+
+    expect(s.outCalls()).toBe(0);
+    expect(s.out()).toBe("");
+  });
+
+  it("raw() writes the passthrough content when the escape hatch is set, even under vitest", () => {
+    process.env.VITEST = "true";
+    process.env.SPARRA_LOG_IN_TESTS = "1";
+    const s = spyStreams();
+
+    raw("+++ candidate diff\n");
+    s.restore();
+
+    expect(s.outCalls()).toBe(1);
+    expect(s.out()).toBe("+++ candidate diff\n");
+  });
+
+  it("raw() writes when VITEST is unset (normal `sparra reflect` behavior)", () => {
+    delete process.env.VITEST;
+    delete process.env.SPARRA_LOG_IN_TESTS;
+    const s = spyStreams();
+
+    raw("visible diff");
+    s.restore();
+
+    expect(s.outCalls()).toBe(1);
+    expect(s.out()).toBe("visible diff");
   });
 });

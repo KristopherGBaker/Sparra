@@ -8,7 +8,7 @@ import { newRunId } from "../context.ts";
 import { loadPrompt } from "../prompts.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
-import { banner, color, detail, info, ok, warn } from "../util/log.ts";
+import { banner, color, detail, info, ok, raw, warn } from "../util/log.ts";
 import { ensureDir, exists, moveFile, readText, writeText } from "../util/io.ts";
 import { loadInbox, triageUpstream } from "./upstreamTriage.ts";
 import { appendLearning } from "../memory.ts";
@@ -278,13 +278,15 @@ async function createRoleRunBundle(inputDir: string, selectedDirs: string[]): Pr
   return { inputDir, included, excluded };
 }
 
-function showDiff(current: string, candidate: string): void {
+// Exported narrowly for test: reflect diff output is silence-gated like the rest of the phase
+// logger — it flows through log.raw() (VITEST + SPARRA_LOG_IN_TESTS) so it stays out of `npm test`.
+export function showDiff(current: string, candidate: string): void {
   const r = spawnSync("diff", ["-u", current, candidate], { encoding: "utf8" });
   if (r.status === 0) {
     detail("(no change)");
     return;
   }
-  process.stdout.write((r.stdout || "") + "\n");
+  raw((r.stdout || "") + "\n");
 }
 
 /** Propose prompt improvements from the last run's traces (does NOT apply them). */
@@ -457,7 +459,7 @@ Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
   });
   for (const f of candidates) {
     const role = f.replace(/\.md$/, "");
-    process.stdout.write(`\n${color.bold("── " + role + " ──")}\n`);
+    raw(`\n${color.bold("── " + role + " ──")}\n`);
     showDiff(ctx.paths.promptFile(role), path.join(candidatesDir, f));
   }
   const summary = path.join(outDir, "SUMMARY.md");

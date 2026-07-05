@@ -48,3 +48,13 @@ export function detail(msg: string): void {
   if (silenced()) return;
   process.stdout.write(`  ${color.gray(msg)}\n`);
 }
+
+/**
+ * Passthrough writer for already-formatted content (e.g. reflect's unified diffs) that would
+ * otherwise bypass the silence gate with a bare process.stdout.write. Same VITEST +
+ * SPARRA_LOG_IN_TESTS gate as the other loggers, so diff noise stays out of `npm test`.
+ */
+export function raw(msg: string): void {
+  if (silenced()) return;
+  process.stdout.write(msg);
+}

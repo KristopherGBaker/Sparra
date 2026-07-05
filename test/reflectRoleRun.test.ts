@@ -313,6 +313,81 @@ describe("cmdReflect over role-run traces", () => {
     }
   });
 
+  // Spy stdout WITHOUT lifting the silence gate — mirrors captureStdout() but leaves
+  // SPARRA_LOG_IN_TESTS as-is so we observe the vitest-silenced behavior.
+  function spyStdoutSilenced(): { buf: () => string; calls: () => number; restore: () => void } {
+    let buf = "";
+    let calls = 0;
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      calls += 1;
+      return true;
+    });
+    return { buf: () => buf, calls: () => calls, restore: () => spy.mockRestore() };
+  }
+
+  it("silences the reflect run/report prompt diff under vitest, but writes it via the escape hatch", async () => {
+    const { ctx, dir } = await ctxFor();
+    const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+    try {
+      const marker = "CANDIDATE_DIFF_MARKER_XYZ";
+      const withCandidate = recorder((p) => {
+        const outDir = path.dirname(p.traceDir!);
+        fs.mkdirSync(path.join(outDir, "candidates"), { recursive: true });
+        fs.writeFileSync(path.join(outDir, "candidates", "evaluator.md"), `${marker}\n`);
+      });
+
+      // Silenced (default under vitest): no diff/candidate content reaches stdout.
+      delete process.env.SPARRA_LOG_IN_TESTS;
+      roleTrace(ctx, "generator", "GEN");
+      const silent = spyStdoutSilenced();
+      await cmdReflect(ctx, { runSessionFn: withCandidate.fn });
+      silent.restore();
+      expect(silent.buf()).not.toContain(marker);
+      expect(silent.buf()).not.toContain("── evaluator ──");
+
+      // Escape hatch: the same path DOES write the diff (feature preserved, only silence-gated).
+      const { ctx: ctx2, dir: dir2 } = await ctxFor();
+      try {
+        process.env.SPARRA_LOG_IN_TESTS = "1";
+        roleTrace(ctx2, "generator", "GEN");
+        const visible = spyStdoutSilenced();
+        await cmdReflect(ctx2, { runSessionFn: withCandidate.fn });
+        visible.restore();
+        expect(visible.buf()).toContain(marker);
+        expect(visible.buf()).toContain("── evaluator ──");
+      } finally {
+        fs.rmSync(dir2, { recursive: true, force: true });
+      }
+    } finally {
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the `reflect --upstream` inbox listing UNSILENCED (bare write, not the diff gate)", async () => {
+    const { ctx, dir, home } = await ctxFor();
+    const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
+    try {
+      // Under vitest with the gate ACTIVE, the hand-run upstream listing still writes its findings.
+      delete process.env.SPARRA_LOG_IN_TESTS;
+      fs.mkdirSync(path.join(home, "reflections"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, "reflections", "2026-07-05.md"),
+        "### UPSTREAM FINDING TITLE\nsome finding body\n"
+      );
+      const cap = spyStdoutSilenced();
+      await cmdReflect(ctx, { upstream: true });
+      cap.restore();
+      expect(cap.buf()).toContain("UPSTREAM FINDING TITLE");
+    } finally {
+      if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = priorLogInTests;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps project-local candidates local while routing only upstream findings", async () => {
     const { ctx, dir, home } = await ctxFor();
     try {
