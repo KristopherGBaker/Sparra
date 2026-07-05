@@ -214,12 +214,22 @@ export function codexSandboxMode(req: Pick<AgentRequest, "readOnly" | "sandbox" 
   return req.sandbox ?? "workspace-write";
 }
 
-/** Classify a provider rate/usage limit from Codex error strings (no reset time available). */
-function limitFromErrors(errors: string[]): LimitHit | undefined {
+/** Case-insensitive auth/transport failure signatures (session never ran → a limit, not a FAIL). */
+export function isAuthFailure(blob: string): boolean {
+  return (
+    (/\b401\b/.test(blob) && /unauthorized/.test(blob)) ||
+    /missing bearer|not logged in|please run \/login|invalid api key|authentication (failed|required)/.test(blob)
+  );
+}
+
+/** Classify a provider rate/usage/auth limit from Codex error strings (no reset time available).
+ *  Exported (pure, no live calls) so the classification is unit-testable directly. */
+export function limitFromErrors(errors: string[]): LimitHit | undefined {
   const blob = errors.join(" ").toLowerCase();
   if (/rate.?limit|too many requests|\b429\b|quota|usage limit|overloaded/.test(blob)) {
     return { kind: /usage limit|quota/.test(blob) ? "usage" : "rate", raw: errors.join("; ").slice(0, 300) };
   }
+  if (isAuthFailure(blob)) return { kind: "auth", raw: errors.join("; ").slice(0, 300) };
   return undefined;
 }
 

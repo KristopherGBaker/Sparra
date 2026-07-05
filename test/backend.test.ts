@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend, type AgentRequest, type AgentResult } from "../src/sdk/backend.ts";
-import { codexSandboxMode, isEmptyCompletion, markEmptyCompletion } from "../src/sdk/backends/codex.ts";
-import { consumeQuery } from "../src/sdk/backends/claude.ts";
+import { codexSandboxMode, isEmptyCompletion, markEmptyCompletion, limitFromErrors as codexLimit } from "../src/sdk/backends/codex.ts";
+import { consumeQuery, limitFromErrors as claudeLimit } from "../src/sdk/backends/claude.ts";
 import { TraceWriter } from "../src/sdk/trace.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
 
@@ -170,6 +170,55 @@ describe("codex backend", () => {
       expect(r.limitHit).toBeUndefined();
     });
   });
+});
+
+// U-A (#4): an auth/transport failure (401 / missing bearer / not logged in) means the session
+// never ran — it's classified as a LimitHit(kind:"auth") so the build loop pauses-and-retries /
+// falls back, rather than consuming it as a 0-score behavioral FAIL. Both classifiers are the pure,
+// exported functions (string[] → LimitHit | undefined), exercised directly with no live calls.
+describe("limitFromErrors — auth/transport failures classify as kind:auth (not a FAIL)", () => {
+  const authSignatures = [
+    "401 Unauthorized: Missing bearer or basic authentication",
+    "Error: missing bearer token",
+    "Not logged in · Please run /login",
+    "please run /login to authenticate",
+    "invalid api key provided",
+    "authentication failed",
+    "authentication required",
+  ];
+
+  for (const backend of [
+    { name: "codex", fn: (e: string[]) => codexLimit(e) },
+    { name: "claude", fn: (e: string[]) => claudeLimit(e) },
+  ]) {
+    describe(backend.name, () => {
+      for (const sig of authSignatures) {
+        it(`classifies "${sig.slice(0, 30)}…" as kind:auth`, () => {
+          expect(backend.fn([sig])?.kind).toBe("auth");
+        });
+      }
+      it("is case-insensitive and scoped to the joined error strings", () => {
+        expect(backend.fn(["401 UNAUTHORIZED"])?.kind).toBe("auth");
+        expect(backend.fn(["boot", "Missing Bearer"])?.kind).toBe("auth");
+      });
+
+      // #3: the auth branch must NOT swallow or re-label the existing rate/usage classification,
+      // and a plain non-auth non-limit error still returns undefined.
+      it("leaves rate/usage classification UNCHANGED and returns undefined for a plain error", () => {
+        expect(backend.fn(["rate limit exceeded"])?.kind).toBe("rate");
+        expect(backend.fn(["hit the usage limit"])?.kind).toBe("usage");
+        expect(backend.fn(["429 too many requests"])?.kind).toBe("rate");
+        // Non-auth limit signals classify CONSISTENTLY across both backends (quota→usage,
+        // overloaded→rate) — closes a pre-existing claude/codex divergence on `quota`.
+        expect(backend.fn(["quota exceeded for this org"])?.kind).toBe("usage");
+        expect(backend.fn(["the model is overloaded, try again"])?.kind).toBe("rate");
+        expect(backend.fn(["Reached maximum number of turns (2)"])).toBeUndefined();
+        expect(backend.fn(["TypeError: cannot read property x of undefined"])).toBeUndefined();
+        // a bare "401" without "unauthorized" is not enough to claim an auth failure
+        expect(backend.fn(["exit code 401 lines processed"])).toBeUndefined();
+      });
+    });
+  }
 });
 
 // Item J: the message-consumption seam must surface a terminal result (hitMaxTurns/hitBudget)

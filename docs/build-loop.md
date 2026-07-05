@@ -101,7 +101,7 @@ Set a cap to `0` to opt out of that dimension.
 When an item finishes with `maxBudgetUsdPerItem > 0` but reported cost stayed zero/unknown, Sparra warns that the USD cap did not bind and names the effective token bound: explicit `maxTokensPerItem`, fallback `zeroCostTokenCap`, or no token cap if both are off. Interactive `run_role` / `sparra role run` emits the same zero/unknown-cost warning for an active per-call USD cap.
 
 ## Auto-restart / model fallback on provider limits
-The budgets above are *your* caps. A different thing can stop a long unattended build: the **provider's** own rate / usage / session limit (e.g. Claude's 5-hour or 7-day plan window, an HTTP 429, a Codex quota). Without handling, a limit produces a dead session that the loop would misread as a failed round.
+The budgets above are *your* caps. A different thing can stop a long unattended build: the **provider's** own rate / usage / session limit (e.g. Claude's 5-hour or 7-day plan window, an HTTP 429, a Codex quota) — **or an auth/transport failure** (a `401 Unauthorized` / missing bearer, a Codex "not logged in · please run /login", an expired key). Without handling, any of these produces a dead session that the loop would misread as a failed round. An auth/transport failure in particular means the session *never ran*, so it is classified as a limit (pause-and-retry / fall back), **not** a behavioral FAIL that would burn a round and pollute calibration.
 
 With **`build.autoRestart.enabled`** (off by default), when the generator or evaluator hits a real provider limit the loop:
 

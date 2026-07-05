@@ -43,16 +43,19 @@ export interface BackendCapabilities {
 }
 
 /**
- * A provider rate/usage/session limit the backend hit. Surfaced so the build loop can
- * WAIT for the window to reopen and resume, rather than burning a round on a dead session.
+ * A provider rate/usage/session/auth limit the backend hit. Surfaced so the build loop can
+ * WAIT for the window to reopen (or fall back), rather than burning a round on a dead session.
  *   rate    → short backoff (HTTP 429 / overloaded), reopens in seconds–minutes
  *   usage   → a subscription window (Claude's 5-hour / 7-day plan limit), reopens in hours
  *   session → the session itself was limited/closed by the provider
+ *   auth    → an authentication/transport failure (401 / missing bearer / not logged in). NOT
+ *             a behavioral FAIL — the session never ran, so it's treated as a limit (pause-and-
+ *             retry / fall back) rather than a 0-score verdict that would pollute calibration.
  * `resetAt` is epoch-ms when the window reopens, when the backend tells us (Claude does for
  * plan limits); absent → the loop falls back to fixed-interval polling.
  */
 export interface LimitHit {
-  kind: "rate" | "usage" | "session";
+  kind: "rate" | "usage" | "session" | "auth";
   resetAt?: number;
   /** Provider's own label for the window, when known (e.g. "five_hour", "seven_day"). */
   rateLimitType?: string;

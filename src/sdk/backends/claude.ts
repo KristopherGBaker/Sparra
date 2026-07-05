@@ -233,14 +233,25 @@ function limitFromRateInfo(info: any): LimitHit {
   };
 }
 
+/** Case-insensitive auth/transport failure signatures (session never ran → a limit, not a FAIL). */
+function isAuthFailure(blob: string): boolean {
+  return (
+    (/\b401\b/.test(blob) && /unauthorized/.test(blob)) ||
+    /missing bearer|not logged in|please run \/login|invalid api key|authentication (failed|required)/.test(blob)
+  );
+}
+
 /** Fallback: classify a provider limit from error strings / HTTP status when no
- *  structured rate_limit_event arrived (the SDK exhausted its own retries). */
-function limitFromErrors(errors: string[], apiStatus?: number | null): LimitHit | undefined {
+ *  structured rate_limit_event arrived (the SDK exhausted its own retries). Exported (pure,
+ *  no live calls) so the classification — including the auth/transport branch — is unit-testable. */
+export function limitFromErrors(errors: string[], apiStatus?: number | null): LimitHit | undefined {
   if (apiStatus === 429) return { kind: "rate", raw: `http 429` };
+  if (apiStatus === 401) return { kind: "auth", raw: `http 401` };
   const blob = errors.join(" ").toLowerCase();
-  if (/rate.?limit|too many requests|429|overloaded|usage limit/.test(blob)) {
-    return { kind: /usage limit/.test(blob) ? "usage" : "rate", raw: errors.join("; ").slice(0, 300) };
+  if (/rate.?limit|too many requests|429|overloaded|usage limit|quota/.test(blob)) {
+    return { kind: /usage limit|quota/.test(blob) ? "usage" : "rate", raw: errors.join("; ").slice(0, 300) };
   }
+  if (isAuthFailure(blob)) return { kind: "auth", raw: errors.join("; ").slice(0, 300) };
   return undefined;
 }
 

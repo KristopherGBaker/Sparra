@@ -137,7 +137,10 @@ the worktree + "never commit to main" + that disqualifier list are the guarantee
 residual as the Claude evaluator's in-process exercise). In-place runs never auto-approve Bash unless they opt in via `allowVerify` / `sparra role run --verify` (generator only).
 
 **Provider limits & empty completions.** A backend reports a hit window via `AgentResult.limitHit`
-(rate / usage / session). The Codex backend also classifies a **silent empty completion**
+(rate / usage / session / **auth**). An **auth/transport** failure — a `401 Unauthorized` / missing
+bearer, "not logged in · please run /login", an invalid/expired key — classifies as `kind: "auth"`:
+the session never ran, so it's a limit (pause-and-retry / fall back), never a behavioral FAIL that
+would burn a round. The Codex backend also classifies a **silent empty completion**
 (`tokens: 0`, no output, no error) as a limit — it's almost always unavailability or a usage
 window, and treating it as a real empty result would churn the loop with a bogus failure. When it
 does, it ALSO stamps the **explicit `AgentResult.emptyCompletion` marker**, so downstream

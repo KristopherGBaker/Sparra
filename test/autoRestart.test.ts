@@ -30,6 +30,7 @@ function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0, tokens: 10, ...over };
 }
 const RATE: LimitHit = { kind: "rate", raw: "429" };
+const AUTH: LimitHit = { kind: "auth", raw: "401 unauthorized" };
 
 async function makeCtx(buildOver: Partial<SparraConfig["build"]> = {}): Promise<{ ctx: Ctx; dir: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-ar-"));
@@ -140,6 +141,63 @@ describe("cmdBuild — auto-restart on provider limit", () => {
     expect(res.passed).toBe(0);
     expect(ctx.store.data.phase).toBe("build"); // NOT "done" — paused, resumable
     expect(ctx.store.data.build.items["item-001"]!.status).toBe("building"); // not marked failed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // U-A (#4): an EVALUATOR auth/transport failure (limitHit kind:"auth") is a limit, not a FAIL.
+  // It gives the round back and falls back / waits, and the synthesized weightedTotal:0 verdict it
+  // carries is NEVER consumed — st.lastScore stays unset from that round.
+  it("treats an evaluator auth limit as a limit: gives the round back, never scores the 0-verdict", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 6 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 5 };
+    let waited = 0;
+    let evalCall = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => oneItem,
+      generateItem: async () => genOut(),
+      // First evaluation fails on auth (session never ran → weightedTotal:0 fail verdict + auth
+      // limitHit); the retry evaluates clean and passes.
+      evaluateItem: async () => (++evalCall === 1 ? evalOut(false, { limitHit: AUTH }) : evalOut(true)),
+      waitForLimit: async () => {
+        waited++;
+      },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(waited).toBe(1); // paused-and-retried on the auth failure
+    expect(ctx.store.data.build.restarts).toBe(1);
+    expect(evalCall).toBe(2); // the auth round was given back and re-run
+    expect(st.status).toBe("passed");
+    // The auth round's synthesized failing verdict (weightedTotal 30/0) was never recorded as a
+    // score — lastScore reflects only the real passing round.
+    expect(st.lastScore).toBe(90);
+    expect(res.passed).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("halts (resumable) on a persistent evaluator auth limit — never marks the item FAILED", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 6 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 1 };
+    let waited = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => oneItem,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(false, { limitHit: AUTH }), // always auth-limited
+      waitForLimit: async () => {
+        waited++;
+      },
+    };
+    const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(waited).toBe(1); // one wait, then the second auth limit exceeds maxRestarts
+    expect(res.passed).toBe(0);
+    expect(ctx.store.data.phase).toBe("build"); // paused, resumable — NOT "done"
+    expect(st.status).toBe("building"); // not marked failed by the auth failure
+    expect(st.lastScore).toBeUndefined(); // the synthesized 0-verdict was never scored
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
