@@ -295,10 +295,12 @@ Any sync refreshes `.baseline.json` for the roles it writes, so an immediate re-
 `same`. A newer-default (`stale`) prompt is also surfaced once on the **build** and **role-runner /
 `sparra eval` / `sparra-loop`** paths (see [build-loop](build-loop.md) / [phases](phases.md)).
 
-## Auditing prompt conciseness (`sparra prompts audit`)
+## Auditing prompt conciseness & readability (`sparra prompts audit`)
 `reflect` APPENDS to role prompts, so the built-in defaults ratchet up over cycles. `sparra prompts
 audit [--role <r>] [--apply] [--backend b] [--model m] [--effort e]` checks whether each prompt's
-wording can be **tighter without losing any rule**.
+wording can be **lower-redundancy and more readable without losing any rule** — cut duplication and
+padding (not structure), then format what remains for fast parsing by humans and models (one idea per
+bullet/line, blank lines between distinct rules). Conciseness here means low redundancy, not terseness.
 
 - Per role it resolves the EFFECTIVE prompt (on-disk `.sparra/prompts/<role>.md` if present, else
   the built-in default), runs the read-only `prompt-auditor` on that text, and writes a review to

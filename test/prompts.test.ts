@@ -66,6 +66,38 @@ describe("contract-generator prompt — teardown-crashy sentinel output guidance
   });
 });
 
+describe("capability-gap reflect clauses folded into DEFAULT_PROMPTS", () => {
+  const cg = DEFAULT_PROMPTS["contract-generator"]!;
+  const gen = DEFAULT_PROMPTS.generator;
+  it("contract-generator requires mandated side-effect layers named up front", () => {
+    expect(cg).toContain("MANDATED SIDE-EFFECTS UP FRONT");
+    expect(cg).toContain("plugin-version bump");
+  });
+  it("contract-generator + generator require a FLOOR compare on monotonic values, never an exact pin", () => {
+    expect(cg).toContain("MONOTONIC VALUES");
+    expect(cg).toContain("never an exact pin");
+    expect(gen).toContain("monotonic values");
+    expect(gen).toContain("never exact equality");
+  });
+  it("reset/clear degenerate-test guard is present on both the drafting and building sides", () => {
+    expect(cg).toContain("RESET/CLEAR semantics");
+    expect(cg).toContain("previously-tracked key ABSENT");
+    expect(gen).toContain("previously-tracked key ABSENT");
+  });
+});
+
+describe("prompt-auditor / reflector — audit for readability, not just terseness", () => {
+  it("prompt-auditor scores READABILITY alongside low redundancy and won't cram into a denser wall", () => {
+    const pa = DEFAULT_PROMPTS["prompt-auditor"]!;
+    expect(pa).toContain("READABILITY");
+    expect(pa).toContain("one idea per bullet/line");
+    expect(pa).toContain("EARN their tokens");
+  });
+  it("reflector edits stay low-redundancy AND readable", () => {
+    expect(DEFAULT_PROMPTS.reflector).toContain("LOW-REDUNDANCY AND READABLE");
+  });
+});
+
 describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
   it("documents verdict semantics and bumps the plugin version above 2026.7.3.2", () => {
     const buildLoop = fs.readFileSync(path.join(process.cwd(), "docs/build-loop.md"), "utf8");

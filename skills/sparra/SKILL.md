@@ -59,7 +59,7 @@ sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--cl
 sparra prompts status  # 3-way drift vs defaults: same/stale(newer default)/local(your edit)/conflict/drifted/missing
 sparra prompts sync    # adopt STALE only (safe); --role <r> or --all force-overwrite (discards edits); --dry-run
 # A `stale` (newer-default) prompt is surfaced once on the build AND `sparra eval`/`role run`/`sparra-loop` paths.
-sparra prompts audit   # concision review of role prompts → prompts/audit/<role>.md; --apply tightens in place behind a coverage guard PLUS an independent prompt-audit-verifier pass (re-derives the original's rules; skips if any are missing)
+sparra prompts audit   # concision + readability review of role prompts (cut redundancy, format for fast parsing — not terseness) → prompts/audit/<role>.md; --apply tightens in place behind a coverage guard PLUS an independent prompt-audit-verifier pass (re-derives the original's rules; skips if any are missing)
 sparra status          # where am I / what's next
 sparra new "<title>"   # next feature, same project: archive this cycle → fresh plan
 sparra clean           # prune stale sparra worktrees/branches (dry-run; --yes acts, --force unmerged)

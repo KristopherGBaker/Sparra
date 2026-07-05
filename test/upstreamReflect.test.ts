@@ -215,8 +215,8 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const t = DEFAULT_PROMPTS["reflector"]!;
     expect(t.toLowerCase()).toContain("harness");
     expect(t).toContain("upstream.md");
-    // it must still preserve the prior reflector discipline (placeholders + conciseness rule)
-    expect(t).toMatch(/CONCISE/);
+    // it must still preserve the prior reflector discipline (the low-redundancy/readability rule)
+    expect(t).toMatch(/LOW-REDUNDANCY AND READABLE/);
   });
 
   it("isolated + drift sentinel: every NON-reflector prompt is byte-identical to the committed baseline", () => {
@@ -229,10 +229,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
     expect(roles).toHaveLength(13);
-    // Regenerated 2026-07-03 (U5/#7): contract-evaluator gained the token-strip/regex
-    // grammar-adjacency fixture rule, and the generator gained the matcher/guard/parser
-    // boundary-adversary self-probe clause (folded reflect lessons from the guard-seams cycle).
-    expect(h.digest("hex")).toBe("c1c9ba7ed8b2b5d9c2094355a609feec552cb0235d352281f443dcb06765222e");
+    // Regenerated 2026-07-06 (capability-gap cycle): prompt-auditor now audits for READABILITY
+    // (not just terseness); contract-generator gained the mandated-side-effects, monotonic-floor,
+    // and reset/clear degenerate-test clauses; the generator gained the monotonic-floor + reset/clear
+    // probe clauses (folded reflect lessons from the capability-gap cycle).
+    expect(h.digest("hex")).toBe("0bf52740cdac2602d38d27335c4ff548da692613d43c4d20c64e3c3825253e2a");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
