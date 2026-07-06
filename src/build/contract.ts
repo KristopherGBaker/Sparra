@@ -16,6 +16,8 @@ import { selectMapContext } from "./mapContext.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
 import { mergedBuildEnv } from "./env.ts";
+import { getBackend } from "../sdk/session.ts";
+import { judgeCapabilityNotesText } from "./judgeScratch.ts";
 
 const AGREED = "CONTRACT: AGREED";
 const SECTION = "## AGREED CONTRACT";
@@ -82,6 +84,17 @@ export async function negotiateContract(
   };
   const genSystem = fill(await loadPrompt(ctx.paths, "contract-generator"), vars);
   const evalSystem = fill(await loadPrompt(ctx.paths, "contract-evaluator"), vars);
+
+  // KNOWN sandbox-capability matrix for the contract-evaluator (empty for a no-OS-sandbox Claude
+  // backend). The contract-evaluator runs read-only — so a sandboxed Codex judge is told up front
+  // that e.g. unix-domain-socket LISTEN is policy-denied even with a writable TMPDIR, so any verify
+  // command it dry-checks that needs a socket listener is classified UN-RUN, not re-proved.
+  const evalCapabilityNotes = judgeCapabilityNotesText({
+    backendId: evalRole.backend ?? "claude",
+    hasOsSandbox: getBackend(evalRole.backend).capabilities.sandbox,
+    sandboxMode: "read-only",
+    scratchEnabled: false,
+  });
 
   const plan = (await readText(ctx.paths.frozenPlan)) ?? "";
   const map = await readText(ctx.paths.frozenMap);
@@ -154,7 +167,7 @@ export async function negotiateContract(
     if (round > 1) priorCritiques.push(`--- Round ${round - 1} critique ---\n${critique}`);
     const reCritiqueBlock =
       round > 1 ? `${RE_CRITIQUE_INSTRUCTION}\n\nPRIOR CRITIQUES (verify each is resolved):\n${priorCritiques.join("\n\n")}\n\n` : "";
-    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\n${reCritiqueBlock}PROPOSED CONTRACT:\n${proposal}`;
+    const evalTask = `Critique this proposed "done" contract for ${item.id}. Be adversarial.\n${memory}\n${evalCapabilityNotes}${reCritiqueBlock}PROPOSED CONTRACT:\n${proposal}`;
     assertNoHoldoutLeak("contract-evaluator", evalTask, holdout);
     const evalRes = await run({
       role: "contract-evaluator",

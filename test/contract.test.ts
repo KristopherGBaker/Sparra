@@ -491,3 +491,29 @@ describe("Q3 config defaults + prompt edits", () => {
     expect(p).toMatch(/none dropped/i); // …or "none dropped"
   });
 });
+
+describe("negotiateContract — sandbox capability-notes injection (U-K)", () => {
+  it("injects the KNOWN sandbox-capability notes into the contract-evaluator task for a Codex judge, NOT a Claude one", async () => {
+    // Codex contract-evaluator → notes present.
+    const { ctx, root, wt } = await makeCtx();
+    ctx.config.roles.contractEvaluator.backend = "codex";
+    const session = fakeSession(() => "npm test");
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn);
+    const evalCall = session.calls.find((c) => c.role === "contract-evaluator")!;
+    expect(evalCall.prompt).toContain("unix-domain-socket-listen");
+    expect(evalCall.prompt).toContain("UN-RUN");
+    expect(evalCall.prompt.toLowerCase()).toMatch(/do not re-prove/);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+
+    // Claude contract-evaluator (default backend) → NO notes.
+    const c = await makeCtx();
+    const session2 = fakeSession(() => "npm test");
+    await negotiateContract(c.ctx, item, c.wt, 1, "", c.wt, session2.fn);
+    const evalCall2 = session2.calls.find((cc) => cc.role === "contract-evaluator")!;
+    expect(evalCall2.prompt).not.toContain("unix-domain-socket-listen");
+    expect(evalCall2.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    fs.rmSync(c.root, { recursive: true, force: true });
+    fs.rmSync(c.wt, { recursive: true, force: true });
+  });
+});

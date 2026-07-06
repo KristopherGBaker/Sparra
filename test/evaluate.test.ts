@@ -501,6 +501,33 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // — Sandbox capability-notes injection (U-K) —
+  it("injects the KNOWN sandbox-capability notes into the task for a Codex eval backend, NOT a Claude one (U-K)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const codex = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: codex.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "codex", model: "gpt" },
+    });
+    const codexPrompt = codex.calls[0]!.prompt;
+    expect(codexPrompt).toContain("unix-domain-socket-listen");
+    expect(codexPrompt).toContain("UN-RUN");
+    expect(codexPrompt).toMatch(/AT MOST ONE/);
+    expect(codexPrompt.toLowerCase()).toMatch(/do not re-prove/);
+
+    const claude = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: claude.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "claude", model: "opus" },
+    });
+    // A no-OS-sandbox Claude judge gets NO capability notes (nothing is policy-denied).
+    expect(claude.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
+    expect(claude.calls[0]!.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("observed-run demotion fires for a Claude backend but NOT a Codex one (harness 'none' is expected on Codex) (U1)", async () => {
     // Harness 'none' + cli + model pass: on Claude (inProcessMcp) an observed run was possible, so
     // the unobserved pass is demoted; on Codex (no inProcessMcp) 'none' is EXPECTED (the server was

@@ -68,7 +68,14 @@ same machinery as `sparra eval --worktree` (`keepWorktree` retains it). Pass it 
 evaluator will **exercise** the tree (run `npm test`/builds), or a **contract-evaluator** will run
 the contract's verify commands to prove they're runnable: it gives the exercise/probe writable
 scratch + provisioned deps, whereas an in-place `run_role` eval stays read-only and false-blocks on
-scratch writes (EPERM on `node_modules/.vite-temp` etc.). `effort` (`low|medium|high|xhigh|max`)
+scratch writes (EPERM on `node_modules/.vite-temp` etc.). **Sandbox-capability notes:** a Codex
+(OS-sandboxed) judge role — `evaluator` or `contract-evaluator` — has a **known-capability matrix**
+injected into its task up front (`sandboxCapabilityNotes`, `src/build/judgeScratch.ts`): it's told
+that e.g. unix-domain-socket `listen(2)` is denied by sandbox **policy** even with a writable scratch
+`TMPDIR`, so a socket-dependent gate is classified **UN-RUN** (environment-blocked, not an artifact
+FAIL) with at most one confirming probe — no re-proving it every round. A Claude judge (no OS sandbox)
+gets no notes. See [backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).
+`effort` (`low|medium|high|xhigh|max`)
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
 `build.maxBudgetUsdPerItem` for that one call (`0` = unlimited; omit to use the config cap).

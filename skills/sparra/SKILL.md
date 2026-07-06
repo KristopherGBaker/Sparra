@@ -162,12 +162,16 @@ The few that matter most:
   role-runs get a default env layer (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
   `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh per-run writable **scratch** dir,
   so a read-only sandbox / unwritable `$HOME` no longer EPERMs *before any Sparra code runs*: Vitest's
-  `node_modules/.vite-temp`/`/var/folders` temp writes, the **tsx** IPC socket under `tmpdir/tsx-*`
-  (which killed `node bin/sparra.mjs` smokes), and clang's `~/.cache/clang/ModuleCache`. Precedence:
-  `process.env` → scratch defaults → `build.env` (override wins). The contract-evaluator additionally
+  `node_modules/.vite-temp`/`/var/folders` temp writes, the **tsx** IPC socket **path** under
+  `tmpdir/tsx-*`, and clang's `~/.cache/clang/ModuleCache`. Precedence:
+  `process.env` → scratch defaults → `build.env` (override wins). This fixes **path writability only** —
+  the sandbox still denies unix-socket `listen(2)` as **policy**, so a tsx socket smoke still UN-RUNs
+  under a sandboxed judge; that known limit is surfaced up front via the injected
+  **known-capability matrix** (`sandboxCapabilityNotes`) so socket-dependent gates are classified
+  UN-RUN, not re-proved. The contract-evaluator additionally
   relaxes to `workspace-write` (network off, integrity-guarded) on an isolated checkout so it can
   prove the contract's verify commands run; `--worktree` now accepts it. See
-  [diagnose](subskills/diagnose.md) for the three EPERM failure signatures.
+  [diagnose](subskills/diagnose.md) for the EPERM + socket-listen failure signatures.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold. `pivot.resetWorkspace` (default true) resets
   the workspace to the item-start state on a pivot (revert tracked + clean non-ignored

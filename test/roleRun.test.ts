@@ -271,6 +271,34 @@ describe("runRole — safety intent + wiring", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("injects the KNOWN sandbox-capability notes for a Codex judge, NOT a Claude one (U-K)", async () => {
+    const { ctx, dir } = await makeCtx();
+
+    // Codex evaluator → notes present in the task.
+    const codexEv = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "codex", runSessionFn: codexEv.fn });
+    expect(codexEv.calls[0]!.prompt).toContain("unix-domain-socket-listen");
+    expect(codexEv.calls[0]!.prompt).toContain("UN-RUN");
+    expect(codexEv.calls[0]!.prompt.toLowerCase()).toMatch(/do not re-prove/);
+
+    // Codex contract-evaluator (the other sandboxed judge kind) → notes present too.
+    const codexCe = recorder();
+    await runRole({ ctx, roleKind: "contract-evaluator", contract: "- works", backend: "codex", runSessionFn: codexCe.fn });
+    expect(codexCe.calls[0]!.prompt).toContain("unix-domain-socket-listen");
+
+    // Claude evaluator (no OS sandbox) → NO notes.
+    const claudeEv = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "claude", runSessionFn: claudeEv.fn });
+    expect(claudeEv.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
+    expect(claudeEv.calls[0]!.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+
+    // A non-judge role (generator) never gets the notes even on Codex.
+    const codexGen = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", backend: "codex", runSessionFn: codexGen.fn });
+    expect(codexGen.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("maxBudgetUsd override reaches the session request; 0 survives; omission falls back to config", async () => {
     const { ctx, dir } = await makeCtx();
 

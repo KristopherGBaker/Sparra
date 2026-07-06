@@ -31,7 +31,7 @@ import { costUsdOrZero } from "./budget.ts";
 import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
-import { createJudgeScratch, judgeSandboxEnv } from "./judgeScratch.ts";
+import { createJudgeScratch, judgeSandboxEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -604,8 +604,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
 
   // Default writable-scratch env layer for the sandboxed judge roles (evaluator + contract-evaluator):
   // redirect TMPDIR / clang+SwiftPM caches into a per-run scratch dir so a read-only Codex sandbox /
-  // unwritable $HOME doesn't EPERM Vitest temp writes, the tsx IPC socket, or clang's ModuleCache
-  // before the exercise/verify probe even runs. Other roles keep the plain merged build env.
+  // unwritable $HOME doesn't EPERM Vitest temp writes, the tsx IPC socket PATH, or clang's ModuleCache
+  // before the exercise/verify probe even runs. NB: PATH writability only — the sandbox still denies
+  // unix-socket LISTEN as policy (see the per-attempt capability notes below), so a tsx-launched
+  // socket smoke still UN-RUNs. Other roles keep the plain merged build env.
   const sessionEnv = isSandboxedJudge(roleKind)
     ? judgeSandboxEnv(ctx.config, createJudgeScratch())
     : mergedBuildEnv(ctx.config);
@@ -776,8 +778,22 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           attemptInProcessMcp
         )
       : system;
+    // KNOWN sandbox-capability matrix for a sandboxed JUDGE on THIS attempt's backend (empty for a
+    // no-OS-sandbox Claude backend, and for non-judge roles). Recomputed per attempt so a Claude→Codex
+    // fallback gets the notes and a Codex→Claude fallback drops them. Tells the judge that e.g.
+    // unix-domain-socket LISTEN is policy-denied even with a writable scratch TMPDIR → UN-RUN, not FAIL.
+    const attemptTask = isSandboxedJudge(roleKind)
+      ? task +
+        judgeCapabilityNotesText({
+          backendId: be,
+          hasOsSandbox: getBackend(be).capabilities.sandbox,
+          sandboxMode: exerciseScratch ? "workspace-write" : "read-only",
+          scratchEnabled: exerciseScratch,
+        })
+      : task;
     res = await run({
       ...commonReq,
+      prompt: attemptTask,
       systemPrompt: attemptSystem,
       ...(exerciser && attemptInProcessMcp ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
       backend: attempt.backend,

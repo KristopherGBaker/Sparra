@@ -134,11 +134,27 @@ Independently of `exercise.sandbox`, both judge roles (evaluator + contract-eval
 **default env layer** (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
 `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh **per-run writable scratch dir**. A
 read-only sandbox / unwritable `$HOME` otherwise EPERMs *before any Sparra code runs*: Vitest's
-`/var/folders` temp writes, the **tsx** IPC socket (derived from `os.tmpdir()` — `tsx-<uid>` then
-`<pid>.pipe`, so `node bin/sparra.mjs` dies creating it), and clang's
-`~/.cache/clang/ModuleCache`. Precedence is `process.env` → scratch defaults → your `build.env`
-(user override wins). This only moves temp/cache roots — it never widens the sandbox's write scope
-over the tracked source (the integrity guard still governs that).
+`/var/folders` temp writes, the **tsx** IPC socket **PATH** (derived from `os.tmpdir()` — `tsx-<uid>`
+then `<pid>.pipe`), and clang's `~/.cache/clang/ModuleCache`. Precedence is `process.env` → scratch
+defaults → your `build.env` (user override wins). This only moves temp/cache roots — it never widens
+the sandbox's write scope over the tracked source (the integrity guard still governs that).
+
+### Known sandbox-capability matrix (surfaced to the judge)
+The scratch layer fixes **path writability**, but it does **not** lift the sandbox's seatbelt
+**policy**. The Codex judge sandbox denies **`listen(2)` on a Unix-domain socket** even inside a
+writable scratch `TMPDIR` — proved twice with a raw `net.createServer().listen()` probe (an EPERM
+from policy, not from path permissions). So any exercise needing a socket **listener** (a tsx-launched
+CLI smoke that IPCs over its `.pipe`, a dev server) systematically **UN-RUNs** under a sandboxed
+judge, regardless of `TMPDIR` — the redirect above makes the pipe *path* writable but the bind still
+EPERMs. Because the harness process runs **outside** the judge's sandbox, a **live harness-side probe
+cannot confirm** the judge's capabilities; so Sparra ships a **KNOWN-capability matrix**
+(`sandboxCapabilityNotes` in `src/build/judgeScratch.ts`) keyed on *(backend OS-sandbox, sandbox mode,
+scratch enabled)* and injects it into every sandboxed judge's task up front (evaluator, autonomous
+artifact evaluator, and contract-negotiation judge). The instruction is **classify, don't re-prove**:
+a gate that fails ONLY on a listed denied capability is **environment-blocked / UN-RUN** (never an
+artifact FAIL), and at most **one** confirming probe is spent — no re-proving the same limitation
+every round. A **Claude** judge has no OS sandbox, so it gets **no** notes; a `danger-full-access`
+sandbox (gated to a worktree/branch) restores socket listen.
 
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when

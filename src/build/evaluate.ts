@@ -20,7 +20,7 @@ import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./hold
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
-import { createJudgeScratch, judgeSandboxEnv } from "./judgeScratch.ts";
+import { createJudgeScratch, judgeSandboxEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -146,7 +146,9 @@ export async function evaluateItem(args: {
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
   // Default writable-scratch env layer for the sandboxed judge: redirect TMPDIR / clang+SwiftPM
   // caches into a per-run scratch dir so a read-only Codex sandbox / unwritable $HOME doesn't EPERM
-  // Vitest's temp writes, tsx's IPC socket, or clang's ModuleCache before the exercise even runs.
+  // Vitest's temp writes, the tsx IPC socket PATH, or clang's ModuleCache before the exercise even
+  // runs. NB: this fixes PATH writability only — the sandbox still denies unix-socket LISTEN as
+  // policy (surfaced via the capability notes below), so tsx-launched socket smokes still UN-RUN.
   const judgeScratchDir = createJudgeScratch();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
@@ -162,6 +164,16 @@ export async function evaluateItem(args: {
   const holdoutText = await readHoldout(ctx);
   const holdout = holdoutSection(holdoutText);
 
+  // KNOWN sandbox-capability matrix for THIS judge (empty for a no-OS-sandbox Claude backend). A
+  // sandboxed Codex judge is told up front that e.g. unix-domain-socket LISTEN is policy-denied even
+  // with a writable scratch TMPDIR, so a socket-dependent gate is classified UN-RUN, not re-proved.
+  const capabilityNotes = judgeCapabilityNotesText({
+    backendId: role.backend ?? "claude",
+    hasOsSandbox: getBackend(role.backend).capabilities.sandbox,
+    sandboxMode: exerciseScratch ? "workspace-write" : "read-only",
+    scratchEnabled: exerciseScratch,
+  });
+
   const task = `Adversarially evaluate work item ${item.id}: ${item.title} (round ${round}).
 
 The artifact is in: ${workspaceDir}
@@ -170,7 +182,7 @@ AGREED CONTRACT (grade against THIS, not the plan prose):
 ---
 ${contractText}
 ---
-${holdout}${memory}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
+${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
 
   info(`Evaluating ${item.id} (round ${round}) with ${role.model} — exercising via ${ctx.config.exercise.mechanism}…`);
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the

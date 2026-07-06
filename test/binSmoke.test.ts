@@ -11,7 +11,10 @@ import { createJudgeScratch, judgeScratchEnvLayer } from "../src/build/judgeScra
 // (installed tsx 4.x: `dist/temporary-directory-*.cjs` → `join(os.tmpdir(), 'tsx-<uid>')`, then
 // `dist/get-pipe-path-*.cjs` → `join(tmpdir, '<pid>.pipe')`). Under a read-only sandbox that socket
 // EPERMs before any Sparra code runs. Pointing TMPDIR at a per-run WRITABLE scratch dir (the default
-// judge env layer) makes the socket creatable, so `node bin/sparra.mjs --help` runs. No model calls.
+// judge env layer) fixes the socket PATH's writability — but NOT a sandbox that denies unix-socket
+// `listen()` as POLICY (independent of path writability); there the tsx socket still EPERMs no matter
+// where TMPDIR points, so this smoke SKIPS on an observed listen-deny (see `canListenUnixSocket`
+// below) and asserts the redirect only where listen is actually permitted. No model calls.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bin = path.resolve(here, "../bin/sparra.mjs");

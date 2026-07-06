@@ -8,6 +8,10 @@ import {
   judgeScratchEnvLayer,
   judgeSandboxEnv,
   createJudgeScratch,
+  sandboxCapabilityNotes,
+  sandboxCapabilityNotesText,
+  judgeCapabilityNotesText,
+  type JudgeSandboxMode,
 } from "../src/build/judgeScratch.ts";
 
 describe("judgeScratch — default writable-scratch env layer", () => {
@@ -85,5 +89,70 @@ describe("judgeScratch — default writable-scratch env layer", () => {
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
+  });
+});
+
+describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", () => {
+  const codex = (mode: JudgeSandboxMode, scratchEnabled = mode === "workspace-write") =>
+    sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: mode, scratchEnabled });
+
+  it("Codex read-only AND workspace-write both deny unix-domain-socket LISTEN", () => {
+    for (const mode of ["read-only", "workspace-write"] as const) {
+      const caps = codex(mode);
+      expect(caps.map((c) => c.capability)).toContain("unix-domain-socket-listen");
+      const uds = caps.find((c) => c.capability === "unix-domain-socket-listen")!;
+      // Evidence must cite the policy-deny nature (not path writability) and the socket path.
+      expect(uds.detail.toLowerCase()).toMatch(/policy/);
+      expect(uds.detail.toLowerCase()).toMatch(/writable scratch tmpdir/);
+    }
+  });
+
+  it("the UDS-listen deny is INDEPENDENT of scratchEnabled (path writability never lifts it)", () => {
+    // Same verdict whether or not the writable-scratch layer is active — the deny is policy, not path.
+    const withScratch = codex("read-only", true);
+    const withoutScratch = codex("read-only", false);
+    expect(withScratch.map((c) => c.capability)).toEqual(withoutScratch.map((c) => c.capability));
+    expect(withoutScratch.map((c) => c.capability)).toContain("unix-domain-socket-listen");
+  });
+
+  it("a no-OS-sandbox backend (Claude judge) gets NO notes", () => {
+    for (const mode of ["read-only", "workspace-write", "danger-full-access"] as const) {
+      expect(
+        sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: mode, scratchEnabled: false })
+      ).toEqual([]);
+    }
+  });
+
+  it("a fully-lifted sandbox (danger-full-access) restores socket listen → NO notes", () => {
+    expect(codex("danger-full-access", true)).toEqual([]);
+  });
+
+  it("renders CLASSIFY-don't-reprove text with UN-RUN / one-probe / no-multi-round instruction", () => {
+    const text = sandboxCapabilityNotesText(codex("read-only"));
+    expect(text).toMatch(/unix-domain-socket-listen/);
+    expect(text).toMatch(/environment-blocked \/ UN-RUN/);
+    expect(text.toLowerCase()).toMatch(/not an? artifact fail|it is not an artifact fail/i);
+    expect(text.toUpperCase()).toMatch(/AT MOST ONE/);
+    expect(text.toLowerCase()).toMatch(/do not re-prove/);
+    // Cite: a live harness-side probe is impossible.
+    expect(text.toLowerCase()).toMatch(/harness runs outside your sandbox|live harness-side probe is impossible/);
+  });
+
+  it("renders EMPTY text when nothing is denied (Claude judge)", () => {
+    expect(sandboxCapabilityNotesText([])).toBe("");
+    expect(
+      judgeCapabilityNotesText({ backendId: "claude", hasOsSandbox: false, sandboxMode: "read-only", scratchEnabled: false })
+    ).toBe("");
+  });
+
+  it("judgeCapabilityNotesText composes matrix + render for a sandboxed judge", () => {
+    const text = judgeCapabilityNotesText({
+      backendId: "codex",
+      hasOsSandbox: true,
+      sandboxMode: "workspace-write",
+      scratchEnabled: true,
+    });
+    expect(text).toMatch(/unix-domain-socket-listen/);
+    expect(text).toMatch(/UN-RUN/);
   });
 });
