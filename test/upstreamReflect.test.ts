@@ -248,7 +248,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // validation + garbage-retry negative; judge-sandbox-denied gates unsatisfiable), generator
     // (load-reliable gating suites; stub side-effectful calls in pre-existing test paths; don't
     // end-load doc/version sweeps), evaluator (exerciseStatus reflects contract gates, not own probes).
-    expect(h.digest("hex")).toBe("2dbe47b3d73c25764f848e3b6f757f1178d5ef257bf1dc68eb0234ce83d501fe");
+    // Regenerated 2026-07-06 (U-L load-determinism): the EVALUATOR prompt gained the concurrent-load
+    // determinism clause — folded into the FLAKY rule (rule 1) and PROCESS step 1 (a full-suite gate
+    // is run once quietly AND once under a concurrently-running suite instance; a load-only timeout is
+    // an ARTIFACT defect, not environmental), mirroring the generator's existing clause. To regenerate
+    // this literal after the edit: run the suite (or `npx tsx -e`) to print the SHA-256 over every
+    // sorted non-reflector role's `role + " " + prompt + " "` and paste it below.
+    expect(h.digest("hex")).toBe("a4df4f2d44deed9eff4716055a1cdff2fcd48d8e5d61d68e4f85a72db72e9c96");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

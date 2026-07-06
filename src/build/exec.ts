@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 import { stringProcessEnv } from "./env.ts";
@@ -294,8 +295,75 @@ export interface RerunResult {
   detail: string;
 }
 
+/** Handle to a running background-load process group — `stop()` tears it down (idempotent). */
+export interface LoadHandle {
+  stop(): void;
+}
+
+/** Injectable seam that STARTS a concurrent background load and returns its teardown handle.
+ *  Fakes in tests can flip an "active" flag instead of spawning any real process. */
+export type LoadSpawner = () => LoadHandle;
+
+/** Opt-in concurrent-LOAD rerun for the flakiness gate (see `build.flakinessLoadRerun`). When
+ *  `enabled`, the gate runs ≥1 further pass of each command while `spawnLoad()`'s process runs,
+ *  so a suite that only times out under machine load fails deterministically. */
+export interface LoadRerunOptions {
+  enabled: boolean;
+  /** Injectable spawner (tests fake it); defaults to {@link spawnCpuLoad}. */
+  spawnLoad?: LoadSpawner;
+}
+
+/**
+ * Default concurrent-load spawner: a handful of BOUNDED, self-terminating busy-loop `node`
+ * processes that compete for CPU while a verify command reruns, surfacing load-only timeouts.
+ * Each worker self-exits after `maxMs` (so a crash/leak can never peg the machine indefinitely);
+ * `stop()` SIGKILLs any still running. A worker that fails to spawn is swallowed — a broken load
+ * spawn must degrade the gate to a plain quiet rerun, never throw.
+ */
+export function spawnCpuLoad(
+  opts: { workers?: number; maxMs?: number; spawnFn?: typeof spawn } = {}
+): LoadHandle {
+  const workers = Math.max(1, opts.workers ?? Math.max(1, (os.cpus()?.length ?? 2) - 1));
+  const maxMs = opts.maxMs ?? EXEC_TIMEOUT_MS;
+  const spawnFn = opts.spawnFn ?? spawn;
+  // Inline busy-loop with a hard self-terminate deadline — never an unbounded hog.
+  const script = `const end=Date.now()+${maxMs};while(Date.now()<end){Math.sqrt(Math.random()*1e9);}`;
+  const children: ReturnType<typeof spawn>[] = [];
+  for (let i = 0; i < workers; i++) {
+    try {
+      const c = spawnFn("node", ["-e", script], { stdio: "ignore" });
+      c.on("error", () => {}); // best-effort: a failed load process must not break the gate
+      children.push(c);
+    } catch {
+      // swallow — degrade to a quiet rerun rather than fail the gate on a spawn error
+    }
+  }
+  let stopped = false;
+  return {
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      for (const c of children) {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    },
+  };
+}
+
 /** RERUN GATE core: run each verify command `reruns` times via the injected executor.
- *  ANY non-ok result — flaky, failing, or unsafe — prevents a clean pass (the caller demotes). */
+ *  ANY non-ok result — flaky, failing, or unsafe — prevents a clean pass (the caller demotes).
+ *
+ *  When `loadRerun.enabled` AND the gate itself runs (`reruns >= 1`), each command gets ≥1 FURTHER
+ *  pass executed while a concurrent background CPU-load process runs — IN ADDITION to (never
+ *  replacing) the quiet-determinism reruns — so a command that only fails/times out under machine
+ *  load is classified flaky/failing exactly as a mixed/nonzero quiet rerun. The load process is
+ *  always torn down on the pass, fail, AND throw paths (finally). When `reruns` is 0 (gate off) OR
+ *  `loadRerun` is off/absent, NO load process is spawned — the load rerun is a strict no-op and the
+ *  RerunResult is byte-identical to the pre-knob path. */
 export async function rerunVerifyCommands(
   workspace: string,
   commands: string[],
@@ -303,7 +371,8 @@ export async function rerunVerifyCommands(
   exec: CommandExecutor,
   /** Project `build.verifyCommands` — the explicit opt-in past the executor's argv[0] allowlist. */
   allowPrefixes: string[] = [],
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  loadRerun?: LoadRerunOptions
 ): Promise<RerunResult[]> {
   const results: RerunResult[] = [];
   for (const command of commands) {
@@ -319,6 +388,24 @@ export async function rerunVerifyCommands(
       }
       exitCodes.push(o.exitCode);
       if (o.exitCode !== 0) detail = renderExecOutcome(o);
+    }
+    // Concurrent-load pass: opt-in, only when the gate itself runs (reruns >= 1) and the command
+    // was not already rejected as unsafe (unsafe is deterministic — load can't change it). ADDS to
+    // the quiet reruns above; the load process is torn down on every exit path via finally.
+    if (loadRerun?.enabled && reruns >= 1 && !unsafe) {
+      const handle = (loadRerun.spawnLoad ?? spawnCpuLoad)();
+      try {
+        const o = await exec(workspace, command, { allowPrefixes, env });
+        if (!o.ran) {
+          unsafe = true;
+          detail = renderExecOutcome(o);
+        } else {
+          exitCodes.push(o.exitCode);
+          if (o.exitCode !== 0) detail = renderExecOutcome(o);
+        }
+      } finally {
+        handle.stop();
+      }
     }
     const status: RerunResult["status"] = unsafe
       ? "unsafe"

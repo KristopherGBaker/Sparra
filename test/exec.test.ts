@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { runVerifyCommand, unsafeExecReason, extractVerifyCommands, classifyExec, rerunVerifyCommands, type ExecOutcome } from "../src/build/exec.ts";
+import { runVerifyCommand, unsafeExecReason, extractVerifyCommands, classifyExec, rerunVerifyCommands, spawnCpuLoad, type ExecOutcome, type LoadHandle } from "../src/build/exec.ts";
 import { allowVerifyBash } from "../src/sdk/scoping.ts";
 
 /**
@@ -342,5 +342,126 @@ describe("rerunVerifyCommands — the rerun-gate core over an injected executor"
     expect(results[0]!.detail).toContain("npm version"); // blocking feedback names the command
     expect(JSON.parse(fs.readFileSync(pkg, "utf8")).version).toBe("1.0.0"); // and nothing mutated
     fs.rmSync(ws, { recursive: true, force: true });
+  });
+});
+
+describe("rerunVerifyCommands — concurrent-LOAD rerun (build.flakinessLoadRerun) over injected fakes", () => {
+  const ran = (exitCode: number, command = "npm test"): ExecOutcome => ({ ran: true, command, exitCode, stdout: "", stderr: exitCode ? "boom" : "", timedOut: false });
+
+  /** A fake load spawner that flips a shared `active` flag on spawn/stop — NO real process, NO
+   *  real timing — so a fake command runner can key its result on whether load is "active". */
+  const fakeLoad = () => {
+    const state = { active: false, spawns: 0, teardowns: 0 };
+    const spawnLoad = (): LoadHandle => {
+      state.spawns++;
+      state.active = true;
+      return {
+        stop() {
+          state.teardowns++;
+          state.active = false;
+        },
+      };
+    };
+    return { state, spawnLoad };
+  };
+
+  it("adds ONE concurrent-load pass ON TOP OF the quiet reruns, tearing the load down on the PASS path", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    let calls = 0;
+    // A robust command: exit 0 whether or not load is active.
+    const res = await rerunVerifyCommands("/ws", ["npm test"], 2, async () => { calls++; return ran(0); }, [], undefined, { enabled: true, spawnLoad });
+    expect(calls).toBe(3); // 2 quiet reruns + 1 load pass (quiet reruns NOT dropped)
+    expect(state.spawns).toBe(1);
+    expect(state.teardowns).toBe(1); // torn down on the pass path
+    expect(state.active).toBe(false); // no leak
+    expect(res[0]!.status).toBe("ok");
+    expect(res[0]!.exitCodes).toEqual([0, 0, 0]);
+  });
+
+  it("a command that fails ONLY while load is active is FLAKY (quiet reruns green); teardown on the FAIL path", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    const exec = async (): Promise<ExecOutcome> => ran(state.active ? 1 : 0); // result depends on load, no timing
+    const res = await rerunVerifyCommands("/ws", ["npm test"], 2, exec, [], undefined, { enabled: true, spawnLoad });
+    expect(res[0]!.exitCodes).toEqual([0, 0, 1]); // 2 quiet green + 1 load-active fail
+    expect(res[0]!.status).toBe("flaky");
+    expect(state.spawns).toBe(1);
+    expect(state.teardowns).toBe(1); // torn down even though the load pass failed
+    expect(state.active).toBe(false);
+  });
+
+  it("a command that fails on EVERY pass (quiet + load) is FAILING, not flaky", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    const res = await rerunVerifyCommands("/ws", ["npm test"], 2, async () => ran(1), [], undefined, { enabled: true, spawnLoad });
+    expect(res[0]!.exitCodes).toEqual([1, 1, 1]);
+    expect(res[0]!.status).toBe("failing");
+    expect(state.spawns).toBe(1);
+    expect(state.teardowns).toBe(1);
+  });
+
+  it("tears the load down on the THROW path (exec rejects while load is active) and re-throws", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    // First 2 quiet reruns resolve ok; the load pass (load active) throws.
+    const exec = async (): Promise<ExecOutcome> => {
+      if (state.active) throw new Error("load-only hang");
+      return ran(0);
+    };
+    await expect(rerunVerifyCommands("/ws", ["npm test"], 2, exec, [], undefined, { enabled: true, spawnLoad })).rejects.toThrow("load-only hang");
+    expect(state.spawns).toBe(1);
+    expect(state.teardowns).toBe(1); // finally still tore it down on the throw path
+    expect(state.active).toBe(false); // no leak on throw
+  });
+
+  it("no-op with the knob OFF (default): zero spawns and byte-identical RerunResult to the plain path", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    const seq = [0, 1]; // would be flaky if a 3rd (load) pass ran
+    const run = (opts?: Parameters<typeof rerunVerifyCommands>[6]) => {
+      let i = 0;
+      return rerunVerifyCommands("/ws", ["npm test"], 2, async () => ran(seq[i++]!), [], undefined, opts);
+    };
+    const off = await run(undefined); // knob absent
+    const disabled = await run({ enabled: false, spawnLoad }); // knob present but off
+    expect(state.spawns).toBe(0); // never spawned
+    expect(off).toEqual(disabled); // same statuses + details + exitCodes
+    expect(off[0]!.status).toBe("flaky");
+    expect(off[0]!.exitCodes).toEqual([0, 1]); // only the 2 quiet reruns
+  });
+
+  it("no-op when flakinessReruns is 0 even with the knob ON (gate does not run → no spawn)", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    const exec = vi.fn(async (): Promise<ExecOutcome> => ran(0));
+    const res = await rerunVerifyCommands("/ws", ["npm test"], 0, exec, [], undefined, { enabled: true, spawnLoad });
+    expect(state.spawns).toBe(0); // gate off → the load rerun is a strict no-op
+    expect(exec).toHaveBeenCalledTimes(0); // no quiet reruns and no load pass
+    expect(res[0]!.exitCodes).toEqual([]);
+    expect(res[0]!.status).toBe("ok"); // empty exitCodes → ok, unchanged from before
+  });
+
+  it("an UNSAFE command is NOT given a load pass (deterministic) — spawn 0, still unsafe", async () => {
+    const { state, spawnLoad } = fakeLoad();
+    const exec = vi.fn(async (): Promise<ExecOutcome> => ({ ran: false, command: "a && b", unsafeReason: "chain" }));
+    const res = await rerunVerifyCommands("/ws", ["a && b"], 2, exec, [], undefined, { enabled: true, spawnLoad });
+    expect(res[0]!.status).toBe("unsafe");
+    expect(state.spawns).toBe(0); // no load pass on an unsafe command
+    expect(exec).toHaveBeenCalledTimes(1); // unsafe short-circuits the quiet loop too
+  });
+
+  it("spawnCpuLoad spawns bounded workers via an injected spawnFn and stop() SIGKILLs them once (idempotent)", () => {
+    const kills: string[] = [];
+    const fakeChild = () => {
+      const e = new EventEmitter() as EventEmitter & { kill: (s: string) => void };
+      e.kill = (s: string) => { kills.push(s); };
+      return e;
+    };
+    const spawnFn = vi.fn(() => fakeChild()) as unknown as typeof spawn;
+    const handle = spawnCpuLoad({ workers: 2, maxMs: 1000, spawnFn });
+    expect(spawnFn).toHaveBeenCalledTimes(2); // bounded worker count honored
+    // Each spawned child got the self-terminate `node -e` deadline script.
+    const firstArgs = (spawnFn as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+    expect(firstArgs[0]).toBe("node");
+    expect((firstArgs[1] as string[])[0]).toBe("-e");
+    expect((firstArgs[1] as string[])[1]).toContain("Date.now()+1000");
+    handle.stop();
+    handle.stop(); // idempotent — no double kill
+    expect(kills).toEqual(["SIGKILL", "SIGKILL"]); // one kill per worker, once
   });
 });

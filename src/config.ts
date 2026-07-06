@@ -299,6 +299,18 @@ export interface SparraConfig {
      */
     flakinessReruns: number;
     /**
+     * Concurrent-LOAD flakiness rerun (no model): when on AND the flakiness gate itself runs
+     * (`flakinessReruns >= 1`), the rerun gate ADDS ≥1 further pass of each verify command executed
+     * while a bounded, self-terminating background CPU-load process runs concurrently — it does NOT
+     * replace or drop the quiet-determinism reruns. This deterministically surfaces a suite that
+     * only times out under machine load (e.g. a test that fires a live network/SDK call, visible
+     * only as a load-dependent hang): a command that fails/times out under load is classified
+     * flaky/failing exactly as a mixed/nonzero quiet rerun. When `flakinessReruns` is 0 (gate off)
+     * OR this knob is off, it is a NO-OP (no load process is spawned). Off by default so Sparra's
+     * own CI is unaffected; projects with load-sensitive gates opt in. See docs/build-loop.md.
+     */
+    flakinessLoadRerun: boolean;
+    /**
      * Pre-evaluator PREFLIGHT gate (no model): after each generation and BEFORE the adversarial
      * evaluator, run the contract's OWN "I will verify by" commands once via the safe executor.
      * On a deterministic BEHAVIORAL failure (a command ran, exited nonzero, and is not a broken/
@@ -523,6 +535,9 @@ export function defaultConfig(): SparraConfig {
         "make test", "make build", "make check",
       ],
       flakinessReruns: 2,
+      // Off by default so Sparra's own CI is unaffected; opting in adds a concurrent-CPU-load
+      // rerun so a suite that only times out under machine load is caught deterministically.
+      flakinessLoadRerun: false,
       // Off by default: opting in bounces a generation that fails its own verify commands
       // straight back to the generator, skipping (and saving) an evaluator session that round.
       preflightVerify: false,
