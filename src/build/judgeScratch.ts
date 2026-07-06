@@ -4,10 +4,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SparraConfig } from "../config.ts";
 import { stringProcessEnv } from "./env.ts";
+import { ensureSwiftpmCacheDir } from "../util/provision.ts";
 
 /**
- * Default WRITABLE-SCRATCH env layer for the SANDBOXED JUDGE role-runs (the evaluator AND the
- * contract-evaluator).
+ * Default WRITABLE-SCRATCH env layer for the SANDBOXED build sessions — the two judge role-runs
+ * (evaluator AND contract-evaluator), the GENERATOR/writer, and the CONTRACT-negotiation sessions.
+ * (It began judge-only; U-X extended it to the generator + contract paths so a Swift build/test gate
+ * is observable AS SHIPPED there too, not just under the judge.)
  *
  * A read-only Codex sandbox / an unwritable `$HOME` breaks otherwise-innocent tooling BEFORE any
  * Sparra code runs, so a "prove this verify command runs" probe EPERMs at startup and the gate is
@@ -42,27 +45,60 @@ const SUBDIRS: Record<(typeof JUDGE_SCRATCH_ENV_KEYS)[number], string> = {
   SWIFTPM_CACHE_DIR: "swiftpm", // SwiftPM cache root (best-effort; user build.env can override)
 };
 
+/**
+ * Pure: the env-layer values for a scratch root (no fs). TMPDIR + clang cache always point UNDER
+ * `scratchDir` (regenerable per session). `swiftpmDir` overrides where SWIFTPM_CACHE_DIR points — a
+ * DURABLE worktree-local cache the prewarm + sibling sessions share; omitted, it falls back UNDER
+ * `scratchDir` (the original judge behavior, so `judgeScratchEnvLayer` stays byte-identical).
+ */
+export function scratchEnvLayer(scratchDir: string, swiftpmDir?: string): Record<string, string> {
+  return {
+    TMPDIR: path.join(scratchDir, SUBDIRS.TMPDIR),
+    CLANG_MODULE_CACHE_PATH: path.join(scratchDir, SUBDIRS.CLANG_MODULE_CACHE_PATH),
+    SWIFTPM_CACHE_DIR: swiftpmDir ?? path.join(scratchDir, SUBDIRS.SWIFTPM_CACHE_DIR),
+  };
+}
+
 /** Pure: the default env-layer values for a scratch root (no fs). Each points UNDER `scratchDir`. */
 export function judgeScratchEnvLayer(scratchDir: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const key of JUDGE_SCRATCH_ENV_KEYS) out[key] = path.join(scratchDir, SUBDIRS[key]);
-  return out;
+  return scratchEnvLayer(scratchDir);
 }
 
 /**
- * Merge the default scratch layer into the build env with the documented precedence:
+ * Merge the scratch layer into the build env with the documented precedence:
  *   process.env (base) < scratch defaults < user `build.env` (wins).
  * So a user override of TMPDIR/CLANG_MODULE_CACHE_PATH/SWIFTPM_CACHE_DIR beats the default, every
  * unrelated `process.env` value is preserved, and (unlike `mergedBuildEnv`) the result is ALWAYS a
- * map — the scratch keys must reach the SDK even when `build.env` is empty.
+ * map — the scratch keys must reach the SDK even when `build.env` is empty. `swiftpmDir` (when given)
+ * routes SWIFTPM_CACHE_DIR at the durable worktree-local cache; omitted → under `scratchDir`.
  */
+export function sandboxEnv(
+  config: SparraConfig,
+  scratchDir: string,
+  opts: { swiftpmDir?: string; src?: NodeJS.ProcessEnv } = {}
+): Record<string, string> {
+  const buildEnv = config.build.env ?? {};
+  return { ...stringProcessEnv(opts.src ?? process.env), ...scratchEnvLayer(scratchDir, opts.swiftpmDir), ...buildEnv };
+}
+
+/** Back-compat thin wrapper (the JUDGE call shape): SWIFTPM_CACHE_DIR lands under `scratchDir`. */
 export function judgeSandboxEnv(
   config: SparraConfig,
   scratchDir: string,
   src: NodeJS.ProcessEnv = process.env
 ): Record<string, string> {
-  const buildEnv = config.build.env ?? {};
-  return { ...stringProcessEnv(src), ...judgeScratchEnvLayer(scratchDir), ...buildEnv };
+  return sandboxEnv(config, scratchDir, { src });
+}
+
+/**
+ * Assemble the writable-scratch session env every SANDBOXED build session uses — the generator, the
+ * contract-negotiation sessions, AND the two judge roles. Creates a FRESH per-session scratch root
+ * (ephemeral TMPDIR + clang cache) and points SWIFTPM_CACHE_DIR at the DURABLE worktree-local cache
+ * keyed on `workspaceDir` (so an offline `swift build` reuses the state the provisioning prewarm
+ * produced). Precedence is preserved: process.env < scratch defaults < user `build.env`.
+ */
+export function createSandboxSessionEnv(config: SparraConfig, workspaceDir: string): Record<string, string> {
+  return sandboxEnv(config, createJudgeScratch(), { swiftpmDir: ensureSwiftpmCacheDir(workspaceDir) });
 }
 
 /**

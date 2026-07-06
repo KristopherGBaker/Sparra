@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { generateItem } from "../src/build/generate.ts";
 import { appleConventions, isApplePlatform } from "../src/build/swiftConventions.ts";
+import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
+import { swiftpmCacheDir } from "../src/util/provision.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -64,6 +66,43 @@ describe("appleConventions / isApplePlatform", () => {
     expect(ios).toContain("ProcessInfo.processInfo.arguments");
     // macOS uses an XCUITest target for reach, not simctl launch args — the ios-only clause is absent.
     expect(mac).not.toContain("ProcessInfo.processInfo.arguments");
+  });
+});
+
+describe("generateItem — writable-scratch session env (U-X #1/#3/#4)", () => {
+  it("routes the redirect keys into the autonomous generator session env (durable SwiftPM, ephemeral clang/TMPDIR)", async () => {
+    const { ctx, dir } = await ctxFor("ios");
+    let captured: RunSessionParams | undefined;
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (captured = p)),
+    });
+    const env = captured!.env!;
+    expect(env).toBeDefined();
+    // Previously plain mergedBuildEnv (no redirect); now every scratch key reaches the SDK env.
+    for (const key of JUDGE_SCRATCH_ENV_KEYS) expect(typeof env[key]).toBe("string");
+    expect(env.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
+    expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+    // Durable, worktree-local SwiftPM cache keyed on the workspace — NOT the ephemeral per-run scratch.
+    expect(env.SWIFTPM_CACHE_DIR).toBe(swiftpmCacheDir(dir));
+    expect(env.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+    expect(env.PATH).toBe(process.env.PATH); // unrelated process.env survives
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("user build.env still overrides the generator scratch defaults", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.build.env = { TMPDIR: "/mine", FOO: "1" };
+    let captured: RunSessionParams | undefined;
+    await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: fakeRun((p) => (captured = p)),
+    });
+    const env = captured!.env!;
+    expect(env.TMPDIR).toBe("/mine"); // user override beats the scratch default
+    expect(env.FOO).toBe("1");
+    expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/); // non-colliding default still applies
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

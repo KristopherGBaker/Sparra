@@ -604,7 +604,7 @@ describe("runRole — exercising evaluator scratch + integrity guard", () => {
   });
 });
 
-describe("runRole — default writable-scratch env layer for sandboxed judge roles (U-A #1/#3)", () => {
+describe("runRole — writable-scratch env layer for sandboxed build sessions (U-A #1/#3, U-X generator)", () => {
   const JUDGE: RoleKind[] = ["evaluator", "contract-evaluator"];
 
   it.each(JUDGE)("%s: (a) empty build.env ⇒ default scratch keys reach the request env", async (kind) => {
@@ -657,23 +657,9 @@ describe("runRole — default writable-scratch env layer for sandboxed judge rol
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("(#3) the WRITER (generator) gets NO default-layer keys: env undefined with empty build.env", async () => {
+  it("(U-X #1) the WRITER (generator) NOW gets the scratch keys (empty build.env), process.env preserved", async () => {
     const { ctx, dir } = await makeCtx();
-    const rec = recorder();
-    await runRole({
-      ctx,
-      roleKind: "generator",
-      brief: "build it",
-      runSessionFn: rec.fn,
-      changedFilesFn: () => [path.join(dir, "x.ts")],
-    });
-    expect(rec.calls[0]!.env).toBeUndefined(); // scrubbed — no scratch keys smuggled in
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("(#3) with user build.env set, the writer env EQUALS mergedBuildEnv (no scratch keys added)", async () => {
-    const { ctx, dir } = await makeCtx();
-    ctx.config.build.env = { FOO: "bar" };
+    expect(ctx.config.build.env).toEqual({}); // default
     const rec = recorder();
     await runRole({
       ctx,
@@ -683,14 +669,49 @@ describe("runRole — default writable-scratch env layer for sandboxed judge rol
       changedFilesFn: () => [path.join(dir, "x.ts")],
     });
     const env = rec.calls[0]!.env!;
-    expect(env).toEqual(mergedBuildEnv(ctx.config)); // byte-for-byte the plain merged env
+    expect(env).toBeDefined();
+    // Every redirect key reaches the writer's session env (previously it was plain mergedBuildEnv).
+    for (const key of JUDGE_SCRATCH_ENV_KEYS) expect(typeof env[key]).toBe("string");
+    // Ephemeral clang/TMPDIR scratch under a fresh per-run root; SWIFTPM at the DURABLE worktree cache.
+    expect(env.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
+    expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+    expect(env.SWIFTPM_CACHE_DIR).toMatch(/sparra-swiftpm/);
+    expect(env.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/); // durable, not the ephemeral scratch
+    // Unrelated process.env survives the merge.
+    expect(env.PATH).toBe(process.env.PATH);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(U-X #1/#4) a colliding user build.env key WINS over the writer's scratch default", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.env = { TMPDIR: "/user/chosen/tmp", FOO: "bar" };
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "build it",
+      runSessionFn: rec.fn,
+      changedFilesFn: () => [path.join(dir, "x.ts")],
+    });
+    const env = rec.calls[0]!.env!;
+    expect(env.TMPDIR).toBe("/user/chosen/tmp"); // user override beats the scratch default
     expect(env.FOO).toBe("bar");
-    // No scratch REDIRECT was added: any TMPDIR present is the inherited process.env one (not sprj-*).
-    if (env.TMPDIR !== undefined) {
-      expect(env.TMPDIR).toBe(process.env.TMPDIR);
-      expect(env.TMPDIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+    // The non-colliding defaults still land in scratch / the durable cache.
+    expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+    expect(env.SWIFTPM_CACHE_DIR).toMatch(/sparra-swiftpm/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(U-X #1) the read-only proposer roles (reviewer, contract-generator) keep the plain merged env", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    for (const kind of ["reviewer", "contract-generator"] as RoleKind[]) {
+      const rec = recorder();
+      await runRole({ ctx, roleKind: kind, brief: "look at it", runSessionFn: rec.fn });
+      // Empty build.env → mergedBuildEnv returns undefined; no scratch redirect smuggled in.
+      expect(rec.calls[0]!.env).toEqual(mergedBuildEnv(ctx.config));
+      const env = rec.calls[0]!.env;
+      if (env?.TMPDIR !== undefined) expect(env.TMPDIR).not.toMatch(/sprj-[0-9a-f]{8}/);
     }
-    expect(env.CLANG_MODULE_CACHE_PATH).toBe(process.env.CLANG_MODULE_CACHE_PATH);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

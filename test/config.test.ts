@@ -97,14 +97,15 @@ describe("exercise.ios.visual knob", () => {
 });
 
 describe("git.provisionDeps knob", () => {
-  it("defaults to { enabled: true, dirs: ['node_modules'] }", () => {
-    expect(defaultConfig().git.provisionDeps).toEqual({ enabled: true, dirs: ["node_modules"] });
+  it("defaults to { enabled: true, dirs: ['node_modules'], swiftPackages: true }", () => {
+    expect(defaultConfig().git.provisionDeps).toEqual({ enabled: true, dirs: ["node_modules"], swiftPackages: true });
   });
 
-  it("a partial YAML override of enabled keeps dirs AND sibling git knobs", () => {
+  it("a partial YAML override of enabled keeps dirs, swiftPackages AND sibling git knobs", () => {
     const merged = deepMerge<SparraConfig>(defaultConfig(), { git: { provisionDeps: { enabled: false } } });
     expect(merged.git.provisionDeps.enabled).toBe(false);
     expect(merged.git.provisionDeps.dirs).toEqual(["node_modules"]); // sibling key survives the partial merge
+    expect(merged.git.provisionDeps.swiftPackages).toBe(true); // sibling key survives the partial merge
     expect(merged.git.strategy).toBe("worktree"); // sibling git.* knob survives
   });
 });

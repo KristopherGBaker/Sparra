@@ -169,19 +169,24 @@ The few that matter most:
   write the scratch they need (network off; a source-integrity guard reverts+fails any
   artifact-source write). `read-only` is the strict pre-fix behavior. The Claude evaluator
   exercises via the in-process runner regardless.
-- **default writable-scratch env layer (judge roles)** — the **evaluator** and **contract-evaluator**
-  role-runs get a default env layer (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
-  `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh per-run writable **scratch** dir,
-  so a read-only sandbox / unwritable `$HOME` no longer EPERMs *before any Sparra code runs*: Vitest's
+- **default writable-scratch env layer (all sandboxed build sessions)** — the **evaluator**,
+  **contract-evaluator**, the **generator/writer**, AND the **contract-negotiation** sessions get a
+  default env layer (`src/build/judgeScratch.ts`, `createSandboxSessionEnv`) that redirects `TMPDIR`,
+  `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into writable **scratch**, so a read-only sandbox
+  / unwritable `$HOME` no longer EPERMs *before any Sparra code runs*: Vitest's
   `node_modules/.vite-temp`/`/var/folders` temp writes, the **tsx** IPC socket **path** under
-  `tmpdir/tsx-*`, and clang's `~/.cache/clang/ModuleCache`. Precedence:
+  `tmpdir/tsx-*`, and clang's `~/.cache/clang/ModuleCache`. `TMPDIR`/`CLANG_MODULE_CACHE_PATH` are a
+  fresh per-run scratch (regenerable), while **`SWIFTPM_CACHE_DIR`** is a **durable, worktree-local**
+  cache so an **offline** `swift build` reuses what the provisioning-time **SwiftPM prewarm** resolved
+  (`git.provisionDeps.swiftPackages`, default on). Precedence:
   `process.env` → scratch defaults → `build.env` (override wins). This fixes **path writability only** —
   the sandbox still denies unix-socket `listen(2)` as **policy**, so a tsx socket smoke still UN-RUNs
   under a sandboxed judge; that known limit is surfaced up front via the injected
   **known-capability matrix** (`sandboxCapabilityNotes`) so socket-dependent gates are classified
   UN-RUN, not re-proved. The contract-evaluator additionally
   relaxes to `workspace-write` (network off, integrity-guarded) on an isolated checkout so it can
-  prove the contract's verify commands run; `--worktree` now accepts it. See
+  prove the contract's verify commands run; `--worktree` now accepts it. The read-only proposer roles
+  (reviewer, contract-generator) keep the plain merged `build.env`. See
   [diagnose](subskills/diagnose.md) for the EPERM + socket-listen failure signatures.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold. `pivot.resetWorkspace` (default true) resets

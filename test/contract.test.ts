@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { negotiateContract } from "../src/build/contract.ts";
 import type { CommandExecutor, ExecOutcome } from "../src/build/exec.ts";
+import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
+import { swiftpmCacheDir } from "../src/util/provision.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -58,6 +60,46 @@ function fakeSession(commandForRound: (round: number) => string) {
 
 const usage = (command: string, stderr = "error: unknown option --bogus"): ExecOutcome => ({ ran: true, command, exitCode: 2, stdout: "", stderr, timedOut: false });
 const behavioral = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 1, stdout: "", stderr: "artifact not built yet", timedOut: false });
+
+describe("negotiateContract — writable-scratch session env (U-X #2)", () => {
+  const agreeExec: CommandExecutor = async (_ws, cmd) => behavioral(cmd); // behavioral ⇒ not broken ⇒ agrees r1
+
+  it("routes the redirect keys into BOTH negotiation sessions, durable SwiftPM keyed on the worktree", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = fakeSession(() => "mytool run");
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, agreeExec);
+    const genCall = session.calls.find((c) => c.role === "contract-generator")!;
+    const evalCall = session.calls.find((c) => c.role === "contract-evaluator")!;
+    expect(genCall).toBeDefined();
+    expect(evalCall).toBeDefined();
+    for (const call of [genCall, evalCall]) {
+      const env = call.env!;
+      expect(env).toBeDefined();
+      // Previously plain mergedBuildEnv; now every redirect key reaches the negotiation session env.
+      for (const key of JUDGE_SCRATCH_ENV_KEYS) expect(typeof env[key]).toBe("string");
+      expect(env.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
+      expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+      // Durable, worktree-local SwiftPM cache keyed on the build worktree — NOT the ephemeral scratch.
+      expect(env.SWIFTPM_CACHE_DIR).toBe(swiftpmCacheDir(wt));
+      expect(env.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("user build.env still overrides the negotiation scratch defaults", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    ctx.config.build.env = { TMPDIR: "/mine", FOO: "1" };
+    const session = fakeSession(() => "mytool run");
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, agreeExec);
+    const genCall = session.calls.find((c) => c.role === "contract-generator")!;
+    expect(genCall.env!.TMPDIR).toBe("/mine"); // user override beats the scratch default
+    expect(genCall.env!.FOO).toBe("1");
+    expect(genCall.env!.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+});
 
 describe("negotiateContract — harness verify-probe on agreement", () => {
   it("usage error re-opens negotiation with the probe output in the next generator's context; a fixed command then agrees", async () => {

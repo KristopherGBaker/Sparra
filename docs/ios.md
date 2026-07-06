@@ -67,6 +67,25 @@ Set `exercise.ios.platform: macos`. A Mac app runs on the host, and xcodebuildmc
 - AX/`osascript` synthetic events are deliberately **not** the drive mechanism — they need interactive Accessibility (TCC) permission and are unreliable headless.
 - No launch-screen/letterbox concern (that's iOS-only); the standard build-flag/sandbox conventions still apply.
 
+## SwiftPM dependency prewarm
+Two things break a Swift `swift build`/`swift test`/`make test` gate under a sandboxed run: a
+read-only `$HOME` (clang can't write `~/.cache/clang/ModuleCache`), and **network off** in a
+throwaway worktree (the first `swift build` can't resolve packages like GRDB). Sparra fixes both so
+the gate runs **as shipped** — no `--disable-sandbox` workaround baked into `project.yml`:
+
+- **Cache redirect (all sandboxed build sessions).** The generator, the two judge roles
+  (evaluator + contract-evaluator), and the contract-negotiation sessions get a writable-scratch env
+  layer (`src/build/judgeScratch.ts`, `createSandboxSessionEnv`) that points `CLANG_MODULE_CACHE_PATH`
+  and `TMPDIR` at a fresh per-run scratch dir, and **`SWIFTPM_CACHE_DIR`** at a **durable,
+  worktree-local** cache. Your `build.env` still overrides. See
+  [backends → writable-scratch env layer](backends.md#default-writable-scratch-env-layer-all-sandboxed-build-sessions).
+- **Dependency prewarm (`git.provisionDeps.swiftPackages`, default on).** When the worktree is
+  provisioned — while the network is still available — Sparra runs a `swift package resolve` into that
+  **same durable `SWIFTPM_CACHE_DIR`** if the tree is a SwiftPM package (`Package.swift` present). A
+  later **offline** `swift build` in the worktree reuses the resolved state instead of failing to
+  fetch. It's a **non-fatal no-op** off-knob, on a non-Swift project, or in-place; a prewarm failure
+  is warned, never aborting the build. Set `git.provisionDeps.swiftPackages: false` to skip it.
+
 ## Gotchas
 - **Builds are slow** — the exercise command timeout allows up to 10 minutes; building + booting a sim every round costs time/tokens.
 - **Local SwiftPM package in the project's own dir → use `path: .`, never `path: ./`.** When `project.yml` references a local package that lives in the same directory as the `.xcodeproj` (e.g. an engine package at the repo root), a trailing slash (`path: ./`) makes XcodeGen resolve it to the filesystem root `/`, emitting a folder reference. `xcodebuild` then recursively scans the whole disk on project load (stuck in `IDEContainer _locateFileReferencesRecursively`) — it pins a CPU, spawns **no** compiler workers, produces **zero** `.o` files, and "hangs" for many minutes. `path: .` (no slash) resolves correctly and builds in seconds. The generator is told this; see [diagnose](../skills/sparra/subskills/diagnose.md).

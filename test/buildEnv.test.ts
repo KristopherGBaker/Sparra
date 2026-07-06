@@ -211,7 +211,10 @@ describe("build.env SDK/backend injection", () => {
     });
     const a = callsA[0]!;
     const b = callsB[0]!;
-    expect(a.env).toBeUndefined();
+    // The generator now always gets the writable-scratch redirect layer (SWIFTPM_CACHE_DIR etc.),
+    // so env is always a map. The PROBE contrast is preserved: absent without build.env, present with.
+    expect(a.env?.SWIFTPM_CACHE_DIR).toBeDefined();
+    expect(a.env?.[PROBE]).toBeUndefined();
     expect(b.env?.[PROBE]).toBe("on");
     for (const key of ["permissionMode", "allowedTools", "disallowedTools", "mcpServers", "sandbox", "readOnly", "writeScope"] as const) {
       expect(b[key]).toEqual(a[key]);
