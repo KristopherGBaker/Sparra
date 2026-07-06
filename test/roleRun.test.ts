@@ -1077,6 +1077,127 @@ describe("runRole — writer no-progress fast-fail (Item B)", () => {
   });
 });
 
+describe("runRole — content-based writer progress detection (U-C)", () => {
+  // A file dirty at run START. On a continuation/fix round the workspace is already dirty, so
+  // path-set membership can't tell an edit-to-this-file from no work — content comparison can.
+  const DIRTY = "/ws/src/already-dirty.ts";
+  const CLEAN = "/ws/src/clean-untouched.ts";
+  const NEW = "/ws/src/brand-new.ts";
+
+  /** A recording content-hasher: `contents[path]` is a per-call sequence (snapshot call, then the
+   *  post-run count call). Records every path it is asked to hash so a test can assert bounded cost
+   *  (no clean untouched file is ever read). Clamps to the last entry for extra calls. */
+  function hasher(contents: Record<string, string[]>) {
+    const idx: Record<string, number> = {};
+    const reads: string[] = [];
+    const fn = (p: string): string => {
+      reads.push(p);
+      const seq = contents[p] ?? ["\0absent"];
+      const i = idx[p] ?? 0;
+      idx[p] = i + 1;
+      return seq[Math.min(i, seq.length - 1)]!;
+    };
+    return { reads, fn };
+  }
+
+  it("assertion 1: a REAL edit to a file already dirty at run start → filesChanged>0, no noProgress", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder(); // clean success
+    const h = hasher({ [DIRTY]: ["before-bytes", "after-bytes"] }); // snapshot ≠ post-run bytes
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Fix it (continuation round).",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[DIRTY], [DIRTY]]), // SAME path before+after — the false-signal case
+      hashFileFn: h.fn,
+    });
+    expect(r.filesChanged).toBe(1); // content differs → real progress, even though the SET didn't grow
+    expect(r.noProgress).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 2: a file dirty at start but UNTOUCHED contributes nothing → filesChanged 0, noProgress", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder("I could not act on the brief.");
+    const h = hasher({ [DIRTY]: ["same-bytes", "same-bytes"] }); // snapshot == post-run bytes
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Fix it.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[DIRTY], [DIRTY]]),
+      hashFileFn: h.fn,
+    });
+    expect(r.filesChanged).toBe(0);
+    expect(r.noProgress).toBe(true); // same classification-matrix branch as today, dirty workspace or not
+    expect(r.errors.some((e) => /changed no files/.test(e))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 3: a byte-identical rewrite of a dirty-at-start file is NOT progress", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder(); // clean success — the session ran, but rewrote identical bytes
+    // The session touched the file (still in the dirty set) but its content equals the pre-run
+    // snapshot bytes exactly → must NOT count.
+    const h = hasher({ [DIRTY]: ["v1", "v1"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Rewrite it identically.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[DIRTY], [DIRTY]]),
+      hashFileFn: h.fn,
+    });
+    expect(r.filesChanged).toBe(0);
+    expect(r.noProgress).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 4: the content-derived filesChanged feeds the WHOLE matrix (ec + landed edit → emptyCompletion, limit cleared)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "codex", model: "gpt" }; // no fallback
+    const rec = fixed({ ...EC_SHAPE, sessionId: "sess-ec-dirty" });
+    // A dirty-at-start file the run really edited — set unchanged, content changed.
+    const h = hasher({ [DIRTY]: ["h1", "h2"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Continue.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[DIRTY], [DIRTY]]),
+      hashFileFn: h.fn,
+    });
+    expect(r.filesChanged).toBe(1);
+    expect(r.emptyCompletion).toBe(true); // branch 3: work LANDED
+    expect(r.limitHit).toBeUndefined(); // the ec's limit is CLEARED — not "nothing ran"
+    expect(r.noProgress).toBeUndefined();
+    expect(r.sessionId).toBe("sess-ec-dirty");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 5: content reads are bounded — a clean untouched file is NEVER hashed; a brand-new file needs no read", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    // DIRTY is in the before+after sets (gets hashed); NEW appears only after (newly dirty ⇒
+    // definitely changed, no read needed); CLEAN is in NEITHER set and must never be read.
+    const h = hasher({ [DIRTY]: ["a", "b"] });
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Edit dirty + create new.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[DIRTY], [DIRTY, NEW]]),
+      hashFileFn: h.fn,
+    });
+    expect(r.filesChanged).toBe(2); // DIRTY edited (content) + NEW created (newly-dirty)
+    expect(h.reads).not.toContain(CLEAN); // the whole point: clean untouched files are never read
+    expect(h.reads).not.toContain(NEW); // a newly-dirty path is counted without a content read
+    expect(h.reads.every((p) => p === DIRTY)).toBe(true); // only the pre-run dirty set is hashed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("runRole — in-place generator self-verify opt-in (H7)", () => {
   /** Invoke the PreToolUse decider on the hooks the runner handed the session, end-to-end —
    *  so a forgotten thread-through (req.allowVerify → roleRun.ts → verifyInPlace → writer hooks)

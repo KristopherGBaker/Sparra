@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +36,26 @@ export function changedFiles(root: string): string[] {
     out.push(path.resolve(root, rel.replace(/^"|"$/g, "")));
   }
   return out;
+}
+
+/** Content marker for a path that can't be read (a staged/working deletion, or an unreadable
+ *  file). Two absent paths compare equal, so a file deleted BEFORE and still deleted AFTER a run
+ *  counts as unchanged. Chosen to never collide with a real hex sha-256 digest. */
+export const ABSENT_CONTENT = "\0absent";
+
+/**
+ * SHA-256 (hex) of a file's raw bytes, or `ABSENT_CONTENT` when the path can't be read. This is the
+ * content-comparison primitive behind writer progress detection: comparing the pre-run digest of a
+ * changed file to its post-run digest distinguishes a real edit to a file already dirty at run
+ * start (the normal continuation/fix-round case) from no work — which path-set membership cannot.
+ * Reads bytes (not utf8) so binary artifacts hash correctly.
+ */
+export function fileContentHash(file: string): string {
+  try {
+    return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    return ABSENT_CONTENT;
+  }
 }
 
 /**

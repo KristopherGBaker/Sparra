@@ -138,13 +138,18 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    to) and do NOT feed it back as a FAIL: resume the session (`resumeSessionId`/`resumeBackend`
    = the result's `sessionId`/`backend`) to re-emit the report, or verify the tree
    (typecheck/test) and accept the landed work, then evaluate as normal. `filesChanged`
-   is always populated for a generator — `>0` means work landed, whatever the flags say.
+   is always populated for a generator — the count of files whose **content** changed vs. a
+   pre-run snapshot (content-based, so an edit to a file already dirty at run start on a
+   continuation/fix round counts — no longer a false signal there); `>0` means work landed,
+   whatever the flags say.
    **Budget cap ≠ fail — RESUME:** if a summary carries `hitBudget: true`, the run
    stopped on OUR per-call USD cap (not a provider limit). Resume the same session via
    `resumeSessionId` (+ a raised `maxBudgetUsd`) to finish; if `filesChanged > 0`, the
    work may already be complete — check before spending more.
    **No progress ≠ fail:** if a generator summary carries `noProgress: true`, the writer
-   changed no files — a blocked brief or a starved permission path, not "the work is
+   changed no file's **content** (content-compared against a pre-run snapshot, so an edit to a
+   file already dirty at run start on a continuation/fix round DOES count — no longer a false
+   signal there) — a blocked brief or a starved permission path, not "the work is
    wrong." Don't feed it back as a behavioral FAIL; check the brief is actionable and the
    workspace readable, then re-run (a writer can always read its workspace, so a real
    no-progress almost always means the brief had nothing to do).

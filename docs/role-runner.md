@@ -113,8 +113,12 @@ reclassified (below) as `emptyCompletion`, with the ec's `limitHit` cleared.
 the per-call budget cap (`maxBudgetUsd` / `build.maxBudgetUsdPerItem`) or lose its final report
 emission even though the work fully landed on disk. So the writer **change-set probe runs however
 the run ended**, and every writer result carries:
-- **`filesChanged`** (always populated for a writer) — the count of newly-changed paths vs. the
-  pre-run snapshot; `>0` means work landed. Telemetry, never suppressed.
+- **`filesChanged`** (always populated for a writer) — the count of files whose **content** differs
+  from a pre-run snapshot; `>0` means work landed. Detection is **content-based, not path-set
+  membership**: a file that was already dirty at run start (the normal continuation/fix-round case)
+  and gets a real edit counts, while a dirty-but-untouched file — or a byte-identical rewrite —
+  does not. So it is **no longer a false signal on continuation rounds**. The snapshot is bounded to
+  git-reported changed files (clean untouched files are never read). Telemetry, never suppressed.
 - **`emptyCompletion: true`** — empty/failed result text **but files DID change**: the work
   LANDED, only the report failed to emit. **Resume the session** (`resumeSessionId` +
   `resumeBackend` = the result's `sessionId`/`backend`) to re-emit the report, or accept the
@@ -137,8 +141,10 @@ nothing). The holdout-read block is composed into the *same* hook as a deny-deci
 wins over the read allow (a holdout/`.sparra` read is denied even though it sits in the read scope);
 a pathless `Grep`/`Glob` over the cwd is **not** auto-granted (it could surface a cwd-resident
 holdout) and defers to the permission mode. As a backstop, a **writer that finishes without
-changing any file** is flagged `noProgress: true` on the result and the MCP payload — like
-`limitHit`, the conductor treats it as "investigate the brief/permissions", not a behavioral FAIL.
+changing any file's content** (content-compared against the pre-run snapshot, so an edit to an
+already-dirty file on a continuation round is NOT falsely flagged) is marked `noProgress: true` on
+the result and the MCP payload — like `limitHit`, the conductor treats it as "investigate the
+brief/permissions", not a behavioral FAIL.
 
 **Turn-cap stops.** If a role stops at the per-session turn cap (`build.maxTurnsPerSession`) with
 work unfinished, the result and MCP payload carry `hitMaxTurns: true` (suppressed under a limit,

@@ -24,7 +24,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
-import { addWipWorktree, changedFiles, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
+import { addWipWorktree, changedFiles, fileContentHash, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
@@ -151,6 +151,12 @@ export interface RoleRunRequest {
    *  detect a writer that produced ZERO file changes (the permission-starved no-progress case).
    *  Defaults to `changedFiles` (git status --porcelain). */
   changedFilesFn?: (workspace: string) => string[];
+  /** Injectable for tests; content-hashes a single file (abs path) so writer progress is detected
+   *  by per-file CONTENT comparison, not path-set membership — an edit to a file already dirty at
+   *  run start (the normal continuation/fix-round case) is real progress. Called ONLY on the union
+   *  of the before/after changed-file sets (bounded cost; clean untouched files are never read).
+   *  Defaults to `fileContentHash` (sha-256 of the bytes, or `ABSENT_CONTENT` if unreadable). */
+  hashFileFn?: (file: string) => string;
   /** Injectable for tests; defaults to the real `buildExerciser` (evaluator role only). Lets a test
    *  assert the harness-status override without driving a live model through run_command. */
   buildExerciserFn?: (config: Ctx["config"], workspace: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
@@ -638,12 +644,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.
   const snap = exerciseScratch ? snapshotArtifact(workspace, integrityDeps) : undefined;
 
-  // For a WRITER role, record the workspace's changed-file set BEFORE the run, so we can detect a
-  // generator that finished without changing anything (the permission-starved / blocked no-progress
-  // case) and surface a distinct signal instead of a silent FAIL.
+  // For a WRITER role, snapshot the CONTENT of every file dirty at run start, so we can detect a
+  // generator that made no real change (the permission-starved / blocked no-progress case) and
+  // surface a distinct signal instead of a silent FAIL. Path-set membership alone is a false
+  // signal on continuation/fix rounds — the workspace is already dirty, so a real edit to an
+  // already-changed file doesn't grow the set. Per-file content comparison catches it. The
+  // snapshot is bounded to git-reported changed files; clean untouched files are never read.
   const isWriter = spec.guard === "writer";
   const listChanges = req.changedFilesFn ?? changedFiles;
-  const writerBefore = isWriter ? new Set(listChanges(workspace)) : undefined;
+  const hashFile = req.hashFileFn ?? fileContentHash;
+  const writerBefore = isWriter ? new Map(listChanges(workspace).map((p) => [p, hashFile(p)])) : undefined;
 
   // Backend-agnostic request shared across attempts. Backend-specific fields (backend/model/effort/
   // baseUrl/apiKey/resume/traceSeq) are filled per attempt in the fallback loop below.
@@ -685,10 +695,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const chain: RoleConfig[] = [];
   for (let r: RoleConfig | undefined = role; r; r = r.fallback) chain.push(r);
   const limitedBackends = new Set<string>();
-  // Newly-changed paths for a writer, via the SAME writerBefore + changedFiles machinery as the
-  // no-progress probe (no second git-scan path). Recomputed after the final attempt below.
-  const countNewChanges = (): number =>
-    writerBefore ? listChanges(workspace).filter((p) => !writerBefore.has(p)).length : 0;
+  // Real content changes for a writer, via the SAME writerBefore snapshot machinery as the
+  // no-progress probe (no second git-scan path). A file counts iff its CURRENT content differs
+  // from its pre-run snapshot: a newly-changed/created file (absent from the snapshot) counts, a
+  // file dirty-at-start-but-untouched does NOT, and a file rewritten to its snapshot bytes does
+  // NOT. Content is read ONLY for the union of the before/after changed sets — clean untouched
+  // files (in neither set) are never hashed. Recomputed after the final attempt below.
+  const countNewChanges = (): number => {
+    if (!writerBefore) return 0;
+    let n = 0;
+    // Paths that entered git's dirty set DURING the run (in `after`, absent from the pre-run
+    // snapshot) definitely changed — a file can't become dirty/untracked without diverging from
+    // its committed state — so they count without a content read.
+    for (const p of listChanges(workspace)) if (!writerBefore.has(p)) n++;
+    // Paths dirty at run START need a CONTENT comparison against their snapshot: still-dirty-but-
+    // edited counts, dirty-but-untouched does NOT, and a rewrite back to the snapshot bytes does
+    // NOT. Only this pre-run set is hashed here — clean untouched files are never read.
+    for (const [p, before] of writerBefore) if (before !== hashFile(p)) n++;
+    return n;
+  };
   let res!: RunResult;
   let ranRole: RoleConfig = role;
   for (let i = 0; i < chain.length; i++) {
