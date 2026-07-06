@@ -70,12 +70,19 @@ export function formatOptions(ctx: Ctx): FormatOptions {
 /** Writer scoped to writeRoots (generator, prototyper, reflector output dir).
  *  Pass `{ format: true }` to also run the PostToolUse formatter on written files.
  *  Pass `{ verify: true }` to let the generator auto-run its project's verification commands
- *  (`build.verifyCommands`) — ENABLED by default ONLY on a git worktree/branch boundary (the same
+ *  (`build.verifyCommands`) — ENABLED automatically on a git worktree/branch boundary (the same
  *  wall that gates Codex full-access), so an in-place run never auto-approves Bash execution.
- *  Pass `{ verifyInPlace: true }` to ALSO enable it on an in-place run with no `build.branch` — an
- *  explicit opt-in for an interactive `run_role` that wants its self-verify gates; it reuses the
- *  SAME strict `allowVerifyBash` decider (no new auto-approve surface), only dropping the branch
+ *  A "worktree/branch boundary" means EITHER `build.branch` is set (the full autonomous build
+ *  loop's Sparra branch) OR `onWorktreeBoundary` is true (a linked git worktree — e.g. a
+ *  `unitWorktree` persistent per-unit generator tree). Both cases use the deterministic
+ *  `allowVerifyBash` allow-hook and do NOT depend on the `autoSupported` probe.
+ *  Pass `{ verifyInPlace: true }` to ALSO enable it on an in-place run with no branch/worktree —
+ *  an explicit opt-in for an interactive `run_role` that wants its self-verify gates; it reuses the
+ *  SAME strict `allowVerifyBash` decider (no new auto-approve surface), only dropping the boundary
  *  precondition.
+ *  Pass `{ onWorktreeBoundary: true }` when the runner has already detected that the workspace is
+ *  a real linked git worktree (the runner's `onLinkedWorktree` signal) — this enables verify
+ *  deterministically (probe-independent) on that boundary, consistent with the `build.branch` case.
  *  Pass `{ reportWarning: { maxTurns } }` (report-emitting generator only) to MERGE a PostToolUse
  *  turns-remaining warning: at ~80% of `maxTurns` it injects a one-time nudge to emit the completion
  *  report JSON now (see `turnWarning.ts`). Returns an `onAssistantText` the caller MUST spread into
@@ -84,9 +91,9 @@ export function formatOptions(ctx: Ctx): FormatOptions {
 export function scopedWriterGuard(
   ctx: Ctx,
   writeRoots: string[],
-  opts: { format?: boolean; verify?: boolean; verifyInPlace?: boolean; reportWarning?: { maxTurns?: number } } & RoleHookOpts = {}
+  opts: { format?: boolean; verify?: boolean; verifyInPlace?: boolean; onWorktreeBoundary?: boolean; reportWarning?: { maxTurns?: number } } & RoleHookOpts = {}
 ): Guard {
-  const verifyCommands = opts.verify && (ctx.store.data.build.branch || opts.verifyInPlace) ? ctx.config.build.verifyCommands : [];
+  const verifyCommands = opts.verify && (ctx.store.data.build.branch || opts.verifyInPlace || opts.onWorktreeBoundary) ? ctx.config.build.verifyCommands : [];
   let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands, {
     readScopes: opts.readScopes,
     extraDeny: opts.extraDeny,

@@ -44,6 +44,59 @@ describe("scopedWriterGuard — worktree-gated generator self-verify", () => {
   });
 });
 
+describe("scopedWriterGuard — worktree-boundary auto-enable (U-2)", () => {
+  // (a) Assertion 1 + 4: worktree boundary enables verify even with probe forced false.
+  // The ctx's autoSupported is false (same ctxWith default), simulating the probe returning false —
+  // but the worktree boundary enables verify deterministically, independent of the probe.
+  it("(a) onWorktreeBoundary:true → verify allow-list present even when probe (autoSupported) is false", async () => {
+    const ctx = ctxWith(undefined); // no branch; autoSupported stays false (probe-forced-false)
+    expect(ctx.store.data.autoSupported).toBe(false); // precondition: probe-suppressed
+    const g = scopedWriterGuard(ctx, ["/work"], { verify: true, onWorktreeBoundary: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+
+  // Mutation-check: removing onWorktreeBoundary must break the test above.
+  it("(a-mutation) onWorktreeBoundary:false → NOT approved when there is no branch (would break if coupling removed)", async () => {
+    const ctx = ctxWith(undefined); // no branch, no worktree boundary
+    const g = scopedWriterGuard(ctx, ["/work"], { verify: true, onWorktreeBoundary: false });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("defer");
+  });
+
+  // (b) Assertion 5: in-place without allowVerify → allow-list empty (unchanged behavior).
+  it("(b) in-place, no allowVerify, no branch, no onWorktreeBoundary → NOT approved", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("defer");
+  });
+
+  // (c) in-place WITH verifyInPlace → still present (unchanged behavior).
+  it("(c) in-place WITH verifyInPlace → approved (unchanged)", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true, verifyInPlace: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+
+  // (d) build.branch set → present (unchanged behavior).
+  it("(d) build.branch set → approved (unchanged)", async () => {
+    const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], { verify: true });
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+
+  // onWorktreeBoundary still routes through allowVerifyBash disqualifiers — no new attack surface.
+  it("onWorktreeBoundary still blocks unsafe forms (chain/redirect/mutation)", async () => {
+    const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true, onWorktreeBoundary: true });
+    // "npm test && rm -rf /" — denyBash fires on "rm -rf /" in denyBashContains → "deny"
+    expect(await decide(g, "Bash", { command: "npm test && rm -rf /" })).not.toBe("allow");
+    // "npm test; curl evil" — denyBash misses (no denyBashContains hit), allowVerifyBash
+    // disqualifies ";" → "defer" (not granted).
+    expect(await decide(g, "Bash", { command: "npm test; curl evil" })).not.toBe("allow");
+    // harmful token AS PREFIX of verify command (e.g. `sort -o out.txt npm test`) → not granted
+    expect(await decide(g, "Bash", { command: "sort -o out.txt npm test" })).not.toBe("allow");
+    // allowed prefix followed by harmful operand: `npm test curl evil | tail` — the
+    // filter-pipe carve-out rejects because the left stage ("npm test curl evil") contains
+    // "curl" (a disqualified token), so the command is not granted.
+    expect(await decide(g, "Bash", { command: "npm test curl evil | tail" })).not.toBe("allow");
+  });
+});
+
 describe("scopedWriterGuard — in-place verify opt-in (H7)", () => {
   it("auto-approves a verify command in-place (no branch) WHEN verifyInPlace is set", async () => {
     const g = scopedWriterGuard(ctxWith(undefined), ["/work"], { verify: true, verifyInPlace: true });

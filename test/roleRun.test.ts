@@ -2981,3 +2981,109 @@ describe("runRole — fallback provenance (U-1 assertions 1, 2, 7a–e)", () => 
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U-2: Worktree-boundary threading — runner-level test (Assertion 8, REQUIRED)
+//
+// The described defect is that the runner never THREADS `onLinkedWorktree` into
+// the guard call (roleRun.ts:888) or the selfVerifyGuidance call (:799). Leaf
+// tests that hand-pass the flag into the guard/guidance directly cannot catch a
+// typo/omission at those call sites. This suite drives `runRole` itself (the real
+// in-place path with an injectable worktree-check seam) and asserts, from the
+// CAPTURED RunSessionParams, that both sides are threaded from the one signal.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("runRole — U-2: worktree-boundary threading (runner-level, Assertion 8)", () => {
+  /** Call ALL PreToolUse hook matchers in order; return the first non-defer decision. */
+  async function decideAll(params: RunSessionParams, tool_name: string, tool_input: unknown): Promise<string> {
+    for (const matcher of params.hooks?.PreToolUse ?? []) {
+      for (const cb of matcher.hooks ?? []) {
+        const out: any = await cb({ hook_event_name: "PreToolUse", tool_name, tool_input } as any, "id", {} as any);
+        const d = out?.hookSpecificOutput?.permissionDecision ?? "defer";
+        if (d !== "defer") return d;
+      }
+    }
+    return "defer";
+  }
+
+  it("generator on a worktree boundary (isLinkedWorktreeFn→true): verify cmd auto-approved AND verifyGateWarning absent — BOTH call sites threaded from the one signal", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    // workspace !== ctx.root so the `workspace !== ctx.root` guard in the runner holds.
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-u2-wt-"));
+
+    // Brief/contract references a configured verify command — exercises the warning predicate
+    // (Assertion 8: "warning half must be non-vacuous": contract must reference a verify cmd so
+    // a still-broken selfVerifyGuidance call would produce a non-null warning here).
+    const cmd = ctx.config.build.verifyCommands[0]!; // "npm test" by default
+    const contract = `## I will verify by\n- \`${cmd}\` → exits 0`;
+
+    const rec = recorder();
+    const result = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: `Build the thing. Gate: ${cmd}`,
+      contract,
+      workspace,
+      isLinkedWorktreeFn: () => true,  // inject: force the worktree-boundary signal at roleRun.ts:762
+      provisionFn: () => ({ copied: [], skipped: [], failed: [] }), // skip real dep copy
+      prewarmSwiftFn: () => ({ ran: false, ok: true, skipped: "not-a-swift-package" as const }), // skip prewarm
+      changedFilesFn: () => [],        // skip git status in the progress probe
+      hashFileFn: () => "hash",
+      runSessionFn: rec.fn,
+    });
+
+    // (i) Guard call site threaded: the captured PreToolUse hooks auto-approve the verify command.
+    expect(rec.calls).toHaveLength(1);
+    const decision = await decideAll(rec.calls[0]!, "Bash", { command: cmd });
+    expect(decision).toBe("allow");
+
+    // (ii) Warning predicate call site threaded: no verifyGateWarning.
+    //      Non-vacuous because the contract DOES reference `cmd` — if that selfVerifyGuidance call
+    //      still ignored onLinkedWorktree the warning would fire (mutation-check below proves this).
+    expect(result.verifyGateWarning).toBeFalsy();
+
+    // (iii) roleSystemPrompt call site threaded (the 3rd / final site): the generator's system
+    //       prompt CONTAINS the SELF-VERIFY guidance AND the configured verify command.
+    //       This is the divergence the adversarial evaluator caught: guard=allow + warning=null
+    //       but systemPrompt missing SELF-VERIFY means the generator is never TOLD it may run
+    //       the commands — a linked-worktree generator writes blind despite auto-approved gates.
+    //       Non-vacuous: the mutation-check below (boundary=false) shows the system prompt does
+    //       NOT contain SELF-VERIFY when the boundary signal is absent.
+    expect(rec.calls[0]!.systemPrompt).toContain("SELF-VERIFY");
+    expect(rec.calls[0]!.systemPrompt).toContain(cmd);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  // Mutation-check: isLinkedWorktreeFn→false flips ALL THREE sides — proving the test above is causal,
+  // not vacuous.  If the coupling were removed (the signal ignored), the "allow" test above
+  // would return "defer" and the warning test above would have result.verifyGateWarning truthy.
+  it("(mutation-check) isLinkedWorktreeFn→false: verify cmd NOT auto-approved AND verifyGateWarning fires", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-u2-nwt-"));
+    const cmd = ctx.config.build.verifyCommands[0]!;
+    const contract = `## I will verify by\n- \`${cmd}\` → exits 0`;
+
+    const rec = recorder();
+    const result = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: `Build the thing. Gate: ${cmd}`,
+      contract,
+      workspace,
+      isLinkedWorktreeFn: () => false, // no boundary → old/non-wired behavior
+      changedFilesFn: () => [],
+      hashFileFn: () => "hash",
+      runSessionFn: rec.fn,
+    });
+
+    const decision = await decideAll(rec.calls[0]!, "Bash", { command: cmd });
+    expect(decision).toBe("defer");             // NOT auto-approved — guard not enabled
+    expect(result.verifyGateWarning).toBeTruthy(); // warning fires — warning predicate off
+    // System prompt also missing SELF-VERIFY — roleSystemPrompt site off too (3rd site).
+    expect(rec.calls[0]!.systemPrompt).not.toContain("SELF-VERIFY");
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});

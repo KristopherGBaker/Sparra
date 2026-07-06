@@ -306,6 +306,12 @@ export interface RoleRunRequest {
    *  grade — not cross-model" note. Fully backwards-compatible: callers that omit this field see
    *  identical behavior to before. */
   crossModelBaseline?: { backend?: string; model?: string };
+  /** Injectable for tests: overrides the real `isLinkedWorktree` git probe that detects whether the
+   *  workspace is a linked worktree. Inject `() => true` to force the worktree-boundary signal
+   *  without needing a real `git worktree add` — so runner-level tests can verify BOTH call sites
+   *  (the guard and the selfVerifyGuidance warning) are threaded from the one `onLinkedWorktree`
+   *  signal without a live git repo. Production code uses the real probe (default: undefined). */
+  isLinkedWorktreeFn?: (dir: string) => boolean;
   /** Injectable for tests; defaults to the real `buildExerciser` (evaluator role only). Lets a test
    *  assert the harness-status override without driving a live model through run_command. */
   buildExerciserFn?: (config: Ctx["config"], workspace: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
@@ -438,13 +444,17 @@ function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[
 }
 
 /** Fill the union of placeholders the standard role prompts use. Unknown placeholders are
- *  left visible (a misconfigured custom prompt should be obvious, not silently blanked). */
+ *  left visible (a misconfigured custom prompt should be obvious, not silently blanked).
+ *  `onWorktreeBoundary` is the runner's `onLinkedWorktree` signal — passed here so the
+ *  SELF_VERIFY guidance uses the same enabling condition as the guard and the warning predicate
+ *  (U-2 Assertion 2 / 3rd call site). */
 async function roleSystemPrompt(
   ctx: Ctx,
   kind: RoleKind,
   exerciseGuidance: string,
   allowVerify = false,
-  inProcessMcp = true
+  inProcessMcp = true,
+  onWorktreeBoundary = false
 ): Promise<string> {
   const template = await loadPrompt(ctx.paths, SPECS[kind].promptName);
   return fill(template, {
@@ -462,7 +472,9 @@ async function roleSystemPrompt(
     ASSERTION_MIN: String(ctx.config.contract.assertionMin),
     ASSERTION_MAX: String(ctx.config.contract.assertionMax),
     MODE_CLAUSES: contractModeClauses(ctx),
-    SELF_VERIFY: selfVerifyGuidance(ctx, allowVerify),
+    // U-2: pass the same worktree-boundary signal so the prompt's SELF-VERIFY guidance is
+    // enabled deterministically on a linked worktree — consistent with the guard and warning.
+    SELF_VERIFY: selfVerifyGuidance(ctx, allowVerify, onWorktreeBoundary),
   });
 }
 
@@ -790,7 +802,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // A LINKED-WORKTREE workspace gets BOTH dep provisioning (here) and exercise scratch (Item E,
   // below). Probe `isLinkedWorktree` ONCE and reuse — but only when the workspace differs from the
   // ctx root, so the common in-place case (workspace === ctx.root) never spawns git.
-  const onLinkedWorktree = workspace !== ctx.root && isLinkedWorktree(workspace);
+  // Injectable via `req.isLinkedWorktreeFn` so runner-level tests can force the boundary signal
+  // without a real `git worktree add` (U-2 assertion 8 runner-level test).
+  const linkedWorktreeCheck = req.isLinkedWorktreeFn ?? isLinkedWorktree;
+  const onLinkedWorktree = workspace !== ctx.root && linkedWorktreeCheck(workspace);
 
   // Provision dep dirs (node_modules) into the worktree so the evaluator's exercise and the
   // generator's verify commands run there without a slow network `npm install`. The full build loop
@@ -828,7 +843,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Compute self-verify-enabled via the SAME predicate as selfVerifyGuidance (Assertion 4 —
   // no divergent copy): selfVerifyGuidance returns "" iff self-verify is off or no cmds.
   // We pass the result as a boolean to verifyGateWarning, which is purely a contract-scan.
-  const selfVerifyOn = selfVerifyGuidance(ctx, req.allowVerify) !== "";
+  // U-2: pass the worktree-boundary signal (onLinkedWorktree) so the warning predicate uses
+  // the SAME enabling condition as the guard — preventing the guard-enabled/warning-misfiring
+  // divergence Assertion 2 forbids.
+  const selfVerifyOn = selfVerifyGuidance(ctx, req.allowVerify, onLinkedWorktree) !== "";
   const gateWarn = verifyGateWarning(roleKind, contract, ctx, selfVerifyOn);
   if (gateWarn) {
     warn(`role-run-${roleKind}: ${gateWarn}`);
@@ -855,7 +873,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const evaluator = isEvaluator(roleKind);
 
   const exerciser = evaluator ? (req.buildExerciserFn ?? buildExerciser)(ctx.config, workspace) : undefined;
-  const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "", req.allowVerify);
+  // U-2: pass onLinkedWorktree as the boundary signal so the SELF-VERIFY guidance in the
+  // generator's system prompt is enabled deterministically on a worktree boundary — same
+  // signal as the guard and the warning predicate (3rd / final call site).
+  const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "", req.allowVerify, true, onLinkedWorktree);
 
   // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
   // build branch OR a linked git worktree) so a Codex exercise can write node_modules/.vite-temp etc.;
@@ -917,7 +938,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const extraDeny = evaluator ? [] : [makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)];
   const guard: Guard =
     spec.guard === "writer"
-      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, readScopes, extraDeny })
+      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, onWorktreeBoundary: onLinkedWorktree, readScopes, extraDeny })
       : spec.guard === "evaluator"
         ? evaluatorGuard(ctx, { readScopes, extraDeny })
         : readOnlyGuard(ctx, { readScopes, extraDeny });
@@ -1044,7 +1065,8 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           roleKind,
           attemptInProcessMcp ? exerciser.guidance : nativeRunnerGuidance(exerciser.guidance),
           req.allowVerify,
-          attemptInProcessMcp
+          attemptInProcessMcp,
+          onLinkedWorktree // U-2: same boundary signal for per-attempt re-assembly
         )
       : system;
     // KNOWN sandbox-capability matrix for a sandboxed JUDGE on THIS attempt's backend (empty for a

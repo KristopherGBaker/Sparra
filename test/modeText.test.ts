@@ -122,6 +122,56 @@ describe("selfVerifyGuidance — in-place opt-in ungating (H7 assertion 7e)", ()
   });
 });
 
+describe("selfVerifyGuidance + verifyGateWarning — worktree-boundary (U-2 assertions 1/2/3/e)", () => {
+  // (e) Assertion 8e: selfVerifyGuidance emits the SELF-VERIFY block on a worktree boundary
+  // even without build.branch or allowVerify — probe-independent.
+  it("(e) onWorktreeBoundary=true → block emitted even with no branch and no allowVerify", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    expect(ctx.store.data.build.branch).toBeFalsy(); // no branch
+    expect(ctx.config.build.verifyCommands.length).toBeGreaterThan(0); // precondition
+
+    const out = selfVerifyGuidance(ctx, false, true);
+    expect(out).toContain("SELF-VERIFY");
+    expect(out).toContain(ctx.config.build.verifyCommands[0]!);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Mutation-check: removing onWorktreeBoundary must flip the result to "".
+  it("(e-mutation) onWorktreeBoundary=false + no branch + no allowVerify → empty (coupling required)", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    expect(selfVerifyGuidance(ctx, false, false)).toBe("");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (Assertion 3 / U-2 warning consistent): verifyGateWarning returns null on a worktree boundary
+  // even when the contract references a verify command (Assertion 3 of U-2 — warning consistent).
+  it("(e) verifyGateWarning is null on a worktree boundary (selfVerifyGuidance returns non-empty)", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    ctx.config.build.verifyCommands = ["npm test", "npm run typecheck"];
+    const contract = "## I will verify by\n- `npm test` → exits 0\n- `npm run typecheck` → exits 0";
+
+    // On a worktree boundary selfVerifyGuidance returns non-empty → selfVerifyEnabled = true.
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, false, true) !== "";
+    expect(selfVerifyEnabled).toBe(true); // precondition: mutation-checked
+
+    const w = verifyGateWarning("generator", contract, ctx, selfVerifyEnabled);
+    expect(w).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Boundary adversary: worktreeBoundary=false, no branch → warning DOES fire (so the null above is causal).
+  it("(e-mutation) warning fires when boundary=false, no branch, contract has cmd — proves above is non-vacuous", async () => {
+    const { ctx, dir } = await makeCtx("existing");
+    ctx.config.build.verifyCommands = ["npm test"];
+    const contract = "## I will verify by\n- `npm test` → exits 0";
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, false, false) !== ""; // off
+    expect(selfVerifyEnabled).toBe(false);
+    const w = verifyGateWarning("generator", contract, ctx, selfVerifyEnabled);
+    expect(w).not.toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("rubricText — anchored criterion definitions + band scale (Q4)", () => {
   it("names each criterion WITH its definition phrase (not bare weight lines)", async () => {
     const { ctx, dir } = await makeCtx("greenfield");
