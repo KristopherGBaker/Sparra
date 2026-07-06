@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
@@ -44,6 +44,10 @@ export interface RunRoleToolArgs {
    *  ACTUAL post-fallback identity matches this baseline — signalling the cross-model gate collapsed.
    *  Absent → no `sameModelGrade` on the result (backwards-compatible). */
   crossModelBaseline?: { backend?: string; model?: string };
+  /** Evaluator-only opt-in: run this command (must match a `build.verifyCommands` entry) at the
+   *  `evalBaseRef` SHA in a throwaway worktree and inject a runner-owned `[VERIFIED BASELINE]`
+   *  block the evaluator trusts over any brief prose. Requires `evalBaseRef`. */
+  baselineCommand?: string;
 }
 
 /**
@@ -76,6 +80,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     resumeSessionId: args.resumeSessionId,
     resumeBackend: args.resumeBackend,
     crossModelBaseline: args.crossModelBaseline,
+    baselineCommand: args.baselineCommand,
   };
 }
 
@@ -260,6 +265,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .describe(
           "Evaluator path only: the generator's { backend?, model? } identity (from the prior run_role result's `backend`/`model` fields). When supplied, the runner compares the evaluator's ACTUAL post-fallback backend+model against this baseline; if they match (same-model grade: the cross-model gate collapsed because the evaluator fell back to the generator's identity), the result and payload carry `sameModelGrade: true` and the verdict notes a warning. `false` when a baseline is present but differs; `undefined` when this field is absent (backwards-compatible). The result's `fallbackFrom` field (present when any fallback occurred) identifies the originally-requested evaluator role. Pass the generator's `backend`/`model` from its run_role result here."
         ),
+      baselineCommand: z
+        .string()
+        .optional()
+        .describe(
+          "Evaluator-only opt-in (requires evalBaseRef): a command from build.verifyCommands to run at the base ref SHA in a throwaway detached worktree. The runner (not the generator) produces a [VERIFIED BASELINE] block the evaluator trusts over any brief prose — a generator that broke tests cannot launder them by claiming pre-existence. Chained/piped/subshell forms and non-allowlisted commands are rejected pre-launch without spawning. An infra failure after the base resolves yields a [VERIFIED BASELINE: UNAVAILABLE] note; the eval proceeds. Off by default."
+        ),
     },
     async (args) => {
       try {
@@ -269,6 +280,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
         const ctx = await loadCtxForRole(root, { deferAutoProbe: true });
         const req = toRunRoleRequest(ctx, args);
         validateEvalProvenance(req);
+        validateBaselineCommand(req);
         await autoProbeCtx(ctx);
         const r = await runRole(req);
         // Surface a newer-default (`stale`) / conflicting prompt to the /sparra-loop conductor, so

@@ -304,6 +304,20 @@ export function removeWorktree(root: string, dir: string, force = false): { ok: 
 }
 
 /**
+ * Create a THROWAWAY DETACHED linked worktree at `wtDir` checked out at the exact commit `ref`
+ * resolves to (`git worktree add --detach <wtDir> <ref>`). Unlike `addWipWorktree` (which creates a
+ * temporary WIP-snapshot commit) and `addNamedWorktree` (which branches from HEAD), this checks out
+ * the exact historical commit — used by `computeVerifiedBaseline` to run a command at the base ref
+ * in an isolated tree. Refuses if the target dir already exists. Teardown: `removeWipWorktree` or
+ * `removeWorktree` (force).
+ */
+export function addDetachedWorktreeAt(srcDir: string, wtDir: string, ref: string): { ok: boolean; out: string } {
+  if (!isGitRepo(srcDir) || !hasCommits(srcDir)) return { ok: false, out: `${srcDir} is not a git repo with commits` };
+  if (exists(wtDir)) return { ok: false, out: `worktree target already exists: ${wtDir}` };
+  return git(srcDir, ["worktree", "add", "--detach", wtDir, ref]);
+}
+
+/**
  * Create a PERSISTENT linked worktree at `wtDir` on a NEW branch cut from `srcDir`'s HEAD
  * (`git worktree add -b <branch> <wtDir> HEAD`) — the same primitive the build loop's
  * `prepareWorkspace` uses. Unlike `addWipWorktree` (a DETACHED, throwaway WIP-snapshot commit), this

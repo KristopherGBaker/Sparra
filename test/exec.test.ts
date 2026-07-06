@@ -465,3 +465,56 @@ describe("rerunVerifyCommands — concurrent-LOAD rerun (build.flakinessLoadReru
     expect(kills).toEqual(["SIGKILL", "SIGKILL"]); // one kill per worker, once
   });
 });
+
+// ── capFrom: "tail" — baseline manifest needs the TAIL of output ─────────────────────────────────
+
+describe("runVerifyCommand — capFrom: 'tail' keeps the tail, default 'head' keeps the head", () => {
+  /** Fake spawn that emits a fixed stdout string then exits 0. */
+  function makeDataSpawn(data: string) {
+    return vi.fn((..._args: unknown[]) => {
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from(data));
+        child.emit("close", 0);
+      });
+      return child;
+    }) as unknown as typeof spawn;
+  }
+
+  it("default (head) clips from the START — tail marker absent, head marker present", async () => {
+    // HEAD_MARKER at start, then 200 filler chars, then TAIL_MARKER — total > cap (50)
+    const output = "HEAD_MARKER" + "A".repeat(200) + "TAIL_MARKER";
+    const spawnFn = makeDataSpawn(output);
+    const o = await runVerifyCommand("/ws", "echo ok", { spawnFn, outputCap: 50 });
+    expect(o.ran).toBe(true);
+    if (!o.ran) return;
+    expect(o.stdout).toContain("HEAD_MARKER");
+    expect(o.stdout).not.toContain("TAIL_MARKER");
+    expect(o.stdout.length).toBe(50);
+  });
+
+  it("capFrom:'tail' clips from the END — tail marker present, head marker absent", async () => {
+    const output = "HEAD_MARKER" + "A".repeat(200) + "TAIL_MARKER";
+    const spawnFn = makeDataSpawn(output);
+    const o = await runVerifyCommand("/ws", "echo ok", { spawnFn, outputCap: 50, capFrom: "tail" });
+    expect(o.ran).toBe(true);
+    if (!o.ran) return;
+    expect(o.stdout).toContain("TAIL_MARKER");
+    expect(o.stdout).not.toContain("HEAD_MARKER");
+    expect(o.stdout.length).toBe(50);
+  });
+
+  it("anti-no-op: with small output (< cap), head and tail agree — both markers present", async () => {
+    // Short output — head and tail are the same; both markers visible regardless of direction.
+    const output = "HEAD_MARKER" + "TAIL_MARKER";
+    const head = await runVerifyCommand("/ws", "echo ok", { spawnFn: makeDataSpawn(output), outputCap: 500 });
+    const tail = await runVerifyCommand("/ws", "echo ok", { spawnFn: makeDataSpawn(output), outputCap: 500, capFrom: "tail" });
+    expect(head.ran && head.stdout.includes("HEAD_MARKER")).toBe(true);
+    expect(head.ran && head.stdout.includes("TAIL_MARKER")).toBe(true);
+    expect(tail.ran && tail.stdout.includes("HEAD_MARKER")).toBe(true);
+    expect(tail.ran && tail.stdout.includes("TAIL_MARKER")).toBe(true);
+  });
+});

@@ -126,7 +126,8 @@ build:
   verifyCommands:             # commands the GENERATOR may self-run (typecheck/test/build) to stop
     [npm test, tsc, ...]      #   writing blind — auto-approved on a worktree boundary, or in-place via
                               #   run_role `allowVerify` / `--verify`; [] disables. Also the explicit
-                              #   opt-in for the harness executor's argv[0] allowlist (probe/rerun gate):
+                              #   opt-in for the harness executor's argv[0] allowlist (probe/rerun gate,
+                              #   AND the evaluator's `baselineCommand` allowlist — see below):
                               #   unknown tools are rejected by default; a prefix match here allows them.
                               #   PIPE SPLIT: the harness EXECUTOR (probe/rerun/preflight/measure) spawns
                               #   argv with no shell and rejects EVERY pipe (`npm test | tail` is unsafe
@@ -136,6 +137,15 @@ build:
                               #   re-checked for forbidden tokens so nothing launders behind the prefix,
                               #   and each filter stage is arg-validated (no file read/write). See
                               #   build-loop.md / role-runner.md.
+                              # `baselineCommand` (per-call CLI/MCP flag, not a config key) — evaluator-
+                              #   only, opt-in: `run_role baselineCommand=<cmd>` / `sparra eval/role run
+                              #   --baseline-command <cmd>`. Requires `evalBaseRef`. The RUNNER (not the
+                              #   generator) runs the allowlisted command at the base ref SHA in a
+                              #   throwaway DETACHED worktree, captures output (capped 10 KB), and injects
+                              #   a runner-owned `[VERIFIED BASELINE @ <sha>]` block the evaluator trusts
+                              #   over any prose carveout. The command must prefix-match a
+                              #   `build.verifyCommands` entry (no shell expansion, no pipes). Infra
+                              #   failures → UNAVAILABLE note; eval proceeds. See docs/role-runner.md.
   flakinessReruns: 2          # after a PASSING verdict the harness re-runs the contract's verify
                               #   commands this many times; ANY non-ok result demotes the pass to a
                               #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped,

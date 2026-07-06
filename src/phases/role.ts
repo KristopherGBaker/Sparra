@@ -1,5 +1,5 @@
 import { autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
+import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { banner, detail, err, info, ok, warn } from "../util/log.ts";
 
@@ -35,11 +35,12 @@ export async function cmdRoleRun(
 
   const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
 
-  // Validate eval-provenance params BEFORE the deferred auto-permission probe (a live SDK query):
-  // a bad `--expected-head`/`--eval-base` must abort with ZERO model tokens. Then run the probe
-  // (idempotent) only for a valid request, preserving the prior probe-then-run behavior.
+  // Validate eval-provenance params (and baselineCommand) BEFORE the deferred auto-permission probe
+  // (a live SDK query): a bad `--expected-head`/`--eval-base`/`--baseline-command` must abort with
+  // ZERO model tokens. Then run the probe (idempotent) only for a valid request.
   try {
     validateEvalProvenance(req);
+    validateBaselineCommand(req);
   } catch (e) {
     err((e as Error).message);
     process.exitCode = 1;
@@ -151,6 +152,9 @@ export function roleRequestFromFlags(
     // judgment to this unit (`<ref>..HEAD` + WIP). Both are strings; anything else is dropped.
     expectedHead: typeof flags["expected-head"] === "string" ? (flags["expected-head"] as string) : undefined,
     evalBaseRef: typeof flags["eval-base"] === "string" ? (flags["eval-base"] as string) : undefined,
+    // `--baseline-command <cmd>` (evaluator-only, requires --eval-base): run the allowlisted command
+    // at the base ref in a throwaway worktree, injecting a runner-owned [VERIFIED BASELINE] block.
+    baselineCommand: typeof flags["baseline-command"] === "string" ? (flags["baseline-command"] as string) : undefined,
   };
 }
 

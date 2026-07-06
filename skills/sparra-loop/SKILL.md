@@ -300,11 +300,14 @@ once they're launched.
   use **`sparra build --step=contract,round,commit,item`** — don't re-implement the loop here.
 
 ### Standalone eval on a WIP tree
-`sparra eval [dir] --worktree --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--keep-worktree] [--expected-head <sha>] [--eval-base <ref>]`
+`sparra eval [dir] --worktree --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--keep-worktree] [--expected-head <sha>] [--eval-base <ref>] [--baseline-command <cmd>]`
 — grade whatever the user has been building, no full process. (Alias for `role run --kind evaluator`.)
 Add `--expected-head <sha>` when the brief names a commit (aborts before launch if the graded HEAD
 isn't it) and `--eval-base <ref>` to scope SCOPE/DEVIATION judgment to `<ref>..HEAD` + WIP so a
 snapshot carrying another unit's uncommitted WIP doesn't bounce the run on foreign files.
+Add `--baseline-command <cmd>` (requires `--eval-base`) to inject a runner-owned `[VERIFIED BASELINE]`
+block the evaluator trusts over prose carveouts — the command runs at the base ref in a throwaway
+worktree; must prefix-match `build.verifyCommands`; infra failures degrade gracefully.
 **Use `--worktree` when the evaluator will exercise the tree** (run tests/builds): it snapshots the
 WIP — uncommitted edits, untracked files, deletions — into a TEMPORARY linked worktree, runs the
 eval there (writable exercise scratch, deps auto-provisioned; no manual `git worktree add` +
@@ -340,6 +343,7 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
   `maxBudgetUsd`, `worktree`/`keepWorktree`, `unitWorktree`, `expectedHead`/`evalBaseRef`,
+  `baselineCommand` (evaluator-only, requires `evalBaseRef`: injects runner-owned [VERIFIED BASELINE]),
   `crossModelBaseline` (evaluator: pass the generator's `{backend, model}`)). `worktree=true` (evaluator/reviewer) runs the role
   in a temp, throwaway WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
   pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes). `unitWorktree="<name>"`

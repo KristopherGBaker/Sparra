@@ -180,12 +180,13 @@ export function unsafeExecReason(cmd: string, allowPrefixes: string[] = []): str
 export async function runVerifyCommand(
   workspace: string,
   command: string,
-  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn; allowPrefixes?: string[]; env?: Record<string, string> } = {}
+  opts: { timeoutMs?: number; outputCap?: number; spawnFn?: typeof spawn; allowPrefixes?: string[]; env?: Record<string, string>; capFrom?: "head" | "tail" } = {}
 ): Promise<ExecOutcome> {
   const cmd = command.trim();
   const unsafe = unsafeExecReason(cmd, opts.allowPrefixes ?? []);
   if (unsafe) return { ran: false, command: cmd, unsafeReason: unsafe };
   const cap = opts.outputCap ?? EXEC_OUTPUT_CAP;
+  const capFrom = opts.capFrom ?? "head";
   const spawnFn = opts.spawnFn ?? spawn; // injectable so tests can PROVE an unsafe command never spawns
   const argv = cmd.split(/\s+/); // safe: SHELL_METACHARS already rejected anything quote/expansion-shaped
   return await new Promise<ExecOutcome>((resolve) => {
@@ -201,10 +202,20 @@ export async function runVerifyCommand(
       timedOut = true;
       child.kill("SIGKILL");
     }, opts.timeoutMs ?? EXEC_TIMEOUT_MS);
-    child.stdout.on("data", (d: Buffer) => { if (stdout.length < cap) stdout += d.toString(); });
-    child.stderr.on("data", (d: Buffer) => { if (stderr.length < cap) stderr += d.toString(); });
+    // Head mode: stop accumulating after cap chars (memory bounded to cap).
+    // Tail mode: rolling buffer — keep only the last cap chars so memory stays bounded to cap.
+    child.stdout.on("data", (d: Buffer) => {
+      if (capFrom === "tail") { stdout = (stdout + d.toString()).slice(-cap); }
+      else { if (stdout.length < cap) stdout += d.toString(); }
+    });
+    child.stderr.on("data", (d: Buffer) => {
+      if (capFrom === "tail") { stderr = (stderr + d.toString()).slice(-cap); }
+      else { if (stderr.length < cap) stderr += d.toString(); }
+    });
     const finish = (exitCode: number | null) => {
       clearTimeout(timer);
+      // Head: slice(0, cap) to trim the final chunk that pushed over cap.
+      // Tail: already bounded to cap by the rolling buffer — no further clip needed.
       resolve({ ran: true, command: cmd, exitCode, stdout: stdout.slice(0, cap), stderr: stderr.slice(0, cap), timedOut });
     };
     child.on("error", (e) => {

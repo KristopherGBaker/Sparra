@@ -13,6 +13,8 @@ import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
 import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout, makeHoldoutReadDecider } from "./holdout.ts";
+import { runVerifyCommand } from "./exec.ts";
+import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 
 // Re-exported for the interactive runner's existing importers (and tests) — the implementation
 // now lives in holdout.ts so the autonomous build-loop forbid roles share the exact same wall.
@@ -24,7 +26,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
-import { addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
+import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
 import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
@@ -85,6 +87,132 @@ const defaultProvenanceDeps: EvalProvenanceDeps = {
   wipFn: (dir) => changedFiles(dir),
 };
 
+/** Bounded tail of combined output to capture in the baseline manifest (bytes). */
+const BASELINE_OUTPUT_CAP = 10_000;
+
+/** Injectable seams for `computeVerifiedBaseline` — tests inject fakes so no real git worktree /
+ *  dep copy / command spawn is needed. The real defaults run the actual git + provision + exec seams. */
+export interface VerifiedBaselineDeps {
+  /** Resolve a ref to its full SHA, or null if unresolvable. */
+  resolveRefFn: (dir: string, ref: string) => string | null;
+  /** Add a throwaway DETACHED worktree at an exact commit SHA (`git worktree add --detach`). */
+  addDetachedWorktreeFn: (srcDir: string, wtDir: string, ref: string) => { ok: boolean; out: string };
+  /** Provision deps into the baseline worktree (same call the eval worktree path uses). */
+  provisionFn: typeof provisionWorkspaceDeps;
+  /** Run the baseline command in the worktree and capture exit code + combined stdout+stderr.
+   *  `allowPrefixes` is the project's `build.verifyCommands` list — passed through to the executor
+   *  so custom entries (e.g. `./myverify`) that cleared `validateBaselineCommand` actually spawn. */
+  runCommandFn: (cmd: string, cwd: string, allowPrefixes: string[]) => Promise<{ exitCode: number | null; combined: string }>;
+  /** Remove the throwaway worktree (called in `finally` — always, even on error). */
+  removeWorktreeFn: (srcDir: string, wtDir: string) => { ok: boolean; out: string };
+  /** Where to create the baseline worktree (defaults to a uniquely-stamped sibling of the source). */
+  worktreeDirFn?: (src: string) => string;
+}
+
+function defaultBaselineWorktreeDir(src: string): string {
+  return path.join(path.dirname(src), `${path.basename(src)}-baseline-${stampFromDate(new Date())}-${randomUUID().slice(0, 6)}`);
+}
+
+/** Default `runCommandFn`: runs the command via `runVerifyCommand` (no shell, bounded output, 5 min
+ *  timeout) and combines stdout+stderr into a single string for the manifest. `allowPrefixes` is the
+ *  project's `build.verifyCommands` list — forwarded to the executor so custom entries (e.g.
+ *  `./myverify`) that cleared `validateBaselineCommand` are also approved by the spawn guard.
+ *
+ *  Captures the TAIL of each stream (`capFrom: "tail"`) — the failing-test summary appears at the
+ *  END of a test runner's output, so tail-capping makes the manifest useful with large outputs.
+ *  The combined join is also tail-sliced so the cap is preserved end-to-end.
+ *
+ *  Exported for testing: tests that need the real spawn path can inject this directly. */
+export async function defaultRunCommandFn(cmd: string, cwd: string, allowPrefixes: string[]): Promise<{ exitCode: number | null; combined: string }> {
+  const out = await runVerifyCommand(cwd, cmd, { outputCap: BASELINE_OUTPUT_CAP, allowPrefixes, capFrom: "tail" });
+  if (!out.ran) return { exitCode: null, combined: `[not spawned: ${out.unsafeReason}]` };
+  return {
+    exitCode: out.exitCode,
+    combined: [out.stdout, out.stderr].filter(Boolean).join("\n").slice(-BASELINE_OUTPUT_CAP),
+  };
+}
+
+const defaultVerifiedBaselineDeps: VerifiedBaselineDeps = {
+  resolveRefFn: (dir, ref) => revParse(dir, ref),
+  addDetachedWorktreeFn: addDetachedWorktreeAt,
+  provisionFn: provisionWorkspaceDeps,
+  runCommandFn: defaultRunCommandFn,
+  removeWorktreeFn: removeWipWorktree,
+};
+
+/**
+ * Run `baselineCommand` in a THROWAWAY DETACHED worktree at `evalBaseRef`'s resolved SHA,
+ * provision deps, capture bounded output, and return a manifest string the evaluator can trust.
+ * The manifest is NOT produced by the generator — it is runner-owned and non-gameable.
+ *
+ * Returns an `UNAVAILABLE: <reason>` string on any post-valid-base infra failure (worktree add,
+ * provision, or spawn error); the caller injects this as a note and does NOT abort the eval.
+ * The worktree is ALWAYS torn down in the `finally` block, even on error.
+ *
+ * DOES NOT THROW — infra failures become UNAVAILABLE markers so the eval can proceed degraded.
+ * The one case that throws is an UNRESOLVABLE evalBaseRef — that's a pre-launch configuration
+ * error (the caller's `resolveEvalProvenance` already enforces it; this is defense-in-depth).
+ */
+export async function computeVerifiedBaseline(
+  ctx: Ctx,
+  sourceDir: string,
+  baselineCommand: string,
+  evalBaseRef: string,
+  deps: VerifiedBaselineDeps = defaultVerifiedBaselineDeps
+): Promise<string> {
+  const baseSha = deps.resolveRefFn(sourceDir, evalBaseRef);
+  if (!baseSha) {
+    // Should have been caught pre-launch, but fail-closed here too.
+    throw new Error(`computeVerifiedBaseline: evalBaseRef "${evalBaseRef}" unresolvable in ${sourceDir}`);
+  }
+
+  const wtDir = (deps.worktreeDirFn ?? defaultBaselineWorktreeDir)(sourceDir);
+  const added = deps.addDetachedWorktreeFn(sourceDir, wtDir, baseSha);
+  if (!added.ok) {
+    // Attempt teardown even on add failure — the add may have been partial (git left a stub dir).
+    // Tolerate a removal failure (a dangling stub can be pruned with `git worktree prune`).
+    deps.removeWorktreeFn(sourceDir, wtDir);
+    return `UNAVAILABLE: could not create baseline worktree at ${baseSha}: ${added.out.trim().slice(0, 200)}`;
+  }
+
+  try {
+    // Provision deps so the command (e.g. `npm test`) can run offline.
+    try {
+      deps.provisionFn(sourceDir, wtDir, ctx.config.git.provisionDeps);
+    } catch (e) {
+      return `UNAVAILABLE: dep provisioning failed: ${(e as Error).message?.slice(0, 200) ?? String(e).slice(0, 200)}`;
+    }
+
+    // Run the command, capturing combined stdout+stderr.
+    // Pass the project's verifyCommands as allowPrefixes so the executor's spawn guard accepts
+    // custom entries (e.g. `./myverify`) that already cleared `validateBaselineCommand`.
+    let result: { exitCode: number | null; combined: string };
+    try {
+      result = await deps.runCommandFn(baselineCommand, wtDir, ctx.config.build.verifyCommands);
+    } catch (e) {
+      return `UNAVAILABLE: command spawn error: ${(e as Error).message?.slice(0, 200) ?? String(e).slice(0, 200)}`;
+    }
+
+    const cap = BASELINE_OUTPUT_CAP;
+    const raw = result.combined;
+    const output = raw.length > cap
+      ? `…(output capped at ${cap} bytes; last ${cap} bytes shown)\n` + raw.slice(-cap)
+      : raw;
+    return (
+      `command: ${baselineCommand}\n` +
+      `base SHA: ${baseSha}\n` +
+      `exit code: ${result.exitCode ?? "(null)"}\n\n` +
+      `--- output (combined stdout+stderr) ---\n${output}`
+    );
+  } finally {
+    const removed = deps.removeWorktreeFn(sourceDir, wtDir);
+    if (!removed.ok) {
+      // Log only — teardown failure is not fatal; the dangling worktree can be pruned manually.
+      warn(`computeVerifiedBaseline: teardown of baseline worktree ${wtDir} failed: ${removed.out.trim()}`);
+    }
+  }
+}
+
 /** True when the two refs name the same commit, tolerating a short-vs-full SHA (git abbreviations):
  *  a case-insensitive exact match OR one being a prefix of the other. */
 function shaMatch(a: string, b: string): boolean {
@@ -105,15 +233,23 @@ function shaMatch(a: string, b: string): boolean {
  * WIP-snapshot commit whose PARENT is the verified source HEAD (`addWipWorktree`, `util/git.ts`), so
  * the judge is told its in-workspace `git rev-parse HEAD` will differ and that is NOT tampering; an
  * in-place run states the verified workspace HEAD directly.
+ *
+ * `baselineManifest` (optional, evaluator-only): when present, appends a `[VERIFIED BASELINE]`
+ * block injecting the runner-owned manifest the evaluator must use for pre-existing-failure
+ * determinations. A manifest starting with `UNAVAILABLE:` becomes a `[VERIFIED BASELINE: UNAVAILABLE]`
+ * note; otherwise it becomes an authoritative `[VERIFIED BASELINE @ <base sha>]` block. PURE: does
+ * NOT run commands or touch git itself — the manifest is computed by `computeVerifiedBaseline` and
+ * threaded in as a string. The no-`baselineManifest` path is byte-for-byte unchanged.
  */
 export function resolveEvalProvenance(
   req: Pick<RoleRunRequest, "roleKind" | "expectedHead" | "evalBaseRef">,
   sourceDir: string,
   opts: { onWorktree: boolean },
-  deps: EvalProvenanceDeps = defaultProvenanceDeps
+  deps: EvalProvenanceDeps = defaultProvenanceDeps,
+  baselineManifest?: string
 ): string {
   const { roleKind, expectedHead, evalBaseRef } = req;
-  if (!expectedHead && !evalBaseRef) return "";
+  if (!expectedHead && !evalBaseRef && baselineManifest === undefined) return "";
   if (!isJudgeRole(roleKind)) {
     throw new Error(
       `expectedHead/evalBaseRef are eval-provenance controls for the read-only judge roles ` +
@@ -139,10 +275,12 @@ export function resolveEvalProvenance(
         `inside it reports the snapshot commit, NOT ${actual} — this is expected, NOT tampering.\n`
       : `\n[EVAL PROVENANCE] VERIFIED workspace HEAD: ${actual} (matches the brief).\n`;
   }
+  let baseSha: string | undefined;
   if (evalBaseRef) {
     const base = deps.resolveRefFn(sourceDir, evalBaseRef);
     if (!base)
       throw new Error(`evalBaseRef "${evalBaseRef}" could not be resolved in ${sourceDir} — aborting before launch.`);
+    baseSha = base;
     const committed = deps.diffNamesFn(sourceDir, base) ?? [];
     const wip = deps.wipFn(sourceDir);
     const files = Array.from(new Set([...committed, ...wip])).sort();
@@ -151,6 +289,26 @@ export function resolveEvalProvenance(
       `\n[EVAL SCOPE] This unit's changed files (\`${evalBaseRef}\`..HEAD plus the source tree's current WIP):\n${list}\n` +
       `Judge SCOPE and DEVIATION assertions ONLY against these files — treat every OTHER changed file in the ` +
       `workspace as pre-existing/foreign WIP and EXCLUDE it from scope/deviation judgments.\n`;
+  }
+  // Append the runner-owned verified baseline block — PURE (no git/commands here; manifest was
+  // computed by computeVerifiedBaseline and passed in). The no-baselineManifest path is unchanged.
+  if (baselineManifest !== undefined) {
+    if (baselineManifest.startsWith("UNAVAILABLE:")) {
+      const reason = baselineManifest.slice("UNAVAILABLE:".length).trim();
+      block +=
+        `\n[VERIFIED BASELINE: UNAVAILABLE — ${reason}]\n` +
+        `Infrastructure failure prevented computing the baseline. NO verified baseline is available. ` +
+        `Prose alone is NOT a verified pre-existing-failure manifest — do NOT treat the brief's listed ` +
+        `failures as authoritative pre-existing failures.\n`;
+    } else {
+      const shaLabel = baseSha ?? "unknown";
+      block +=
+        `\n[VERIFIED BASELINE @ ${shaLabel}]\n` +
+        `The following baseline was produced by the RUNNER (trusted) at the base commit, not the generator. ` +
+        `Treat ONLY failures reflected in this baseline as pre-existing — any failure NOT in this baseline ` +
+        `is a NEW regression that BLOCKS. Do NOT waive a failure on the brief's prose alone.\n\n` +
+        `${baselineManifest}\n`;
+    }
   }
   return block;
 }
@@ -256,6 +414,19 @@ export interface RoleRunRequest {
    *  The resolved changed-file list is injected as a scope block. An unresolvable ref ABORTS
    *  pre-launch. Rejected for a writer/contract-generator. */
   evalBaseRef?: string;
+  /** Evaluator-only opt-in: a command from `build.verifyCommands` to run at `evalBaseRef`'s SHA in
+   *  a throwaway DETACHED worktree, producing a runner-owned `[VERIFIED BASELINE]` block the
+   *  evaluator trusts over any brief prose. Requires `evalBaseRef`. Rejected for non-evaluator roles
+   *  (pre-launch error). Non-matching / chained / piped / subshell commands are rejected pre-launch
+   *  WITHOUT spawning. An infra failure AFTER the base resolves yields a
+   *  `[VERIFIED BASELINE: UNAVAILABLE]` note; the eval proceeds (degrade-safe). Off by default. */
+  baselineCommand?: string;
+  /** Injectable seams for the baseline computation (tests inject fakes so no real worktree/spawn
+   *  is needed). Defaults use the real git/provision/exec seams. */
+  baselineCommandDeps?: VerifiedBaselineDeps;
+  /** INTERNAL: pre-computed baseline manifest threaded from the temp-worktree wrapper to the
+   *  in-place delegate (mirrors `provenanceText`). Not a public API — set `baselineCommand` instead. */
+  baselineManifest?: string;
   /** Injectable git seams for the eval-provenance verification/scoping (tests inject fakes so no
    *  real repo/`git` spawn is needed). Defaults resolve HEAD / a ref / changed files via git.ts. */
   provenanceDeps?: EvalProvenanceDeps;
@@ -652,6 +823,49 @@ export function validateEvalProvenance(req: RoleRunRequest): void {
 }
 
 /**
+ * VALIDATE `baselineCommand` for its pre-launch THROW side-effect ONLY — no session, no tokens,
+ * no worktree, no spawn. Called by the interactive surfaces (`cmdRoleRun`, MCP `run_role`) BEFORE
+ * the deferred auto-permission probe (alongside `validateEvalProvenance`). A no-op when
+ * `baselineCommand` is absent. Enforces:
+ *   - evaluator-only: any other role is rejected (clear error);
+ *   - requires `evalBaseRef`: missing → clear error;
+ *   - safety (chained/piped/subshell form): `unsafeVerifyCommandReason` fires → clear error, NO spawn;
+ *   - allowlist: must prefix-match a `build.verifyCommands` entry → clear error, NO spawn.
+ * A bad `evalBaseRef` (unresolvable) is caught by `validateEvalProvenance` separately.
+ */
+export function validateBaselineCommand(req: RoleRunRequest): void {
+  if (!req.baselineCommand) return;
+  const { roleKind, evalBaseRef, ctx } = req;
+  if (roleKind !== "evaluator") {
+    throw new Error(
+      `baselineCommand is evaluator-only; rejected for "${roleKind}". Drop baselineCommand, or use an evaluator role.`
+    );
+  }
+  if (!evalBaseRef) {
+    throw new Error(
+      `baselineCommand requires evalBaseRef (the base ref to run the command against). Add --eval-base <ref>.`
+    );
+  }
+  const cmd = req.baselineCommand.trim();
+  const unsafe = unsafeVerifyCommandReason(cmd);
+  if (unsafe) {
+    throw new Error(
+      `baselineCommand "${cmd.slice(0, 80)}" is not a safe single command: ${unsafe}. ` +
+      `Use a single, non-chained command that matches a build.verifyCommands entry.`
+    );
+  }
+  const verifyCommands = ctx.config.build.verifyCommands;
+  const isAllowed = verifyCommands.some((p) => p && (cmd === p || cmd.startsWith(`${p} `)));
+  if (!isAllowed) {
+    throw new Error(
+      `baselineCommand "${cmd.slice(0, 80)}" does not match any build.verifyCommands entry ` +
+      `(${verifyCommands.length > 0 ? verifyCommands.map((c) => `"${c}"`).join(", ") : "(none configured)"}) — ` +
+      `add the command to build.verifyCommands to allow it.`
+    );
+  }
+}
+
+/**
  * Run a single Sparra role once, enforcing the holdout wall, and return a normalized
  * result (a verdict for the evaluator). The interactive surface never receives holdout
  * contents — only this runner materializes them, and only for the evaluator.
@@ -660,6 +874,11 @@ export function validateEvalProvenance(req: RoleRunRequest): void {
  * checkout, torn down after the run); the default stays the in-place run, unchanged.
  */
 export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
+  // Pre-launch baseline guard — enforced in CORE for ALL entry points (direct runRole calls,
+  // CLI, MCP). Adapter-level calls to validateBaselineCommand are kept as defense-in-depth; this
+  // is the authoritative gate so no programmatic caller can bypass it. A no-op when absent.
+  validateBaselineCommand(req);
+
   // A `unitWorktree` request (writer-only) routes through the PERSISTENT per-unit worktree wrapper —
   // checked first (even an empty string routes here, so its name-validation fires) and mutually
   // exclusive with the judge-only `useWorktree` snapshot.
@@ -741,7 +960,16 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
   // or bad base ref aborts here — no worktree is created, no session launches. The resolved text is
   // threaded to the in-place delegate (params stripped) so it isn't recomputed against the detached
   // snapshot HEAD, which would never match the real source HEAD.
-  const provenanceText = resolveEvalProvenance(req, src, { onWorktree: true }, req.provenanceDeps);
+  // Baseline: if baselineCommand is set (evaluator-only), compute the baseline manifest NOW against
+  // the SOURCE tree's evalBaseRef — BEFORE the WIP snapshot. This is the correct base tree.
+  let baselineManifest: string | undefined;
+  if (roleKind === "evaluator" && req.baselineCommand && req.evalBaseRef) {
+    baselineManifest = await computeVerifiedBaseline(
+      ctx, src, req.baselineCommand, req.evalBaseRef,
+      req.baselineCommandDeps ?? defaultVerifiedBaselineDeps
+    );
+  }
+  const provenanceText = resolveEvalProvenance(req, src, { onWorktree: true }, req.provenanceDeps, baselineManifest);
   const wtDir = (deps.worktreeDirFn ?? defaultTempWorktreeDir)(src);
   const added = (deps.addWorktreeFn ?? addWipWorktree)(src, wtDir);
   if (!added.ok) throw new Error(`--worktree: could not snapshot ${src} into a temp worktree: ${added.out.trim()}`);
@@ -761,6 +989,10 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
       expectedHead: undefined,
       evalBaseRef: undefined,
       provenanceText,
+      // Baseline already computed above and embedded in provenanceText; strip so the delegate
+      // doesn't re-compute it against the snapshot workspace.
+      baselineCommand: undefined,
+      baselineManifest: undefined,
     });
   } finally {
     if (req.keepWorktree) {
@@ -797,7 +1029,17 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // this against the SOURCE tree and passed the text in (params stripped); on a plain in-place judge
   // run this verifies `expectedHead` against the workspace HEAD + scopes `evalBaseRef`, THROWING —
   // before any backend call — on mismatch / bad ref / a non-judge role. Absent params → "".
-  const provenanceBlock = req.provenanceText ?? resolveEvalProvenance(req, workspace, { onWorktree: false }, req.provenanceDeps);
+  // Baseline manifest: computed HERE for the normal in-place path when baselineCommand is set
+  // (evaluator-only, requires evalBaseRef). On the temp-worktree path, baselineCommand is stripped
+  // by the wrapper (baseline is embedded in provenanceText), so this branch never re-computes.
+  let baselineManifest = req.baselineManifest; // internal field set only by the worktree wrapper (always undefined on the public API)
+  if (!req.provenanceText && roleKind === "evaluator" && req.baselineCommand && req.evalBaseRef) {
+    baselineManifest = await computeVerifiedBaseline(
+      ctx, workspace, req.baselineCommand, req.evalBaseRef,
+      req.baselineCommandDeps ?? defaultVerifiedBaselineDeps
+    );
+  }
+  const provenanceBlock = req.provenanceText ?? resolveEvalProvenance(req, workspace, { onWorktree: false }, req.provenanceDeps, baselineManifest);
 
   // A LINKED-WORKTREE workspace gets BOTH dep provisioning (here) and exercise scratch (Item E,
   // below). Probe `isLinkedWorktree` ONCE and reuse — but only when the workspace differs from the

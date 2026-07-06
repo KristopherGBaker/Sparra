@@ -119,7 +119,10 @@ The few that matter most:
   `git rev-parse HEAD` isn't misread as tampering). `evalBaseRef` scopes the changed-files judgment
   to `<base>..HEAD` + the source tree's WIP so a snapshot carrying another unit's uncommitted WIP
   doesn't fail SCOPE/DEVIATION assertions on foreign files — instead of relying on prose to pin
-  the commit or exclude foreign WIP. Both are rejected on a writer/contract-generator. See `docs/role-runner.md`.
+  the commit or exclude foreign WIP. Both are rejected on a writer/contract-generator.
+  `baselineCommand` (evaluator-only, requires `evalBaseRef`) — the RUNNER runs the allowlisted
+  command at the base ref SHA in a throwaway worktree and injects a `[VERIFIED BASELINE @ <sha>]`
+  block the evaluator trusts over prose carveouts; infra failures degrade to UNAVAILABLE. See `docs/role-runner.md`.
 - **`run_role` / `role run` `out` capture** — non-evaluator artifacts are normalized from the
   first markdown heading (heading-less output is trimmed + warned); evaluator `out` remains the
   harness verdict template. Every evaluator run ALSO **auto-persists** its redacted verdict to a

@@ -107,6 +107,32 @@ session never launches on a mismatch), on both the `worktree` and in-place paths
   bundles another unit's uncommitted WIP and scope assertions FAIL on files that aren't the unit's.
   An unresolvable ref aborts pre-launch. Both are rejected on a writer / contract-generator.
 
+**Verified baseline (`baselineCommand`, evaluator-only, opt-in).** When a generator's report
+claims "N tests are pre-existing failures", the eval brief forwards that prose and the evaluator
+may waive them — with no way to verify. `baselineCommand` closes this: together with `evalBaseRef`,
+it makes the **runner** (not the generator) produce a `[VERIFIED BASELINE]` block by running the
+command at the base ref's SHA in a throwaway DETACHED worktree and injecting the runner-owned result
+into the evaluator's brief. The evaluator is instructed to treat **only** failures reflected in the
+baseline as pre-existing; any failure absent from it is a **new regression that blocks**; prose
+alone is not a verified baseline.
+
+- Requires `evalBaseRef` (the base to compare against).
+- `baselineCommand` must match a `build.verifyCommands` allowlist entry — chained/piped/subshell
+  forms and non-allowlisted commands are **rejected pre-launch without spawning**.
+- An infra failure AFTER the base SHA resolves (worktree creation, dep provisioning, or spawn)
+  yields a `[VERIFIED BASELINE: UNAVAILABLE — <reason>]` note; the eval **proceeds** (degrade-safe)
+  but the note explicitly states prose alone is not a verified manifest.
+- Off by default — with no `baselineCommand`, the output is byte-for-byte unchanged.
+
+CLI: `--baseline-command <cmd>` on `role run --kind evaluator` and `eval`.
+MCP: `baselineCommand` field (evaluator-only).
+
+Example:
+```bash
+sparra eval . --eval-base HEAD~5 --baseline-command "npm test"
+# → runner runs `npm test` at HEAD~5 in a throwaway worktree, injects [VERIFIED BASELINE]
+```
+
 `effort` (`low|medium|high|xhigh|max`)
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
