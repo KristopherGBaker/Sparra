@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,37 +120,39 @@ describe("revParse / diffNames (eval-provenance seams)", () => {
   function g(dir: string, args: string[]): string {
     return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
   }
-  /** Repo with a base commit then a second commit adding/modifying files. */
-  function makeRepo(): { dir: string; base: string; head: string } {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-gittest-"));
+  // ONE shared repo for the describe (no test mutates it after setup) — halves the git subprocess
+  // count vs. a per-test `git init`, so the block stays fast under full-suite parallel load.
+  let dir: string;
+  let base: string;
+  let head: string;
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-gittest-"));
     g(dir, ["init"]);
     fs.writeFileSync(path.join(dir, "a.txt"), "one\n");
     g(dir, ["add", "-A"]);
     g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"]);
-    const base = g(dir, ["rev-parse", "HEAD"]).trim();
+    base = g(dir, ["rev-parse", "HEAD"]).trim();
     fs.writeFileSync(path.join(dir, "a.txt"), "two\n");
     fs.writeFileSync(path.join(dir, "b.txt"), "new\n");
     g(dir, ["add", "-A"]);
     g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "unit"]);
-    const head = g(dir, ["rev-parse", "HEAD"]).trim();
-    return { dir, base, head };
-  }
+    head = g(dir, ["rev-parse", "HEAD"]).trim();
+  });
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 
   it("revParse resolves HEAD and a short SHA to the full commit; unknown ref → null", () => {
-    const { dir, head } = makeRepo();
     expect(revParse(dir, "HEAD")).toBe(head);
     expect(revParse(dir, head.slice(0, 8))).toBe(head);
     expect(revParse(dir, "no-such-ref")).toBeNull();
     expect(revParse("/nonexistent-dir", "HEAD")).toBeNull();
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("diffNames returns absolute paths of files changed between base..HEAD; bad base → null", () => {
-    const { dir, base } = makeRepo();
     const names = diffNames(dir, base);
     expect(names).not.toBeNull();
     expect(names!.sort()).toEqual([path.resolve(dir, "a.txt"), path.resolve(dir, "b.txt")]);
     expect(diffNames(dir, "bogus-base")).toBeNull();
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

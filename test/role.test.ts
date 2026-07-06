@@ -279,7 +279,9 @@ describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item
       return true;
     });
     try {
-      await cmdRoleRun(ctx, { kind: "generator", "brief-text": "build" }, async () => res);
+      // Inject a no-op auto-probe: cmdRoleRun runs the auto-permission probe (a LIVE SDK query) for
+      // a valid request, which must never fire in a unit test (offline + no 30s hang under load).
+      await cmdRoleRun(ctx, { kind: "generator", "brief-text": "build" }, async () => res, async () => {});
     } finally {
       spy.mockRestore();
       if (priorLogInTests === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
