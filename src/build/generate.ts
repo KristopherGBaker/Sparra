@@ -134,7 +134,13 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
       verify: true,
       readScopes: [workspaceDir, ...(genReadDirs ?? [])],
       extraDeny: [makeHoldoutReadDecider(ctx, workspaceDir)],
+      // Turns-remaining warning (Claude-only): nudge the generator to emit its report JSON before
+      // the cap so it doesn't forfeit the round dying with landed work but no report.
+      reportWarning: { maxTurns: ctx.config.build.maxTurnsPerSession },
     }),
+    // scopedWriterGuard's onAssistantText (above) drives the warning's per-turn counter; preserve
+    // the generator's console activity echo, which onAssistantText presence would otherwise silence.
+    echoActivity: true,
     resume: args.fresh ? undefined : args.resumeSessionId,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,

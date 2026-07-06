@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { scopedWriterGuard, evaluatorGuard } from "../src/sdk/guard.ts";
+import { scopedWriterGuard, evaluatorGuard, readOnlyGuard, singleFileGuard } from "../src/sdk/guard.ts";
+import { hasReportTurnWarningHook } from "../src/sdk/turnWarning.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 
@@ -63,6 +64,41 @@ describe("scopedWriterGuard — in-place verify opt-in (H7)", () => {
   it("on a branch the opt-in is a no-op — verify already enabled regardless", async () => {
     const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], { verify: true, verifyInPlace: false });
     expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+  });
+});
+
+describe("scopedWriterGuard — report turns-remaining warning (U-T)", () => {
+  // Assertion 5: the warning is a PostToolUse hook MERGED into the writer set — the pre-existing
+  // scope/verify PreToolUse hooks still function AND the warning hook is present.
+  it("MERGES the warning without displacing the scope/verify writer hooks", async () => {
+    const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], {
+      format: true,
+      verify: true,
+      reportWarning: { maxTurns: 60 },
+    });
+    // Pre-existing scope enforcement still works (out-of-root write denied; verify auto-approved).
+    expect(await decide(g, "Write", { file_path: "/etc/passwd", content: "x" })).toBe("deny");
+    expect(await decide(g, "Bash", { command: "npm test" })).toBe("allow");
+    // …and the new warning hook is present in the assembled set.
+    expect(hasReportTurnWarningHook(g.hooks)).toBe(true);
+    // …exposing the onAssistantText counter seam the request must spread.
+    expect(typeof g.onAssistantText).toBe("function");
+  });
+
+  // Assertion 6 (negative role-scope): only a writer that OPTS IN gets the warning. Every other
+  // guard builder — including a writer WITHOUT reportWarning (reflect/prototype) and the read-only /
+  // evaluator / single-file roles (contract-generator, contract-evaluator, evaluator, decomposer,
+  // reviewer, planner) — does NOT carry the "emit completion report" warning.
+  it("a writer WITHOUT reportWarning does NOT carry the warning (reflect/prototype)", () => {
+    const g = scopedWriterGuard(ctxWith("sparra/x"), ["/work"], { format: true, verify: true });
+    expect(hasReportTurnWarningHook(g.hooks)).toBe(false);
+    expect(g.onAssistantText).toBeUndefined();
+  });
+
+  it("read-only / evaluator / single-file guards never carry the warning", () => {
+    for (const g of [readOnlyGuard(ctxWith(undefined)), evaluatorGuard(ctxWith(undefined)), singleFileGuard(ctxWith(undefined), "/work/PLAN.md")]) {
+      expect(hasReportTurnWarningHook(g.hooks)).toBe(false);
+    }
   });
 });
 

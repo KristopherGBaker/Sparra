@@ -92,6 +92,8 @@ A request carries **backend-agnostic intent** — `writeScope`, `readOnly`, `out
 
 The **git worktree is the outer boundary for every backend**, with `writeScopeViolations()` as a backend-independent post-hoc backstop (see [sandbox-first safety](build-loop.md#sandbox-first-safety)).
 
+**Turns-remaining warning is Claude-only, by construction.** The generator's one-time nudge to emit its report JSON before the turn cap (see [build-loop](build-loop.md#bounded-by-default-budgets)) is a **PostToolUse hook** merged into the writer hook set. Since Codex enforces no turn cap, exposes no mid-session injection seam, and reports `hooks: false`, the warning simply never attaches on Codex — it is a **no-op there, never an error**. The Claude backend, where hooks fire, is the only place the injection lands.
+
 ### Per-role sandbox (Codex) + the worktree safety gate
 A **write** role can widen the native sandbox via `roles.<role>.sandbox`
 (`workspace-write` | `danger-full-access`). `workspace-write` (the default) scopes writes to

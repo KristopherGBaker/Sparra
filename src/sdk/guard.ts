@@ -5,6 +5,7 @@ import { readTextSync } from "../util/io.ts";
 import { probeAutoSupported } from "./capabilities.ts";
 import { evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig, type RoleHookOpts } from "./hooks.ts";
 import { makeFormatHook, type FormatOptions } from "./format.ts";
+import { makeReportTurnWarningHook } from "./turnWarning.ts";
 
 /**
  * Resolve the autonomous permissionMode per the user's policy:
@@ -53,6 +54,10 @@ export async function ensureAutoProbed(
 export interface Guard {
   permissionMode: PermissionMode;
   hooks: HookConfig;
+  /** Present only for the report-emitting generator (`reportWarning`): advances the turns-remaining
+   *  progress counter the PostToolUse warning hook reads. Spread into the request as `onAssistantText`
+   *  so the counter tracks the real per-turn boundary. */
+  onAssistantText?: (text: string) => void;
 }
 
 /** Resolve format-hook options from config + project mode + the codebase map. */
@@ -70,11 +75,16 @@ export function formatOptions(ctx: Ctx): FormatOptions {
  *  Pass `{ verifyInPlace: true }` to ALSO enable it on an in-place run with no `build.branch` — an
  *  explicit opt-in for an interactive `run_role` that wants its self-verify gates; it reuses the
  *  SAME strict `allowVerifyBash` decider (no new auto-approve surface), only dropping the branch
- *  precondition. */
+ *  precondition.
+ *  Pass `{ reportWarning: { maxTurns } }` (report-emitting generator only) to MERGE a PostToolUse
+ *  turns-remaining warning: at ~80% of `maxTurns` it injects a one-time nudge to emit the completion
+ *  report JSON now (see `turnWarning.ts`). Returns an `onAssistantText` the caller MUST spread into
+ *  the request so the warning's progress counter tracks the real per-turn boundary. Claude-only by
+ *  construction (it rides the hooks path Codex ignores). */
 export function scopedWriterGuard(
   ctx: Ctx,
   writeRoots: string[],
-  opts: { format?: boolean; verify?: boolean; verifyInPlace?: boolean } & RoleHookOpts = {}
+  opts: { format?: boolean; verify?: boolean; verifyInPlace?: boolean; reportWarning?: { maxTurns?: number } } & RoleHookOpts = {}
 ): Guard {
   const verifyCommands = opts.verify && (ctx.store.data.build.branch || opts.verifyInPlace) ? ctx.config.build.verifyCommands : [];
   let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands, {
@@ -82,7 +92,13 @@ export function scopedWriterGuard(
     extraDeny: opts.extraDeny,
   });
   if (opts.format) hooks = mergeHooks(hooks, makeFormatHook(formatOptions(ctx)));
-  return { permissionMode: autonomousPermissionMode(ctx), hooks };
+  let onAssistantText: ((text: string) => void) | undefined;
+  if (opts.reportWarning) {
+    const warning = makeReportTurnWarningHook({ maxTurns: opts.reportWarning.maxTurns });
+    hooks = mergeHooks(hooks, warning.hooks);
+    onAssistantText = warning.onAssistantText;
+  }
+  return { permissionMode: autonomousPermissionMode(ctx), hooks, onAssistantText };
 }
 
 /** Writer permitted to touch a single file (planner-family, when run autonomously). */
