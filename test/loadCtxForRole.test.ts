@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadCtxForRole, type Ctx } from "../src/context.ts";
+import { loadCtxForRole, autoProbeCtx, type Ctx } from "../src/context.ts";
 import { runRole } from "../src/build/roleRun.ts";
 import { defaultConfig } from "../src/config.ts";
 import { autonomousPermissionMode, ensureAutoProbed } from "../src/sdk/guard.ts";
@@ -210,6 +210,42 @@ describe("loadCtxForRole — auto probe (cached, no-litter, offline)", () => {
       const ctx = await loadCtxForRole(dir, { probeAuto: fakeProbeAuto(false, counter) });
       expect(counter.n).toBe(0);
       expect(autonomousPermissionMode(ctx)).toBe("auto");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deferAutoProbe ⇒ probe NOT called at load; autoProbeCtx runs it later (persist mirrors state.json)", async () => {
+    const dir = tmpdir();
+    try {
+      writePersistedState(dir);
+      const counter = { n: 0 };
+      // Deferred: the live-SDK probe must NOT fire during load (zero tokens until validation passes).
+      const ctx = await loadCtxForRole(dir, { probeAuto: fakeProbeAuto(true, counter), deferAutoProbe: true });
+      expect(counter.n).toBe(0);
+      expect(ctx.store.data.autoSupported).toBeUndefined(); // never probed yet
+      // The caller runs it AFTER validation — and it persists (a real state.json exists on disk).
+      await autoProbeCtx(ctx, { probeAuto: fakeProbeAuto(true, counter) });
+      expect(counter.n).toBe(1);
+      expect(ctx.store.data.autoSupported).toBe(true);
+      const reloaded = await StateStore.load(ctx.paths);
+      expect(reloaded?.data.autoSupported).toBe(true); // persisted (real state.json)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deferAutoProbe + config-less ⇒ autoProbeCtx sets it in memory only (no .sparra litter)", async () => {
+    const dir = tmpdir();
+    try {
+      const counter = { n: 0 };
+      const ctx = await loadCtxForRole(dir, { deferAutoProbe: true, probeAuto: fakeProbeAuto(true, counter) });
+      expect(counter.n).toBe(0);
+      await autoProbeCtx(ctx, { probeAuto: fakeProbeAuto(true, counter) });
+      expect(counter.n).toBe(1);
+      expect(ctx.store.data.autoSupported).toBe(true);
+      expect(fs.existsSync(path.join(dir, ".sparra"))).toBe(false); // memory-only, no litter
+      expect(fs.existsSync(ctx.paths.state)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
-import type { Ctx } from "../context.ts";
-import { runRole, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
+import { autoProbeCtx, type Ctx } from "../context.ts";
+import { runRole, validateEvalProvenance, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { banner, detail, err, info, ok, warn } from "../util/log.ts";
 
@@ -11,7 +11,12 @@ const VALID_KINDS: RoleKind[] = ["generator", "contract-generator", "contract-ev
  * (the MCP `run_role` tool is the interactive surface). Holdout is passed by PATH;
  * the runner is the only thing that reads it, and only for the evaluator.
  */
-export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolean | string[]>, runRoleFn: typeof runRole = runRole): Promise<void> {
+export async function cmdRoleRun(
+  ctx: Ctx,
+  flags: Record<string, string | boolean | string[]>,
+  runRoleFn: typeof runRole = runRole,
+  autoProbe: typeof autoProbeCtx = autoProbeCtx
+): Promise<void> {
   banner("sparra role run");
   const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
   if (!VALID_KINDS.includes(kind)) {
@@ -29,6 +34,18 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
   }
 
   const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
+
+  // Validate eval-provenance params BEFORE the deferred auto-permission probe (a live SDK query):
+  // a bad `--expected-head`/`--eval-base` must abort with ZERO model tokens. Then run the probe
+  // (idempotent) only for a valid request, preserving the prior probe-then-run behavior.
+  try {
+    validateEvalProvenance(req);
+  } catch (e) {
+    err((e as Error).message);
+    process.exitCode = 1;
+    return;
+  }
+  await autoProbe(ctx);
 
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
   let res;

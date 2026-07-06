@@ -2,7 +2,11 @@ import { loadConfig, type SparraConfig } from "./config.ts";
 import { Paths } from "./paths.ts";
 import { StateStore } from "./state.ts";
 import { ensureAutoProbed } from "./sdk/guard.ts";
-import { stampFromDate } from "./util/io.ts";
+import { exists, stampFromDate } from "./util/io.ts";
+
+/** The deferred auto-permission probe, injectable for tests (default: the real live SDK probe). */
+export type ProbeAuto = (ctx: Ctx, persisted: boolean) => Promise<void>;
+const defaultProbeAuto: ProbeAuto = (c, persisted) => ensureAutoProbed(c, { persist: persisted });
 
 export interface Ctx {
   root: string;
@@ -44,10 +48,14 @@ export async function loadCtx(root: string): Promise<Ctx> {
  * `state.json` exists, and set IN MEMORY only (never persisted) for a synthesized greenfield
  * store, so a config-less read never litters `.sparra/`. Inject `opts.probeAuto` in tests to
  * stay offline (the default calls the live SDK probe via `ensureAutoProbed`).
+ *
+ * `opts.deferAutoProbe` SKIPS the probe at load time so the caller can run request validation FIRST
+ * (the role-run surfaces do this — a rejected request must abort with ZERO model tokens, and the
+ * probe is a live SDK `query`). The caller then runs `autoProbeCtx(ctx)` only for a valid request.
  */
 export async function loadCtxForRole(
   root: string,
-  opts: { probeAuto?: (ctx: Ctx, persisted: boolean) => Promise<void> } = {}
+  opts: { probeAuto?: ProbeAuto; deferAutoProbe?: boolean } = {}
 ): Promise<Ctx> {
   const config = await loadConfig(new Paths(root));
   const paths = new Paths(root, config.docsDir);
@@ -56,9 +64,19 @@ export async function loadCtxForRole(
   const store = loaded ?? StateStore.create(paths, "greenfield");
   const ctx: Ctx = { root, paths, config, store };
   // Persist the probe result only when backed by a real state.json (else memory-only: no litter).
-  const probeAuto = opts.probeAuto ?? ((c, persisted) => ensureAutoProbed(c, { persist: persisted }));
-  await probeAuto(ctx, !!loaded);
+  if (!opts.deferAutoProbe) await (opts.probeAuto ?? defaultProbeAuto)(ctx, !!loaded);
   return ctx;
+}
+
+/**
+ * Run the deferred auto-permission probe (see `loadCtxForRole` `deferAutoProbe`). The persist
+ * decision mirrors load time: write to `state.json` only when a real one exists on disk (else the
+ * synthesized greenfield store stays memory-only, so a config-less read never litters `.sparra/`).
+ * Idempotent — `ensureAutoProbed` no-ops once `autoSupported` is known. Inject `opts.probeAuto` in
+ * tests to stay offline.
+ */
+export async function autoProbeCtx(ctx: Ctx, opts: { probeAuto?: ProbeAuto } = {}): Promise<void> {
+  await (opts.probeAuto ?? defaultProbeAuto)(ctx, exists(ctx.paths.state));
 }
 
 /** A run id / trace dir for a phase invocation. */

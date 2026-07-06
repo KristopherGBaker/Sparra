@@ -1,5 +1,5 @@
 import process from "node:process";
-import { loadCtx, loadCtxForRole } from "./context.ts";
+import { loadCtx, loadCtxForRole, autoProbeCtx } from "./context.ts";
 import type { Mode } from "./state.ts";
 import { banner, color, err, info } from "./util/log.ts";
 import { cmdInit } from "./phases/init.ts";
@@ -85,20 +85,29 @@ async function main(): Promise<void> {
   // Standalone role-runner surfaces work WITHOUT `sparra init`: they resolve a
   // config-less, default-backed context (existing `.sparra/` is still honored).
   if (cmd === "role" || cmd === "eval" || cmd === "measure") {
-    const roleCtx = await loadCtxForRole(root);
+    // DEFER the auto-permission probe (a live SDK query): a `role run`/`eval` request that fails
+    // eval-provenance validation (a bad `--expected-head`/`--eval-base`) must abort with ZERO model
+    // tokens, so the probe runs only AFTER validation (inside `cmdRoleRun`). Other subcommands
+    // (`measure`, `role rm-worktree`) have no such gate, so they probe right here — unchanged.
+    const roleCtx = await loadCtxForRole(root, { deferAutoProbe: true });
     // Surface a newer-default (`stale`) / conflicting prompt once on the standalone role-runner
     // path, so a fresh `sparra eval` / `role run` / `measure` learns an adoptable default exists
     // (the build phase already does this via the same summarizer). Quiet when non-actionable.
     const roleDrift = summarizePromptDrift(await promptDrift(roleCtx.paths));
     if (roleDrift.actionable && roleDrift.line) info(`Note: ${roleDrift.line}.`);
     if (cmd === "role") {
+      // `role run`/`eval` run the probe INSIDE cmdRoleRun (after provenance validation); the other
+      // subcommands have no request gate, so probe here to preserve prior behavior.
       if (positionals[1] === "run") await cmdRoleRun(roleCtx, flags);
-      else if (positionals[1] === "rm-worktree") await cmdRoleRemoveWorktree(roleCtx, flags);
-      else {
+      else if (positionals[1] === "rm-worktree") {
+        await autoProbeCtx(roleCtx);
+        await cmdRoleRemoveWorktree(roleCtx, flags);
+      } else {
         err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run, role rm-worktree)`);
         process.exitCode = 1;
       }
     } else if (cmd === "measure") {
+      await autoProbeCtx(roleCtx);
       // `sparra measure [dir] [--worktree] [--set-baseline] [--out f]` — run the project's own
       // measurement harness on a tree and diff against the stored baseline (mirrors `eval --worktree`).
       await cmdMeasure(roleCtx, {

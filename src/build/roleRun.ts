@@ -584,6 +584,18 @@ export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: Exerci
 }
 
 /**
+ * VALIDATE the eval-provenance params (`expectedHead` / `evalBaseRef`) for their THROW side-effect
+ * ONLY — no session, no tokens. The interactive surfaces (`cmdRoleRun`, MCP `run_role`) call this
+ * BEFORE the deferred auto-permission probe (a live SDK `query`), so a rejected request — a HEAD
+ * mismatch, an unresolvable ref, or either param on a non-judge role — aborts with ZERO model
+ * tokens. The source dir + `onWorktree` are resolved exactly as the dispatch below does, so the
+ * check matches what the real run would enforce. A no-op when neither param is set.
+ */
+export function validateEvalProvenance(req: RoleRunRequest): void {
+  resolveEvalProvenance(req, req.workspace ?? req.ctx.root, { onWorktree: !!req.useWorktree }, req.provenanceDeps);
+}
+
+/**
  * Run a single Sparra role once, enforcing the holdout wall, and return a normalized
  * result (a verdict for the evaluator). The interactive surface never receives holdout
  * contents — only this runner materializes them, and only for the evaluator.

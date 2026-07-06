@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadCtxForRole, type Ctx } from "../context.ts";
-import { runRole, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
+import { runRole, validateEvalProvenance, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
@@ -237,8 +237,14 @@ export async function startRunRoleServer(root: string): Promise<void> {
     },
     async (args) => {
       try {
-        const ctx = await loadCtxForRole(root);
-        const r = await runRole(toRunRoleRequest(ctx, args));
+        // Defer the auto-permission probe (a live SDK query) so a request that fails
+        // eval-provenance validation (bad expectedHead/evalBaseRef) aborts with ZERO model tokens;
+        // probe (idempotent) only after validation, preserving probe-then-run for valid requests.
+        const ctx = await loadCtxForRole(root, { deferAutoProbe: true });
+        const req = toRunRoleRequest(ctx, args);
+        validateEvalProvenance(req);
+        await autoProbeCtx(ctx);
+        const r = await runRole(req);
         // Surface a newer-default (`stale`) / conflicting prompt to the /sparra-loop conductor, so
         // a fresh loop learns an adoptable default exists. Holdout-safe: role names + the note line
         // ONLY (never a prompt body, never holdout), and only when actionable.

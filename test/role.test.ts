@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -187,6 +188,63 @@ describe("roleRequestFromFlags — --expected-head / --eval-base (U-P)", () => {
     const req = roleRequestFromFlags(ctx, "evaluator", { "expected-head": true, "eval-base": true }, {});
     expect(req.expectedHead).toBeUndefined();
     expect(req.evalBaseRef).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// U-P fix round 2: the CLI/loader path must abort a bad --expected-head BEFORE the auto-permission
+// probe (a live SDK query = model tokens). Regression for the round-1 leak where loadCtxForRole
+// fired the probe before cmdRoleRun validated. Uses a REAL git repo workspace + injected spies.
+describe("cmdRoleRun — provenance validation precedes the auto probe (U-P fix)", () => {
+  function g(dir: string, args: string[]): string {
+    return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  }
+  /** A committed git repo whose HEAD we can pass (or deliberately mismatch). */
+  async function gitCtx(): Promise<{ ctx: Ctx; dir: string; head: string }> {
+    const { ctx, dir } = await makeCtx();
+    g(dir, ["init"]);
+    fs.writeFileSync(path.join(dir, "a.txt"), "one\n");
+    g(dir, ["add", "-A"]);
+    g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"]);
+    return { ctx, dir, head: g(dir, ["rev-parse", "HEAD"]).trim() };
+  }
+
+  function evalResult(): RoleRunResult {
+    return { ok: true, roleKind: "evaluator", backend: "claude", model: "m", resultText: "ok", traceDir: "/t", sessionId: "s", costUsd: 0, tokens: 1, errors: [] };
+  }
+
+  it("a MISMATCHING --expected-head aborts WITHOUT calling the auto probe or runRole", async () => {
+    const { ctx, dir, head } = await gitCtx();
+    const probe = vi.fn(async () => {});
+    const runRoleFn = vi.fn(async () => evalResult());
+    await cmdRoleRun(ctx, { kind: "evaluator", workspace: dir, "expected-head": "deadbeef" }, runRoleFn as never, probe as never);
+    expect(probe).not.toHaveBeenCalled(); // ZERO model tokens: the probe never fired
+    expect(runRoleFn).not.toHaveBeenCalled(); // and no session
+    expect(process.exitCode).toBe(1);
+    expect(head).not.toBe("deadbeef"); // sanity: it really was a mismatch
+    process.exitCode = 0;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a MATCHING --expected-head runs the probe THEN the role (probe before run)", async () => {
+    const { ctx, dir, head } = await gitCtx();
+    const order: string[] = [];
+    const probe = vi.fn(async () => { order.push("probe"); });
+    const runRoleFn = vi.fn(async () => { order.push("run"); return evalResult(); });
+    await cmdRoleRun(ctx, { kind: "evaluator", workspace: dir, "expected-head": head }, runRoleFn as never, probe as never);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(runRoleFn).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["probe", "run"]); // probe precedes the run for a valid request
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("no provenance params → probe + run as before (behavior preserved)", async () => {
+    const { ctx, dir } = await gitCtx();
+    const probe = vi.fn(async () => {});
+    const runRoleFn = vi.fn(async () => evalResult());
+    await cmdRoleRun(ctx, { kind: "evaluator", workspace: dir }, runRoleFn as never, probe as never);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(runRoleFn).toHaveBeenCalledTimes(1);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
