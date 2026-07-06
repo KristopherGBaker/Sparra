@@ -827,3 +827,49 @@ describe("evaluateItem — assertion-anchored functionality cap (Q4, rubric.anch
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("evaluateItem — run-scoped verdict files (collision-free across runs, U-B assertion 5)", () => {
+  async function runWith(ctx: Ctx, dir: string, runId: string | undefined, round = 1) {
+    return evaluateItem({
+      ctx,
+      item: ITEM,
+      contractText: "contract",
+      workspaceDir: dir,
+      round,
+      runId,
+      traceDir: path.join(dir, "trace"),
+      traceSeq: 1,
+      runSessionFn: recorder().fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+  }
+
+  it("two runs reusing the SAME item id + round write DISTINCT files (neither clobbered)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const runA = "build-2026-07-06T00-00-00";
+    const runB = "build-2026-07-06T09-30-00";
+    await runWith(ctx, dir, runA);
+    await runWith(ctx, dir, runB);
+    const fileA = ctx.paths.verdictFile(ITEM.id, 1, runA);
+    const fileB = ctx.paths.verdictFile(ITEM.id, 1, runB);
+    expect(fileA).not.toBe(fileB);
+    expect(fs.existsSync(fileA)).toBe(true);
+    expect(fs.existsSync(fileB)).toBe(true);
+    // Both are run-scoped subdirs of verdicts/, not the flat legacy path.
+    expect(path.dirname(fileA)).toBe(path.join(ctx.paths.verdicts, runA));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a RESUMED run (same runId) writes its later round ALONGSIDE the earlier one in the same dir", async () => {
+    const { ctx, dir } = await makeCtx();
+    const runId = "build-2026-07-06T00-00-00";
+    await runWith(ctx, dir, runId, 1);
+    await runWith(ctx, dir, runId, 2); // resume: same run, next round
+    const r1 = ctx.paths.verdictFile(ITEM.id, 1, runId);
+    const r2 = ctx.paths.verdictFile(ITEM.id, 2, runId);
+    expect(fs.existsSync(r1)).toBe(true);
+    expect(fs.existsSync(r2)).toBe(true);
+    expect(path.dirname(r1)).toBe(path.dirname(r2)); // same run's location
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

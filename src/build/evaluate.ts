@@ -104,6 +104,10 @@ export async function evaluateItem(args: {
   contractText: string;
   workspaceDir: string;
   round: number;
+  /** The build run id (`ctx.store.data.build.runId`). When given, the verdict file lands in a
+   *  RUN-SCOPED subdir so two build runs that reuse item ids never clobber each other; a resumed run
+   *  reuses the same id and keeps writing alongside its own earlier rounds. */
+  runId?: string;
   traceDir: string;
   traceSeq: number;
   /** Prior learnings to inject (from .sparra/memory.md). Falls back to reading the file. */
@@ -372,7 +376,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   const unrunAssertions = verdict.assertions.filter((a) => unrun.has(a.id));
   const runnableCount = verdict.assertions.length - unrunAssertions.length;
   await writeText(
-    ctx.paths.verdictFile(item.id, round),
+    ctx.paths.verdictFile(item.id, round, args.runId),
     `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
   );
 

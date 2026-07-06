@@ -174,6 +174,12 @@ export interface RoleRunResult {
   verdict?: Verdict;
   /** Path the verdict/result was written to, if `out` was given. */
   outPath?: string;
+  /** Path the AUTO-PERSISTED, holdout-redacted verdict was written to (evaluator role only). Always
+   *  set for an evaluator run — independent of `out` — so an interactive/loop cycle leaves
+   *  evaluator-side evidence (scores, failed assertions, blocking reasons) on disk for `sparra
+   *  reflect`, whose bundle rightly excludes the holdout-bearing evaluator traces. Uniquely named,
+   *  so runs that reuse item ids never clobber each other. */
+  verdictPath?: string;
   /** Dir the run streamed its transcript to (`NN-role.md` inside). For a non-evaluator role this
    *  is holdout-free (holdout is dropped from its scope) and the conductor may tail it for live
    *  progress; the EVALUATOR's trace dir is holdout-bearing and is NOT exposed over MCP. */
@@ -349,6 +355,14 @@ function redactVerdict(v: Verdict, holdoutText: string): Verdict {
     // Rebuild each assertion to the exact schema (no spread) so no stray field survives.
     assertions: v.assertions.map((a) => ({ id: a.id, pass: a.pass, evidence: redactHoldout(a.evidence, holdoutText) })),
   };
+}
+
+/** Render the interactive verdict markdown — the EXACT bytes written to `--out` today (extracted so
+ *  the auto-persisted file reuses the identical header, keeping `--out` byte-unchanged). */
+function renderInteractiveVerdict(roleKind: RoleKind, role: RoleConfig, verdict: Verdict, threshold: number): string {
+  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
+  return `# Verdict — ${roleKind} (${role.backend ?? "claude"}/${role.model})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`;
 }
 
 /** Parse + normalize an evaluator verdict the same way the build loop does.
@@ -929,13 +943,23 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     }
     result.verdict = verdict;
     result.ok = res.ok && verdict.verdict === "pass";
+    const header = renderInteractiveVerdict(roleKind, role, verdict, ctx.config.rubric.passThreshold);
+    // Auto-persist the redacted verdict to a UNIQUELY-named file under .sparra/verdicts/ — always,
+    // without the caller passing `out` — so an interactive/loop cycle leaves evaluator-side evidence
+    // for `sparra reflect` (whose bundle excludes the holdout-bearing evaluator traces). The token
+    // (timestamp + random suffix) keeps two role-runs grading the same item — even across process
+    // restarts — from clobbering each other. The redacted raw output is appended in a details block;
+    // it too is holdout-scrubbed (`safeRaw`), so NO section carries verbatim holdout. `writeText`
+    // creates the dir lazily, so a config-less run (no .sparra/config.yaml) doesn't break.
+    const token = `${stampFromDate(new Date())}-${randomUUID().slice(0, 8)}`;
+    const verdictPath = ctx.paths.roleRunVerdictFile(roleKind, token);
+    const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(result.resultText, holdoutText) : result.resultText;
+    await writeText(verdictPath, `${header}\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`);
+    result.verdictPath = verdictPath;
     if (req.out) {
-      const unrun = new Set(verdict.unrunAssertionIds ?? []);
-      const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
-      await writeText(
-        req.out,
-        `# Verdict — ${roleKind} (${role.backend ?? "claude"}/${role.model})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`
-      );
+      // `out` is a SEPARATE, caller-chosen destination — byte-identical to today (header only, no raw
+      // block) — and distinct from the auto-persisted `verdictPath` above.
+      await writeText(req.out, header);
       result.outPath = req.out;
     }
   } else if (req.out) {

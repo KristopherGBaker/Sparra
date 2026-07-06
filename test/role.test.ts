@@ -178,4 +178,17 @@ describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item
     expect(out).not.toContain("hitBudget");
     expect(out).not.toContain("filesChanged");
   });
+
+  it("prints the auto-persisted verdictPath, separately from a caller --out (outPath)", async () => {
+    const out = await captureRun(
+      fakeResult({
+        ok: true,
+        roleKind: "evaluator",
+        verdictPath: "/proj/.sparra/verdicts/role-run-evaluator-x.verdict.md",
+        outPath: "/proj/out.md",
+      })
+    );
+    expect(out).toContain("verdict persisted: /proj/.sparra/verdicts/role-run-evaluator-x.verdict.md");
+    expect(out).toContain("wrote: /proj/out.md");
+  });
 });

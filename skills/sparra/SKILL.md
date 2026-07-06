@@ -111,7 +111,9 @@ The few that matter most:
   `0` = unlimited).
 - **`run_role` / `role run` `out` capture** — non-evaluator artifacts are normalized from the
   first markdown heading (heading-less output is trimmed + warned); evaluator `out` remains the
-  harness verdict template. See `docs/role-runner.md`.
+  harness verdict template. Every evaluator run ALSO **auto-persists** its redacted verdict to a
+  uniquely-named `.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md` (surfaced as `verdictPath`,
+  separate from `out`/`outPath`) with no `out` needed. See `docs/role-runner.md`.
 - **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
   rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by
@@ -256,8 +258,9 @@ node -e "const s=require('./.sparra/state.json');console.log('phase',s.phase);fo
 ls .sparra/workitems/items.json .sparra/contracts .sparra/verdicts .sparra/traces
 ```
 Then, by symptom: decomposition shape → `workitems/items.json`; contract not converging →
-`contracts/<id>.contract.md`; low/failing score → `verdicts/<id>.r<n>.verdict.md` (blocking
-with failed assertion evidence + UN-RUN/no-signal ids); anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
+`contracts/<id>.contract.md`; low/failing score → `verdicts/<run>/<id>.r<n>.verdict.md` (run-scoped
+subdir; interactive evaluator runs persist `verdicts/role-run-evaluator-<stamp>.verdict.md`) — blocking
+with failed assertion evidence + UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
 → `memory.md`.
 
 ## Hard-won gotchas (cheat sheet)

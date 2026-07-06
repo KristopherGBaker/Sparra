@@ -94,6 +94,10 @@ export function buildRunRolePayload(
         passThreshold,
         blocking: r.verdict.blocking,
         failedAssertions: r.verdict.assertions.filter((a) => !a.pass),
+        // The auto-persisted redacted verdict (always written for the evaluator) — surfaced so the
+        // conductor/reflect can find it. Distinct from the caller-chosen `outPath`. Holdout-safe:
+        // a PATH under .sparra/verdicts/, never verdict/holdout contents.
+        verdictPath: r.verdictPath,
         outPath: r.outPath,
         tokens: r.tokens,
         costUsd: r.costUsd,

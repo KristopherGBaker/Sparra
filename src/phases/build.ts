@@ -875,6 +875,7 @@ export async function cmdBuild(
         contractText: contract.text,
         workspaceDir,
         round: st.round,
+        runId,
         traceDir,
         traceSeq: nextSeq(),
         priorLearnings,
@@ -903,7 +904,7 @@ export async function cmdBuild(
       const claimGap = diffClaims(gen.assertionsClaimed, ev.verdict.assertions);
       if (claimGap.count > 0) {
         ev.verdict.claimMismatches = claimGap;
-        await appendText(ctx.paths.verdictFile(item.id, st.round), renderClaimGap(claimGap));
+        await appendText(ctx.paths.verdictFile(item.id, st.round, runId), renderClaimGap(claimGap));
         warn(
           `${item.id} round ${st.round}: calibration gap — the generator claimed the opposite of the evaluator on ${claimGap.count} assertion(s) (ids ${claimGap.ids.join(", ")}).`
         );

@@ -264,6 +264,31 @@ describe("cmdReflect over role-run traces", () => {
     }
   });
 
+  it("a run with ONLY evaluator traces + persisted verdicts still reflects (verdicts are evaluator evidence)", async () => {
+    const { ctx, dir } = await ctxFor();
+    const cap = captureStdout();
+    try {
+      // No safe trace BODIES (the sole trace is the holdout-bearing evaluator one, excluded), but a
+      // persisted redacted verdict exists — reflect must NOT early-return with "nothing to reflect on".
+      roleTrace(ctx, "evaluator", "EVAL BODY SECRET", "2026-07-03T00-00-01-abcdef12");
+      fs.writeFileSync(
+        path.join(ctx.paths.verdicts, "role-run-evaluator-2026-07-03T00-00-01-abcdef12.verdict.md"),
+        "# Verdict — evaluator\n\n- verdict: **fail**\n\n## Blocking\n- assertion 2 broke\n"
+      );
+      const rec = recorder();
+      await cmdReflect(ctx, { traces: path.join(ctx.paths.traces, "role-run-evaluator-*"), runSessionFn: rec.fn });
+      // The reflector session RAN (didn't bail), and the verdicts dir is offered as evidence.
+      expect(rec.calls).toHaveLength(1);
+      expect(rec.calls[0]!.prompt).toContain("Verdicts, when produced");
+      // The holdout-bearing evaluator trace BODY is still excluded from the bundle.
+      expect(allText(path.join(reflectDir(ctx), "input"))).not.toContain("EVAL BODY SECRET");
+      expect(cap.buf()).toContain("persisted redacted verdicts");
+    } finally {
+      cap.restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("references optional verdicts when present and still runs without contracts", async () => {
     const { ctx, dir } = await ctxFor();
     try {

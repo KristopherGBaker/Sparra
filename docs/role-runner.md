@@ -237,6 +237,17 @@ the raw completion is trimmed, written with a trailing newline, and a warning is
 the conductor never gets an accidental empty artifact. Evaluator `--out` is unchanged: it
 writes the harness-built verdict template, not the raw model text.
 
+**Verdicts auto-persist — no `--out` needed.** Every evaluator role-run (via `run_role`, `sparra
+role run`, or `sparra eval`) automatically writes its parsed, holdout-**redacted** verdict to a
+uniquely-named file under `.sparra/verdicts/role-run-<role>-<stamp>.verdict.md`, surfaced as its own
+`verdictPath` result field (the MCP payload and CLI both print it), **separate** from a caller's
+`--out`/`outPath`. The unique stamp means two role-runs grading the same item id never clobber each
+other, even across process restarts. This leaves evaluator-side evidence (scores, failed assertions,
+blocking reasons) on disk for `sparra reflect`, whose bundle rightly **excludes** the holdout-bearing
+evaluator *traces* — so before, an interactive/loop cycle that didn't pass `--out` left reflect with
+no evaluator evidence at all. Passing `--out` still writes that caller-chosen file too (byte-for-byte
+as before); you now get **both**.
+
 ## What the runner enforces (the holdout wall)
 - **Only the evaluator** ever sees holdout contents — they're injected into its prompt
   by the runner. Every other ("forbid") role's brief is checked with

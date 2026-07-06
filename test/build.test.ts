@@ -1534,7 +1534,8 @@ describe("cmdBuild — assertionsClaimed calibration gap surfaced (Q7c)", () => 
     };
     await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
-    const vf = fs.readFileSync(ctx.paths.verdictFile("item-001", 1), "utf8");
+    // Run-scoped: the gap append lands under verdicts/<runId>/ (collision-free across build runs).
+    const vf = fs.readFileSync(ctx.paths.verdictFile("item-001", 1, ctx.store.data.build.runId), "utf8");
     expect(vf).toContain("Calibration gap");
     expect(vf).toContain("1 claimed assertion(s) contradicted by the evaluator: ids 2");
     const mem = fs.readFileSync(ctx.paths.memory, "utf8");
@@ -1554,7 +1555,7 @@ describe("cmdBuild — assertionsClaimed calibration gap surfaced (Q7c)", () => 
     };
     await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     // The faked evaluateItem never writes a verdict file, so only a gap-append could create it.
-    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(false);
+    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1, ctx.store.data.build.runId))).toBe(false);
     const mem = fs.existsSync(ctx.paths.memory) ? fs.readFileSync(ctx.paths.memory, "utf8") : "";
     expect(mem).not.toContain("calibration gap");
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1570,7 +1571,7 @@ describe("cmdBuild — assertionsClaimed calibration gap surfaced (Q7c)", () => 
     };
     const res = await cmdBuild(ctx, { workspaceOverride: dir }, deps);
     expect(res.passed).toBe(1);
-    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(false);
+    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1, ctx.store.data.build.runId))).toBe(false);
     const mem = fs.existsSync(ctx.paths.memory) ? fs.readFileSync(ctx.paths.memory, "utf8") : "";
     expect(mem).not.toContain("calibration gap");
     fs.rmSync(dir, { recursive: true, force: true });

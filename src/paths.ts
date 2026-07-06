@@ -131,8 +131,19 @@ export class Paths {
   contractFile(itemId: string) {
     return path.join(this.contracts, `${itemId}.contract.md`);
   }
-  verdictFile(itemId: string, round: number) {
-    return path.join(this.verdicts, `${itemId}.r${round}.verdict.md`);
+  /** Autonomous evaluator verdict file. When a `runId` is given the file lands in a RUN-SCOPED
+   *  subdir (`verdicts/<runId>/<item>.rN.verdict.md`) so two build runs that reuse item ids (the
+   *  common u1–u4 convention) never clobber each other; a resumed run keeps the same `runId`, so it
+   *  writes alongside its own earlier rounds. Omitting `runId` preserves the flat legacy layout. */
+  verdictFile(itemId: string, round: number, runId?: string) {
+    const dir = runId ? path.join(this.verdicts, runId) : this.verdicts;
+    return path.join(dir, `${itemId}.r${round}.verdict.md`);
+  }
+  /** Interactive role-run verdict file. Named with a caller-supplied unique token (a timestamp +
+   *  random suffix) so two evaluator role-runs grading the same item across process restarts produce
+   *  DISTINCT files (uniqueness never rides on an in-process counter alone). */
+  roleRunVerdictFile(roleKind: string, token: string) {
+    return path.join(this.verdicts, `role-run-${roleKind}-${token}.verdict.md`);
   }
   reviewFile(itemId: string, round: number) {
     return path.join(this.reviews, `${itemId}.r${round}.review.md`);

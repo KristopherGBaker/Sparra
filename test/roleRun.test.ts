@@ -730,6 +730,87 @@ describe("runRole — verdict", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("auto-persists the redacted verdict under .sparra/verdicts/ WITHOUT `out`, distinct from `outPath`", async () => {
+    const { ctx, dir } = await makeCtx();
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: recorder().fn });
+    // Assertion 1/4: verdictPath is its own field, set even though the caller passed no `out`.
+    expect(r.verdictPath).toBeTruthy();
+    expect(r.outPath).toBeUndefined();
+    expect(r.verdictPath!.startsWith(ctx.paths.verdicts)).toBe(true);
+    expect(fs.existsSync(r.verdictPath!)).toBe(true);
+    // Assertion 3: named fields present.
+    const body = fs.readFileSync(r.verdictPath!, "utf8");
+    expect(body).toContain("verdict:");
+    expect(body).toContain("weighted total:");
+    expect(body).toContain("## Failed assertions");
+    expect(body).toContain("## Blocking");
+    expect(body).toContain("## Notes");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("config-less run (no .sparra/config.yaml) still auto-persists — dir created lazily", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    // Prove the verdicts dir is created on demand even if absent.
+    fs.rmSync(ctx.paths.verdicts, { recursive: true, force: true });
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: recorder().fn });
+    expect(r.verdictPath).toBeTruthy();
+    expect(fs.existsSync(r.verdictPath!)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("collision-free: two evaluator runs on the same item produce two distinct, un-clobbered files", async () => {
+    const { ctx, dir } = await makeCtx();
+    const r1 = await runRole({ ctx, roleKind: "evaluator", brief: "grade item u1", runSessionFn: recorder().fn });
+    const r2 = await runRole({ ctx, roleKind: "evaluator", brief: "grade item u1", runSessionFn: recorder().fn });
+    expect(r1.verdictPath).not.toBe(r2.verdictPath);
+    expect(fs.existsSync(r1.verdictPath!)).toBe(true);
+    expect(fs.existsSync(r2.verdictPath!)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("redaction parity: a holdout canary in the verdict text is redacted in EVERY section incl. the raw block", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = path.join(dir, "explicit.md");
+    const leaky =
+      '```json\n{"assertions":[{"id":1,"pass":false,"evidence":"failed: ' +
+      HOLDOUT_LINE +
+      '"}],"scores":{"design":90,"originality":90,"craft":90,"functionality":90},' +
+      '"verdict":"fail","blocking":["' +
+      HOLDOUT_LINE +
+      '"],"notes":"see ' +
+      HOLDOUT_LINE +
+      '"}\n```';
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", out, runSessionFn: recorder(leaky).fn });
+    // The auto-persisted file (which INCLUDES a raw-output details block) never carries the canary verbatim.
+    const persisted = fs.readFileSync(r.verdictPath!, "utf8");
+    expect(persisted).not.toContain("byte-identical");
+    expect(persisted).toContain("[redacted: holdout]");
+    expect(persisted).toContain("raw evaluator output"); // the details block IS present…
+    // …and even the raw block is scrubbed (the leaky JSON quoted the holdout).
+    expect(persisted).not.toContain(HOLDOUT_LINE);
+    // Assertion 4: BOTH files written, both surfaced; the explicit `--out` stays byte-unchanged
+    // (header only — NO raw block).
+    expect(r.outPath).toBe(out);
+    expect(r.verdictPath).toBeTruthy();
+    expect(r.outPath).not.toBe(r.verdictPath);
+    const explicit = fs.readFileSync(out, "utf8");
+    expect(explicit).not.toContain("raw evaluator output");
+    expect(explicit).not.toContain("byte-identical");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`out` byte-unchanged: the explicit file equals today's header render exactly", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const out = path.join(dir, "v.md");
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", out, runSessionFn: recorder().fn });
+    const explicit = fs.readFileSync(out, "utf8");
+    // The header render ends at the Notes section — no raw-output details block in the --out file.
+    expect(explicit.startsWith("# Verdict — evaluator")).toBe(true);
+    expect(explicit).not.toContain("<details>");
+    expect(explicit.trimEnd().endsWith(r.verdict!.notes)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("fails when the model says pass but scores are below threshold", async () => {
     const { ctx, dir } = await makeCtx();
     const low =

@@ -247,7 +247,11 @@ your-project/
    ├─ snapshots/       # timestamped PLAN/MAP checkpoints
    ├─ workitems/       # decomposition (items.json)
    ├─ contracts/       # negotiated "done" contracts
-   ├─ verdicts/        # evaluator scores + assertion pass/fail with evidence
+   ├─ verdicts/        # evaluator scores + assertion pass/fail with evidence (holdout-redacted).
+   │  ├─ <run>/<item>.rN.verdict.md         #   autonomous build runs — RUN-SCOPED subdir so reused
+   │  │                #   item ids never clobber a prior run; a resumed run reuses its own subdir
+   │  └─ role-run-<role>-<stamp>.verdict.md #   interactive/loop role-runs auto-persist here (no `out`
+   │                   #   needed) under a unique name, so `sparra reflect` gets evaluator evidence
    ├─ interactive/<run>/<item>/  # human-in-the-loop steering folders (`build --step`):
    │                   #   pause.md (redacted), decision.json, feedback.md — see build-loop.md
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)

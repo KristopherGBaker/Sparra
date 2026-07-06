@@ -351,8 +351,15 @@ export async function cmdReflect(
     const excluded = roleRunTraceDirs.filter(isEvaluatorRoleRunTrace);
     for (const dir of excluded) warn(`Excluded evaluator trace from reflection input: ${path.basename(dir)}`);
     if (excluded.length === roleRunTraceDirs.length) {
-      warn("Only evaluator role-run traces were selected; they are holdout-bearing and excluded. No safe trace bodies remain to reflect on.");
-      return;
+      // Every selected trace is an evaluator trace (holdout-bearing → excluded). Only bail if there
+      // is ALSO no persisted verdict to reflect on: the auto-persisted verdicts are redacted (safe)
+      // and ARE evaluator-side evidence (scores, failed assertions, blocking), so a run that produced
+      // only evaluator traces + verdicts still has something to reflect on — proceed and bundle them.
+      if (!nonEmptyDir(ctx.paths.verdicts)) {
+        warn("Only evaluator role-run traces were selected; they are holdout-bearing and excluded. No safe trace bodies remain to reflect on.");
+        return;
+      }
+      info("Only evaluator role-run traces were selected (holdout-bearing, excluded); reflecting on the persisted redacted verdicts instead.");
     }
   }
 

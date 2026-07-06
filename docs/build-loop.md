@@ -125,7 +125,7 @@ The loop is autonomous by default. Pass **`--step=contract,round,commit,item`** 
 At a checkpoint the build writes a steering folder under **`.sparra/interactive/<run>/<item>/`**, records the pause in state (`build.paused`), and exits; you edit the files and re-run `sparra build` to continue (`--step` is remembered across the resume).
 
 - **`contract`** — pauses right after the "done" contract is negotiated, before any generation. Review/edit the contract file (the text under the `AGREED CONTRACT` marker); resume builds against your edits. A holdout leak in the edited contract is rejected on resume.
-- **`round`** — pauses after each evaluator verdict, before the accept/pivot decision. `pause.md` is a **holdout-redacted** verdict summary; set `decision.json` to one of:
+- **`round`** — pauses after each evaluator verdict, before the accept/pivot decision. `pause.md` is a **holdout-redacted** verdict summary; the full holdout-redacted verdict is also persisted to **`.sparra/verdicts/<run>/<item>.rN.verdict.md`** (a **run-scoped** subdir, so a later run reusing the same item ids never clobbers this run's records). Set `decision.json` to one of:
   - **`continue`** — patch & re-evaluate; edit `feedback.md` to steer the next round (the default).
   - **`pivot`** — discard this approach and rebuild from scratch (bumps the pivot count).
   - **`accept`** — accept the item now. Overriding a **failed** verdict requires a `reason` (recorded to `memory.md` as an audit trail); accepting a pass needs none.

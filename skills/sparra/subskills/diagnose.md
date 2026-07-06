@@ -39,9 +39,12 @@ From the project root (the dir you ran `sparra` in):
    critiques (verification holes, gameable assertions) are healthy; nitpicking toolchain
    trivia is not (and the prompt is meant to prevent it).
 
-4. **`.sparra/verdicts/<id>.r<n>.verdict.md`** — per-round grade: weighted total vs threshold,
-   per-criterion scores, **failed assertions with evidence**, blocking issues, and a
+4. **`.sparra/verdicts/<run>/<id>.r<n>.verdict.md`** — per-round grade: weighted total vs
+   threshold, per-criterion scores, **failed assertions with evidence**, blocking issues, and a
    `<details>` block with the raw evaluator output. This tells you *why* an item failed a round.
+   Autonomous build verdicts live in a **run-scoped** subdir (so runs reusing item ids never
+   collide); interactive/loop evaluator role-runs auto-persist a redacted verdict to
+   **`.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md`** even with no `out` given.
 
    **`.sparra/reviews/<id>.r<n>.review.md`** — if `review.enabled`, the code-review findings
    (blocking vs advisory, with `blockOn`). An item that passes the exercise but isn't accepted

@@ -50,6 +50,20 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     expect("result" in p).toBe(false);
   });
 
+  it("surfaces the auto-persisted verdictPath (distinct from outPath) on the evaluator branch", () => {
+    const r = baseResult({
+      roleKind: "evaluator",
+      verdictPath: "/proj/.sparra/verdicts/role-run-evaluator-2026-07-06T00-00-00-deadbeef.verdict.md",
+      outPath: "/proj/my-out.md",
+      verdict: { verdict: "pass", weightedTotal: 90, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"],
+    });
+    const p = buildRunRolePayload(r, 75);
+    expect(p.verdictPath).toBe("/proj/.sparra/verdicts/role-run-evaluator-2026-07-06T00-00-00-deadbeef.verdict.md");
+    expect(p.outPath).toBe("/proj/my-out.md");
+    expect(p.verdictPath).not.toBe(p.outPath);
+    expect("traceDir" in p).toBe(false); // wall intact
+  });
+
   it("a NON-evaluator payload INCLUDES traceDir (holdout-free by scope) + result text, no verdict", () => {
     const r = baseResult({ roleKind: "generator", noProgress: true });
     const p = buildRunRolePayload(r, 75);

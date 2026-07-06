@@ -44,6 +44,8 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     const v = res.verdict;
     (v.verdict === "pass" ? ok : warn)(`verdict: ${v.verdict} (${v.weightedTotal}/${ctx.config.rubric.passThreshold}); ${v.blocking.length} blocking`);
   }
+  // The auto-persisted redacted verdict (evaluator) — surfaced separately from a caller `--out`.
+  if (res.verdictPath) detail(`verdict persisted: ${res.verdictPath}`);
   if (res.outPath) detail(`wrote: ${res.outPath}`);
   if (res.errors.length) warn(`errors: ${res.errors.join("; ")}`);
   // Not-a-fail signals — the same names/meanings as the MCP payload, so a scripted conductor

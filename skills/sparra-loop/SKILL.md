@@ -59,7 +59,9 @@ You can re-run `sparra init` later (it preserves existing config/PLAN), and twea
   and only for the evaluator. If you read it, you contaminate the generator through
   shared context.
 - Read **verdicts**, never the evaluator's raw output. The MCP tool returns only the
-  verdict for the evaluator role.
+  verdict for the evaluator role. Every evaluator run **auto-persists** its holdout-redacted
+  verdict under `.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md` (surfaced as
+  `verdictPath`) even when you pass no `out`, so `sparra reflect` has evaluator-side evidence.
 
 ## The loop
 Run **every** `run_role` call below inside a subagent that returns only a summary —
@@ -107,9 +109,12 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",
    backend="codex", contractPath=…, holdoutPath=".sparra/HOLDOUT.md", workspace=…,
-   worktree=true, out=".sparra/verdicts/r1.md")`. The evaluator exercises the artifact for
+   worktree=true)`. The evaluator exercises the artifact for
    real and grades it against the contract + holdout. Using a *different* backend than the
-   generator is the point — an independent second opinion. **Pass `worktree=true` whenever the
+   generator is the point — an independent second opinion. The redacted verdict **auto-persists**
+   to a uniquely-named `.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md` (returned as
+   `verdictPath`) with no `out` needed; pass `out=…` only if you also want a second caller-chosen
+   copy at a fixed path. **Pass `worktree=true` whenever the
    evaluator will run tests/builds** — it snapshots the WIP into a temporary linked worktree
    with writable scratch + provisioned deps; without it an in-place eval is read-only and
    false-blocks on scratch writes (EPERM on `node_modules/.vite-temp` → a bogus "tests failed").
