@@ -95,7 +95,7 @@ The few that matter most:
   `danger-full-access`) widens a **write** role's Codex OS sandbox for native toolchains (e.g.
   `xcodebuild`); full access is honored **only on a git worktree/branch** boundary, else downgraded
   with a loud warning. Roles: orienter, planner, **decomposer**,
-  prototyper, contractGenerator, contractEvaluator, generator, evaluator, **reviewer**, reflector.
+  prototyper, contractGenerator, contractEvaluator, generator, evaluator, **evaluatorSecond**, **reviewer**, reflector.
 - **`roles.generatorLocal`** + work-item **`gen: "local"`** — hybrid builds: tagged items build on
   a local model, the rest on `generator`. Decomposer tags trivial items when `generatorLocal` is set;
   edit tags in `items.json`. See `docs/backends.md`.
@@ -211,9 +211,17 @@ The few that matter most:
   of `acceptanceComplete`). Standalone: `sparra measure [dir] [--worktree] [--set-baseline] [--out f]`
   (default compare-only — baseline written only with `--set-baseline`).
 - **`review: { enabled, blockOn }`** — opt-in **code-review gate** (off by default). After
-  an item passes the evaluator, a `reviewer` role reads the diff for what the exerciser
-  can't see (security, dead/vestigial code, conventions). `blockOn`: `high` (security/
-  correctness/dead-code) | `all` | `none`. Best on a backend ≠ the generator's.
+  an item passes the evaluator (and the optional second-opinion gate), a `reviewer` role reads
+  the diff for what the exerciser can't see (security, dead/vestigial code, conventions).
+  `blockOn`: `high` (security/correctness/dead-code) | `all` | `none`. Best on a backend ≠ the
+  generator's.
+- **`evaluator.secondOpinion: { enabled }`** + **`roles.evaluatorSecond`** — opt-in
+  **second-opinion gate** (off by default). On a **PASS verdict only** (bounded cost), a second
+  evaluator on a **different backend/model** re-grades the same inputs; a real `fail` demotes the
+  accept to a failed round with merged, holdout-redacted blocking. NO-OP with a warning when
+  `evaluatorSecond` is unset or resolves to the same effective backend+model as the
+  actually-selected primary evaluator (after fallback). A limit/empty/blocked/all-un-run second
+  grade never demotes (accept proceeds). Stops a lenient primary evaluator laundering slop.
 - **`git.autoCommit`** — when true, each accepted item is one **conventional commit** onto
   the Sparra worktree/branch (never your main branch; never in-place). Default false.
 - **`build.skills` / `roles.<role>.skills`** — **agent skills** (SKILL.md) for roles.

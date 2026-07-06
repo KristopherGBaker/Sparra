@@ -78,6 +78,14 @@ export interface SparraConfig {
      */
     generatorLocal?: RoleConfig;
     evaluator: RoleConfig;
+    /**
+     * Optional SECOND evaluator for the second-opinion gate (opt-in via `evaluator.secondOpinion`).
+     * On a PASS verdict only, this role re-grades the SAME inputs; it MUST resolve to a different
+     * effective backend+model than the actually-selected primary evaluator (else the gate no-ops —
+     * a same-model second opinion is pointless). Unset → the gate is a no-op. Mirrors the
+     * optional-role precedent (`generatorLocal`).
+     */
+    evaluatorSecond?: RoleConfig;
     /** Independent code review of the generated diff/source (opt-in via `review`). */
     reviewer: RoleConfig;
     /** Authors the conventional commit(s) for an accepted item (when `git.agentCommits`).
@@ -463,6 +471,21 @@ export interface SparraConfig {
     blockOn: "high" | "all" | "none";
   };
 
+  /**
+   * Optional SECOND-OPINION gate on accepts. The evaluator is otherwise the sole quality gate —
+   * a lenient mid-tier evaluator can quietly launder slop. When enabled, on a PASS verdict ONLY
+   * (bounded cost) a second evaluator (`roles.evaluatorSecond`) on a DIFFERENT backend/model
+   * re-grades the SAME inputs; if it produces a real `fail` the accept is demoted to a failed
+   * round with merged, holdout-redacted blocking. No-op (with a warning) when `evaluatorSecond`
+   * is unset or resolves to the same effective backend+model as the actually-selected primary
+   * evaluator. Off by default; it costs another evaluator role per PASS.
+   */
+  evaluator: {
+    secondOpinion: {
+      enabled: boolean;
+    };
+  };
+
   batch: { K: number };
   /**
    * Subfolder (relative to the project root) for the human-facing docs Sparra
@@ -571,6 +594,8 @@ export function defaultConfig(): SparraConfig {
     },
     deviation: { strictness: "moderate" },
     review: { enabled: false, blockOn: "high" },
+    // Off by default: opting in re-grades a PASS with a second evaluator on a different backend/model.
+    evaluator: { secondOpinion: { enabled: false } },
     batch: { K: 3 },
     docsDir: "",
   };

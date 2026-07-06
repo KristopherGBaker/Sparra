@@ -998,6 +998,97 @@ export async function cmdBuild(
           fresh = false;
           continue;
         }
+
+        // ── Optional SECOND-OPINION gate (config-gated, off by default). On a behaviorally-passing
+        // verdict ONLY (bounded cost), a SECOND evaluator on a DIFFERENT backend/model re-grades the
+        // SAME inputs; a real disagreement (fail) demotes the accept so a lenient primary evaluator
+        // can't quietly launder slop. Mirrors the code-review gate's shape. Independence guard:
+        // NO-OP + warn when `roles.evaluatorSecond` is unset, OR resolves to the SAME effective
+        // backend+model as the ACTUALLY-SELECTED primary evaluator (`evalPick.role` — i.e. AFTER
+        // fallback resolution, not just the configured `roles.evaluator`); a same-model second
+        // opinion is pointless. Never crashes. ──
+        if (ctx.config.evaluator.secondOpinion.enabled) {
+          const second = ctx.config.roles.evaluatorSecond;
+          const sameAsPrimary =
+            !!second && backendKey(second) === backendKey(evalPick.role) && second.model === evalPick.role.model;
+          if (!second || sameAsPrimary) {
+            warn(
+              `${item.id}: second-opinion gate is a no-op — ${
+                !second
+                  ? "roles.evaluatorSecond is unset"
+                  : `evaluatorSecond resolves to the same backend+model as the selected primary evaluator (${backendKey(evalPick.role)}/${evalPick.role.model})`
+              }; a same-model second opinion is pointless.`
+            );
+          } else {
+            info(`${item.id}: second-opinion re-grade with ${second.model} (round ${st.round})…`);
+            const ev2 = await d.evaluateItem({
+              ctx,
+              item,
+              contractText: contract.text,
+              workspaceDir,
+              round: st.round,
+              runId,
+              traceDir,
+              traceSeq: nextSeq(),
+              priorLearnings,
+              role: second,
+              maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
+            });
+            const ev2Cost = costUsdOrZero(ev2.costUsd);
+            totalCost += ev2Cost;
+            st.costUsd = (st.costUsd ?? 0) + ev2Cost;
+            st.tokensUsed = (st.tokensUsed ?? 0) + ev2.tokens;
+            await ctx.store.save();
+
+            // Demote ONLY on a REAL fail — a produced `fail` verdict that is NOT a provider limit /
+            // true-empty completion (both carry `limitHit` at this boundary), whose exercise wasn't
+            // BLOCKED, and whose assertions weren't ALL un-run. A limit/empty/blocked/all-un-run
+            // second grade is "no second opinion" → accept proceeds (never demote on an un-run gate).
+            // A garbled, non-empty, non-limit completion normalizes to `fail` in evaluateItem and
+            // DEMOTES here (fail-closed: a broken second grader must not launder a primary PASS).
+            const secondUnrun = new Set(ev2.verdict.unrunAssertionIds ?? []);
+            const secondAllUnrun =
+              ev2.verdict.assertions.length > 0 && ev2.verdict.assertions.every((a) => secondUnrun.has(a.id));
+            const secondBlocked = ev2.verdict.exerciseStatus === "blocked";
+            const realDisagreement =
+              ev2.verdict.verdict === "fail" && !ev2.limitHit && !secondBlocked && !secondAllUnrun;
+            if (realDisagreement) {
+              warn(
+                `${item.id}: SECOND-OPINION disagreement — ${second.model} FAILED a primary PASS in round ${st.round}; demoting the accept.`
+              );
+              noteFailedRound();
+              await d.appendLearning(ctx.paths, {
+                item: item.id,
+                kind: "failed",
+                detail: `round ${st.round}: second-opinion disagreement — ${ev2.verdict.blocking.slice(0, 3).join("; ").slice(0, 200)}`,
+                at: stamp(),
+              });
+              if (overBudget(st)) {
+                await haltOnBudget("second-opinion");
+                break;
+              }
+              if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+              // Merge the second opinion's blocking into the next round's feedback, marked as a
+              // second-opinion disagreement. evaluateItem already redacted the verdict, but re-run
+              // every line (and the whole message) through the holdout wall per the feedback contract.
+              const holdout = await readHoldout(ctx);
+              feedback = redactHoldout(
+                `Your implementation passed the primary evaluator, but an INDEPENDENT SECOND-OPINION evaluator on a different backend/model DISAGREED and FAILED it — a lenient primary must not launder a bad pass. Fix these blocking issues before it's accepted:\n${ev2.verdict.blocking.map((b) => `- ${redactHoldout(b, holdout)}`).join("\n")}`,
+                holdout
+              );
+              fresh = false;
+              continue;
+            }
+            if (secondBlocked || secondAllUnrun) {
+              detail(`${item.id}: second opinion INCONCLUSIVE (${secondBlocked ? "exercise blocked" : "all assertions un-run"}) — no demote, acceptance proceeds.`);
+            } else if (ev2.limitHit) {
+              detail(`${item.id}: second opinion unavailable (provider limit / empty completion) — no demote, acceptance proceeds.`);
+            } else {
+              ok(`${item.id}: second opinion AGREED (pass) in round ${st.round}.`);
+            }
+          }
+        }
+
         // Optional independent code-review gate on the (behaviorally passing) change.
         const review: ReviewOutput | null = ctx.config.review.enabled
           ? await d.reviewItem({
