@@ -1528,6 +1528,17 @@ describe("runRole — cap-death report re-ask (U4)", () => {
     // #2 the re-ask is tightly capped: one turn AND a budget materially tighter than the original.
     expect(rec.calls[1]!.maxTurns).toBe(1);
     expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
+    // #2 (U2) the re-ask is TEXT-ONLY at the request boundary: the overrides WIN over the inherited
+    // writer state so the resumed turn can't re-enter work. The FIRST (writer) call carries the
+    // explicit writer permissionMode + hooks; the SECOND (re-ask) call must override them to
+    // plan/read-only with the writer hooks cleared (Claude then blocks write tools; Codex → RO sandbox).
+    expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
+    expect(rec.calls[0]!.hooks).toBeDefined(); // …and carried writer hooks that could keep writes live
+    expect(rec.calls[1]!.readOnly).toBe(true);
+    expect(rec.calls[1]!.permissionMode).toBe("plan");
+    expect(rec.calls[1]!.hooks).toBeUndefined(); // inherited writer hooks cleared → backend derives RO hooks
+    // (plan + readOnly + cleared hooks block writes even if writeScope lingers — the Claude backend
+    //  checks readOnly before writeScope, and explicit permissionMode:"plan" wins.)
     // #3 the report surfaces; emptyCompletion cleared; filesChanged + the cap telemetry preserved.
     expect(r.resultText).toContain(SENTINEL);
     expect(r.emptyCompletion).toBeUndefined();

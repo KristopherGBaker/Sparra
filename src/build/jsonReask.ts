@@ -1,3 +1,4 @@
+import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { RunSessionParams } from "../sdk/session.ts";
 
 /**
@@ -35,8 +36,17 @@ export const REPORT_REASK_MAX_BUDGET_USD = 0.5;
 /**
  * Session-request overrides for the one-shot report re-ask: resume the dying session with the
  * report-only prompt. Spread over the caller's base request. `tightCap` (the role-runner's
- * cap-death path) additionally PINS the re-ask to one turn + a small USD budget so the resume
- * can't re-enter work; the autonomous generator omits it (its re-ask behavior is unchanged).
+ * cap-death path) additionally PINS the re-ask to one turn + a small USD budget AND forces the
+ * resumed turn TEXT-ONLY so it can only re-emit the report — it can't re-enter work. `maxTurns:1`
+ * alone still permits a single tool call (an `Edit`), so the cap-death re-ask also forces
+ * read-only: `readOnly: true` is the backend-agnostic intent (Codex read-only sandbox), but a
+ * WRITER `commonReq` carries an explicit `permissionMode`/writer `hooks` that would otherwise WIN
+ * over a bare `readOnly` (see `src/sdk/backends/claude.ts` — `permissionMode = req.permissionMode
+ * ?? …`, `hooks = req.hooks ?? …`). So we also OVERRIDE the inherited writer state:
+ * `permissionMode: "plan"` (Claude blocks write tools) and `hooks: undefined` (the Claude backend
+ * then derives read-only hooks from `readOnly`). Spread AFTER `commonReq`, these win. The
+ * autonomous generator omits `tightCap`, so its re-ask behavior is unchanged (none of readOnly/
+ * permissionMode/hooks/maxTurns/maxBudgetUsd added).
  */
 export function reportReaskOverrides(opts: {
   role: string;
@@ -47,6 +57,17 @@ export function reportReaskOverrides(opts: {
     role: opts.role,
     prompt: REPORT_REASK_PROMPT,
     resume: opts.sessionId,
-    ...(opts.tightCap ? { maxTurns: REPORT_REASK_MAX_TURNS, maxBudgetUsd: opts.tightCap.maxBudgetUsd } : {}),
+    ...(opts.tightCap
+      ? {
+          maxTurns: REPORT_REASK_MAX_TURNS,
+          maxBudgetUsd: opts.tightCap.maxBudgetUsd,
+          // Force a text-only turn: read-only intent + override the inherited writer state so
+          // Claude resolves to plan/read-only (a bare `readOnly` is ignored when an explicit
+          // writer `permissionMode`/`hooks` is inherited from `commonReq`).
+          readOnly: true,
+          permissionMode: "plan" as PermissionMode,
+          hooks: undefined,
+        }
+      : {}),
   };
 }
