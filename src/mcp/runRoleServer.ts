@@ -134,6 +134,10 @@ export function buildRunRolePayload(
         filesChanged: r.filesChanged, // writer telemetry: newly-changed path count (>0 → work landed)
         hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
         unitWorktree: r.unitWorktree, // persistent per-unit writer tree {name,dir,branch,created} — reuse next round / tear down on accept
+        // Verify-gate advisory: present when the contract gates on configured verify commands but
+        // self-verify is off → these commands were approval-blocked, claims may be "unverified".
+        // Fix: re-run with allowVerify:true or on a worktree boundary.  HOLDOUT-SAFE.
+        verifyGateWarning: r.verifyGateWarning,
       };
 }
 

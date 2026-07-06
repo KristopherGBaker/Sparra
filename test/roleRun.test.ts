@@ -2633,3 +2633,79 @@ describe("runRole — unitWorktree (persistent generator tree)", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// runRole — verifyGateWarning wired into result + phase logger (U-V Assertion 5)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("runRole — verifyGateWarning wired path (U-V Assertions 5 + 6)", () => {
+  it("(Assertion 5a) generator + contract references a verify cmd + self-verify off → result.verifyGateWarning set, logger emits it", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    // Precondition: verifyCommands configured and no branch (in-place, no allowVerify).
+    expect(ctx.config.build.verifyCommands.length).toBeGreaterThan(0);
+    expect(ctx.store.data.build.branch).toBeFalsy();
+
+    const rec = recorder();
+    const contract = `## I will verify by\n- \`${ctx.config.build.verifyCommands[0]}\` → exits 0`;
+    const log = captureStdout();
+    let result: Awaited<ReturnType<typeof runRole>>;
+    try {
+      result = await runRole({ ctx, roleKind: "generator", brief: "Build the thing.", contract, runSessionFn: rec.fn });
+    } finally {
+      log.restore();
+    }
+    // The warning must be on the result payload.
+    expect(result.verifyGateWarning).toBeTruthy();
+    expect(result.verifyGateWarning).toContain(ctx.config.build.verifyCommands[0]);
+    // The phase logger must have emitted it (so it appears in logs/traces too).
+    expect(log.lines()).toContain("[VERIFY-GATE ADVISORY]");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(Assertion 5b) generator + contract references a verify cmd + allowVerify=true → verifyGateWarning is absent (null/undefined)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    expect(ctx.config.build.verifyCommands.length).toBeGreaterThan(0);
+
+    const rec = recorder();
+    const contract = `## I will verify by\n- \`${ctx.config.build.verifyCommands[0]}\` → exits 0`;
+    const result = await runRole({ ctx, roleKind: "generator", brief: "Build the thing.", contract, allowVerify: true, runSessionFn: rec.fn });
+    // Self-verify is enabled → no warning.
+    expect(result.verifyGateWarning).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(Assertion 5c) generator + contract with NO verify cmd → verifyGateWarning is absent", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    // A contract that references no configured verify command.
+    const result = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build the thing.",
+      contract: "## I will verify by\n- manual inspection only",
+      runSessionFn: rec.fn,
+    });
+    expect(result.verifyGateWarning).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(Assertion 5d) evaluator role → verifyGateWarning always absent (it's a writer-only advisory)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    const contract = `## I will verify by\n- \`${ctx.config.build.verifyCommands[0]}\` → exits 0`;
+    const result = await runRole({ ctx, roleKind: "evaluator", brief: "Grade the artifact.", contract, runSessionFn: rec.fn });
+    expect(result.verifyGateWarning).toBeFalsy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(Assertion 6 wired) holdout-safe: result.verifyGateWarning does not leak the contract body", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const secretBody = "SECRET_CONTRACT_BODY: never appear in the warning";
+    const rec = recorder();
+    const contract = `## Implementation\n\n${secretBody}\n- \`${ctx.config.build.verifyCommands[0]}\` → exits 0`;
+    const result = await runRole({ ctx, roleKind: "generator", brief: "Build.", contract, runSessionFn: rec.fn });
+    expect(result.verifyGateWarning).toBeTruthy();
+    expect(result.verifyGateWarning).not.toContain("SECRET_CONTRACT_BODY");
+    expect(result.verifyGateWarning).not.toContain("never appear in the warning");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

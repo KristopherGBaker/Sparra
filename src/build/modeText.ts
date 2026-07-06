@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Ctx } from "../context.ts";
 
+/** The role kinds that write to the workspace — ONLY these can self-verify, so only they
+ *  receive the verify-gate advisory.  "generator" is the sole writer; all judge/read-only
+ *  roles are excluded.  Using a Set so new writer kinds can be added in one place. */
+const WRITER_ROLE_KINDS: ReadonlySet<string> = new Set(["generator"]);
+
 /** Mandatory contract clauses. Existing projects ALWAYS include no-regression + conventions. */
 export function contractModeClauses(ctx: Ctx): string {
   if (ctx.store.data.mode === "existing") {
@@ -33,6 +38,54 @@ export function selfVerifyGuidance(ctx: Ctx, allowVerify = false): string {
   return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash. Use these commands AS WRITTEN: ${cmds
     .slice(0, 6)
     .join(", ")} — run them, READ the output, and FIX anything you broke. Tool output is TRUNCATED, so run each AS WRITTEN and read the tail/summary rather than piping/grepping/redirecting to inspect it (those forms are blocked and only burn turns). Do not report success on code you have not compiled/tested. ONLY the exact commands listed above are auto-approved (a \`<cmd> -- <args>\` suffix like \`${cmds[0] ?? "npm test"} -- <file>\` is fine — it still starts with the allowed command); do NOT substitute a \`npx\`/\`./node_modules/.bin\` variant or wrap it in \`cd X &&\`/\`git -C <abs>\`/chaining/redirects/installs/commits — those are NOT approved, stall on the guard, and only burn turns. Writes stay inside your work tree.`;
+}
+
+/**
+ * Launch-time advisory surfaced when ALL of these hold:
+ *  1. `roleKind` is a WRITER role (currently only "generator") — never a read-only judge.
+ *  2. Self-verify is NOT enabled for this run: neither a `build.branch`/worktree boundary
+ *     nor an explicit `allowVerify` opt-in (the same pair `selfVerifyGuidance` checks).
+ *  3. The contract text references at least one command from `ctx.config.build.verifyCommands`.
+ *
+ * When all three hold the generator will hit an approval wall on every gate command — a
+ * structurally-guaranteed "unverified" claim — the evaluator will observe it as unverified
+ * assertions and the conductor will only learn about it post-session.  This advisory names
+ * the specific blocked commands and how to enable them so the conductor can act BEFORE the
+ * session launches, instead of finding out after the fact.
+ *
+ * Returns null when self-verify IS enabled, when no configured verify command appears in the
+ * contract, when `verifyCommands` is empty, or when `roleKind` is not a writer.
+ *
+ * Assertion 4 (reuses existing logic): callers MUST compute `selfVerifyEnabled` via
+ * `selfVerifyGuidance(ctx, allowVerify) !== ""` — the predicate defined once above — so there
+ * is no divergent copy of the availability check.  The parameter is a boolean so the helper
+ * itself stays pure and testable without a ctx branch.
+ *
+ * HOLDOUT-SAFE: the returned string contains only command strings from the config and
+ * guidance text — never any portion of `contractText` or holdout body.
+ */
+export function verifyGateWarning(
+  roleKind: string,
+  contractText: string,
+  ctx: Ctx,
+  selfVerifyEnabled: boolean
+): string | null {
+  if (!WRITER_ROLE_KINDS.has(roleKind)) return null;
+  if (selfVerifyEnabled) return null;
+  const cmds = ctx.config.build.verifyCommands;
+  if (!cmds.length) return null;
+  const gated = cmds.filter((cmd) => contractText.includes(cmd));
+  if (!gated.length) return null;
+  return (
+    `[VERIFY-GATE ADVISORY] This generator role-run's contract references the following ` +
+    `configured verify command(s): ${gated.map((c) => `\`${c}\``).join(", ")}. ` +
+    `Self-verify is NOT enabled for this run (no build.branch / worktree boundary, and ` +
+    `allowVerify was not passed), so these commands are approval-blocked — the generator ` +
+    `can only claim them "unverified". ` +
+    `To enable: pass \`allowVerify: true\` (MCP run_role) / \`--verify\` (sparra role run CLI) ` +
+    `so the strict allow-hook approves them in-place, or run on a git worktree/branch boundary ` +
+    `(\`build.branch\` / \`unitWorktree\`).`
+  );
 }
 
 /** The generator's deviation policy text, by mode + strictness. */

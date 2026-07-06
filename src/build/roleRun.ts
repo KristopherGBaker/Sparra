@@ -17,7 +17,7 @@ import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactH
 // Re-exported for the interactive runner's existing importers (and tests) — the implementation
 // now lives in holdout.ts so the autonomous build-loop forbid roles share the exact same wall.
 export { makeHoldoutReadDecider };
-import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance } from "./modeText.ts";
+import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance, verifyGateWarning } from "./modeText.ts";
 import { RE_CRITIQUE_INSTRUCTION } from "./contract.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -368,6 +368,15 @@ export interface RoleRunResult {
    *  in — its name, dir, branch, and whether THIS call created it. Surfaced over MCP + CLI so the
    *  conductor knows WHERE the WIP lives (to reuse next round, or tear down on accept/abandon). */
   unitWorktree?: { name: string; dir: string; branch: string; created: boolean };
+  /** Set for a WRITER (generator) run where the contract references a configured verify command
+   *  (`build.verifyCommands`) but self-verify is NOT enabled (no `allowVerify`, no `build.branch` /
+   *  worktree boundary) — a structurally-guaranteed "unverified" claim signature.  Names the
+   *  specific gated commands and how to enable them so the conductor knows to pass `allowVerify`
+   *  (or run on a worktree) BEFORE the session launches rather than encountering unverified claims
+   *  in the evaluation.  HOLDOUT-SAFE: contains only command strings / config guidance.
+   *  Null/absent when self-verify IS enabled, the contract references no verify command, or
+   *  `verifyCommands` is empty. */
+  verifyGateWarning?: string;
 }
 
 /** True when `text` carries a parseable GENERATOR completion report — a JSON block with a
@@ -783,6 +792,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Resolve the contract first so a default brief can be gated on its presence (below).
   const contract = req.contract ?? (req.contractPath ? (await readText(req.contractPath)) ?? "" : "");
 
+  // Verify-gate advisory: emit BEFORE any session launches so the conductor can act on it.
+  // Compute self-verify-enabled via the SAME predicate as selfVerifyGuidance (Assertion 4 —
+  // no divergent copy): selfVerifyGuidance returns "" iff self-verify is off or no cmds.
+  // We pass the result as a boolean to verifyGateWarning, which is purely a contract-scan.
+  const selfVerifyOn = selfVerifyGuidance(ctx, req.allowVerify) !== "";
+  const gateWarn = verifyGateWarning(roleKind, contract, ctx, selfVerifyOn);
+  if (gateWarn) {
+    warn(`role-run-${roleKind}: ${gateWarn}`);
+  }
+
   let brief = req.brief ?? (req.briefPath ? (await readText(req.briefPath)) ?? "" : "");
   if (!brief.trim()) {
     // Read-only JUDGE roles can synthesize a default brief from their inputs (workspace/contract) —
@@ -1077,6 +1096,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // our-own-budget-cap stop (the conductor resumes via `sessionId` on a budget death).
     filesChanged,
     hitBudget: res.hitBudget ? true : undefined,
+    // Verify-gate advisory: set when the contract gates on commands but self-verify is off.
+    // Surfaced here so the MCP payload and the conductor both see it without reading logs.
+    verifyGateWarning: gateWarn ?? undefined,
   };
 
   // Classification — a strict top-down matrix, FIRST match wins; at most ONE of the flags
