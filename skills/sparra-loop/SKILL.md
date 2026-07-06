@@ -76,6 +76,16 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    step too when you want a model to propose rather than write it yourself. Skipping the
    contract-evaluator gate is allowed only for a throwaway one-off the user explicitly
    wants quick — say so when you skip it.
+   **Fold the MANDATORY clauses into the FIRST draft** (mirror `contractModeClauses`,
+   `src/build/modeText.ts`) so round 1 isn't spent re-adding boilerplate the autonomous path
+   already carries — for an existing project:
+   - a no-regression assertion naming the existing tests/flows that must still pass;
+   - a conventions assertion — "Conforms to the conventions in CODEBASE_MAP.md" citing the
+     specific patterns when that file exists, else cite the actual source (CLAUDE.md /
+     surrounding code) and do NOT require conformance to a CODEBASE_MAP.md that isn't there;
+   - "the existing test suite passes with no NEW failures".
+   - *Greenfield instead:* the assertions fully define "done" for the item; there is no prior
+     behavior to preserve.
    **Re-critique rounds are DELTA reviews, not fresh reviews.** A fresh contract-evaluator
    session re-reviews from scratch each round — reversing its own prior positions and
    promoting nits to blockers — so past round 1 the evaluator MUST see its **prior-round
