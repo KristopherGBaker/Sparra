@@ -23,6 +23,30 @@ export function hasCommits(root: string): boolean {
   return git(root, ["rev-parse", "HEAD"]).ok;
 }
 
+/** Resolve a git ref (`HEAD`, a branch, a short/long SHA) to its full commit SHA in `dir`, or
+ *  `null` when it can't be resolved (not a repo, unknown/ambiguous ref). Used by the eval-provenance
+ *  seam to verify `expectedHead` and to anchor `evalBaseRef` before a judge session is launched. */
+export function revParse(dir: string, ref: string): string | null {
+  if (!isGitRepo(dir)) return null;
+  const r = git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  const sha = r.out.trim();
+  return r.ok && sha ? sha : null;
+}
+
+/** Absolute paths of files that differ between `base` and HEAD (`git diff --name-only base..HEAD`,
+ *  new paths for renames), or `null` when the diff can't be computed (not a repo, bad base). Used to
+ *  scope a judge's changed-files judgment to a single unit's commits. */
+export function diffNames(dir: string, base: string): string[] | null {
+  if (!isGitRepo(dir)) return null;
+  const r = git(dir, ["diff", "--name-only", `${base}..HEAD`]);
+  if (!r.ok) return null;
+  return r.out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((rel) => path.resolve(dir, rel.replace(/^"|"$/g, "")));
+}
+
 /** Absolute paths of files changed (vs HEAD + untracked) in a repo, via `git status --porcelain`. */
 export function changedFiles(root: string): string[] {
   if (!isGitRepo(root)) return [];

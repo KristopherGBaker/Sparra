@@ -24,7 +24,7 @@ import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
-import { addWipWorktree, changedFiles, fileContentHash, isLinkedWorktree, removeWipWorktree } from "../util/git.ts";
+import { addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
@@ -56,6 +56,102 @@ export type RoleKind = "generator" | "contract-generator" | "contract-evaluator"
 /** Only the build evaluator is allowed to see holdout; everyone else is forbidden. */
 function isEvaluator(kind: RoleKind): boolean {
   return kind === "evaluator";
+}
+
+/** The read-only JUDGE roles — the only ones that may carry eval-provenance controls
+ *  (`expectedHead` / `evalBaseRef`) and run in a temp `--worktree`. */
+function isJudgeRole(kind: RoleKind): boolean {
+  return kind === "evaluator" || kind === "reviewer" || kind === "contract-evaluator";
+}
+
+/** Injectable git seams for eval-provenance verification/scoping — tests inject fakes so a unit test
+ *  needs no real git repo. Defaults (below) resolve HEAD / a ref / changed files via `src/util/git.ts`. */
+export interface EvalProvenanceDeps {
+  /** Full SHA of the source tree's HEAD, or null if unresolvable. */
+  headFn: (dir: string) => string | null;
+  /** Full SHA a ref resolves to in the source tree, or null if unresolvable. */
+  resolveRefFn: (dir: string, ref: string) => string | null;
+  /** Absolute paths changed between `base` and HEAD, or null if the diff can't be computed. */
+  diffNamesFn: (dir: string, base: string) => string[] | null;
+  /** Absolute paths of the source tree's current WIP (uncommitted + untracked). */
+  wipFn: (dir: string) => string[];
+}
+
+const defaultProvenanceDeps: EvalProvenanceDeps = {
+  headFn: (dir) => revParse(dir, "HEAD"),
+  resolveRefFn: (dir, ref) => revParse(dir, ref),
+  diffNamesFn: (dir, base) => diffNames(dir, base),
+  wipFn: (dir) => changedFiles(dir),
+};
+
+/** True when the two refs name the same commit, tolerating a short-vs-full SHA (git abbreviations):
+ *  a case-insensitive exact match OR one being a prefix of the other. */
+function shaMatch(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (!x || !y) return false;
+  return x === y || x.startsWith(y) || y.startsWith(x);
+}
+
+/**
+ * Eval-provenance gate (JUDGE roles only). Verifies `expectedHead` against the SOURCE tree's HEAD
+ * and/or scopes the changed-files judgment to `evalBaseRef`..HEAD (+ current WIP), returning the task
+ * text to inject. THROWS — before any session launches — on a HEAD mismatch (naming both SHAs), an
+ * unresolvable base ref (naming the ref), or either param on a non-judge role. Returns `""` when
+ * neither param is set (today's behavior, byte-for-byte).
+ *
+ * `onWorktree` selects the header wording: on a worktree run the graded workspace is a DETACHED
+ * WIP-snapshot commit whose PARENT is the verified source HEAD (`addWipWorktree`, `util/git.ts`), so
+ * the judge is told its in-workspace `git rev-parse HEAD` will differ and that is NOT tampering; an
+ * in-place run states the verified workspace HEAD directly.
+ */
+export function resolveEvalProvenance(
+  req: Pick<RoleRunRequest, "roleKind" | "expectedHead" | "evalBaseRef">,
+  sourceDir: string,
+  opts: { onWorktree: boolean },
+  deps: EvalProvenanceDeps = defaultProvenanceDeps
+): string {
+  const { roleKind, expectedHead, evalBaseRef } = req;
+  if (!expectedHead && !evalBaseRef) return "";
+  if (!isJudgeRole(roleKind)) {
+    throw new Error(
+      `expectedHead/evalBaseRef are eval-provenance controls for the read-only judge roles ` +
+        `(evaluator, reviewer, contract-evaluator) only; rejected for "${roleKind}". Drop them, or run a judge role.`
+    );
+  }
+  let block = "";
+  if (expectedHead) {
+    const actual = deps.headFn(sourceDir);
+    if (!actual)
+      throw new Error(
+        `expectedHead: could not resolve HEAD of ${sourceDir} to verify against "${expectedHead}" — aborting before launch.`
+      );
+    if (!shaMatch(actual, expectedHead)) {
+      throw new Error(
+        `expectedHead mismatch: the ${opts.onWorktree ? "SOURCE checkout" : "workspace"} is at HEAD ${actual} ` +
+          `but the brief cites ${expectedHead}. Aborting before launch — check out ${expectedHead} or correct the brief.`
+      );
+    }
+    block += opts.onWorktree
+      ? `\n[EVAL PROVENANCE] VERIFIED source HEAD: ${actual} (matches the brief). NOTE: the graded ` +
+        `workspace is a DETACHED WIP-SNAPSHOT commit whose PARENT is ${actual}, so \`git rev-parse HEAD\` ` +
+        `inside it reports the snapshot commit, NOT ${actual} — this is expected, NOT tampering.\n`
+      : `\n[EVAL PROVENANCE] VERIFIED workspace HEAD: ${actual} (matches the brief).\n`;
+  }
+  if (evalBaseRef) {
+    const base = deps.resolveRefFn(sourceDir, evalBaseRef);
+    if (!base)
+      throw new Error(`evalBaseRef "${evalBaseRef}" could not be resolved in ${sourceDir} — aborting before launch.`);
+    const committed = deps.diffNamesFn(sourceDir, base) ?? [];
+    const wip = deps.wipFn(sourceDir);
+    const files = Array.from(new Set([...committed, ...wip])).sort();
+    const list = files.length ? files.map((f) => `  - ${f}`).join("\n") : "  (none)";
+    block +=
+      `\n[EVAL SCOPE] This unit's changed files (\`${evalBaseRef}\`..HEAD plus the source tree's current WIP):\n${list}\n` +
+      `Judge SCOPE and DEVIATION assertions ONLY against these files — treat every OTHER changed file in the ` +
+      `workspace as pre-existing/foreign WIP and EXCLUDE it from scope/deviation judgments.\n`;
+  }
+  return block;
 }
 
 /** The SANDBOXED JUDGE roles: the evaluator and the contract-evaluator. Both run under a native
@@ -135,6 +231,26 @@ export interface RoleRunRequest {
   /** With `useWorktree`: keep the temp worktree after the run (its path is printed) instead of
    *  removing it — for inspecting exactly what was graded. */
   keepWorktree?: boolean;
+  /** Eval provenance (JUDGE roles only — evaluator, reviewer, contract-evaluator): the commit SHA
+   *  the brief cites as the artifact to grade. VERIFIED before any session launches — the runner
+   *  resolves the SOURCE checkout's HEAD (on a `useWorktree` run) or the workspace HEAD (in place)
+   *  and ABORTS with an error naming BOTH SHAs on mismatch, so a judge never grades the wrong tree.
+   *  A match injects a provenance header (on a worktree run it also states the workspace is a
+   *  detached WIP-snapshot commit whose parent is that HEAD). Rejected for a writer/contract-generator. */
+  expectedHead?: string;
+  /** Eval provenance (JUDGE roles only): a base ref (`<base>..HEAD` + current WIP of the SOURCE
+   *  tree) that scopes the changed-files judgment to THIS unit — so a worktree snapshot bundling
+   *  another unit's uncommitted WIP doesn't make scope/deviation assertions FAIL on foreign files.
+   *  The resolved changed-file list is injected as a scope block. An unresolvable ref ABORTS
+   *  pre-launch. Rejected for a writer/contract-generator. */
+  evalBaseRef?: string;
+  /** Injectable git seams for the eval-provenance verification/scoping (tests inject fakes so no
+   *  real repo/`git` spawn is needed). Defaults resolve HEAD / a ref / changed files via git.ts. */
+  provenanceDeps?: EvalProvenanceDeps;
+  /** INTERNAL: pre-resolved provenance/scope text, computed by the temp-worktree wrapper against the
+   *  SOURCE tree (before the snapshot) and threaded to the in-place delegate so it isn't recomputed
+   *  against the detached snapshot HEAD. Not a public API — set `expectedHead`/`evalBaseRef` instead. */
+  provenanceText?: string;
   /** Source dir for dep provisioning (node_modules etc.) into a linked-worktree workspace. The
    *  temp-worktree wrapper sets this to the SELECTED source dir (the dir the worktree was
    *  snapshotted from) so `sparra eval <other-dir> --worktree` provisions THAT project's deps —
@@ -495,6 +611,11 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
     );
   }
   const src = req.workspace ?? ctx.root; // the SELECTED source dir — never blindly ctx.root
+  // Eval provenance is verified/scoped against the SOURCE tree BEFORE the snapshot: a HEAD mismatch
+  // or bad base ref aborts here — no worktree is created, no session launches. The resolved text is
+  // threaded to the in-place delegate (params stripped) so it isn't recomputed against the detached
+  // snapshot HEAD, which would never match the real source HEAD.
+  const provenanceText = resolveEvalProvenance(req, src, { onWorktree: true }, req.provenanceDeps);
   const wtDir = (deps.worktreeDirFn ?? defaultTempWorktreeDir)(src);
   const added = (deps.addWorktreeFn ?? addWipWorktree)(src, wtDir);
   if (!added.ok) throw new Error(`--worktree: could not snapshot ${src} into a temp worktree: ${added.out.trim()}`);
@@ -504,7 +625,17 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
     // Deps are provisioned FROM the selected source dir (`src`, the dir the worktree was
     // snapshotted from) — never blindly ctx.root, which is a DIFFERENT project when the user
     // ran `sparra eval <other-dir> --worktree`.
-    return await run({ ...req, workspace: wtDir, useWorktree: false, depSourceDir: src });
+    return await run({
+      ...req,
+      workspace: wtDir,
+      useWorktree: false,
+      depSourceDir: src,
+      // Provenance already resolved+verified against `src`; strip the params so the in-place delegate
+      // injects the precomputed text instead of re-resolving against the snapshot HEAD.
+      expectedHead: undefined,
+      evalBaseRef: undefined,
+      provenanceText,
+    });
   } finally {
     if (req.keepWorktree) {
       info(`--keep-worktree: retained temp eval worktree at ${wtDir}`);
@@ -535,6 +666,12 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   };
   const workspace = req.workspace ?? ctx.root;
   const run = req.runSessionFn ?? runSession;
+
+  // Eval provenance (judge-only). On the temp-worktree path the wrapper already verified+resolved
+  // this against the SOURCE tree and passed the text in (params stripped); on a plain in-place judge
+  // run this verifies `expectedHead` against the workspace HEAD + scopes `evalBaseRef`, THROWING —
+  // before any backend call — on mismatch / bad ref / a non-judge role. Absent params → "".
+  const provenanceBlock = req.provenanceText ?? resolveEvalProvenance(req, workspace, { onWorktree: false }, req.provenanceDeps);
 
   // A LINKED-WORKTREE workspace gets BOTH dep provisioning (here) and exercise scratch (Item E,
   // below). Probe `isLinkedWorktree` ONCE and reuse — but only when the workspace differs from the
@@ -621,7 +758,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const priorCritiqueBlock = await resolvePriorCritiqueBlock(req);
   const contractBlock = contract.trim() ? `\nAGREED CONTRACT (satisfy/grade against THIS):\n---\n${contract.trim()}\n---\n` : "";
   const environment = roleKind === "generator" ? await environmentNotesSection(ctx.paths) : "";
-  let task = `${brief.trim()}\n${environment}${priorCritiqueBlock}${contractBlock}${conventions}${memory}`;
+  let task = `${brief.trim()}\n${environment}${provenanceBlock}${priorCritiqueBlock}${contractBlock}${conventions}${memory}`;
   if (evaluator) {
     task += holdoutSection(holdoutText); // injected ONLY here
   } else {

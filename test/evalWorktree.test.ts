@@ -335,4 +335,64 @@ describe("runRole — --worktree dispatch + writer rejection (Item D)", () => {
     expect(call.exerciseScratch).toBeFalsy(); // no isolated checkout → no scratch (today's behavior)
     expect(provisionFn).not.toHaveBeenCalled();
   });
+
+  // ── expectedHead verified against the SOURCE tree, not the snapshot HEAD (U-P). ──
+  it("worktree expectedHead MATCH (real source HEAD) injects the source-HEAD header + detached-snapshot note", GIT_IT, async () => {
+    const rec = recorder();
+    const srcHead = g(repo, ["rev-parse", "HEAD"]).trim();
+    const res = await runRole({
+      ctx: ctxRepo,
+      roleKind: "evaluator",
+      brief: "grade",
+      useWorktree: true,
+      expectedHead: srcHead,
+      runSessionFn: rec.fn,
+      provisionFn: fakeProvision(),
+    });
+    expect(res.ok).toBe(true);
+    const prompt = rec.calls[0]!.prompt;
+    // Verified against the SOURCE HEAD (the snapshot commit's HEAD differs, but that's the parent).
+    expect(prompt).toContain(`VERIFIED source HEAD: ${srcHead}`);
+    expect(prompt).toMatch(/DETACHED WIP-SNAPSHOT commit whose PARENT is/);
+    // The evaluator's cwd was the temp worktree (≠ the source), and it's torn down after the run.
+    expect(path.resolve(rec.calls[0]!.cwd!)).not.toBe(path.resolve(repo));
+    expect(fs.existsSync(rec.calls[0]!.cwd!)).toBe(false); // torn down
+  });
+
+  it("worktree expectedHead MISMATCH aborts pre-launch naming both SHAs — no session, NO worktree created", GIT_IT, async () => {
+    const rec = recorder();
+    const srcHead = g(repo, ["rev-parse", "HEAD"]).trim();
+    const worktreesBefore = listWorktrees(repo).length;
+    await expect(
+      runRole({
+        ctx: ctxRepo,
+        roleKind: "evaluator",
+        brief: "grade",
+        useWorktree: true,
+        expectedHead: "deadbeef",
+        runSessionFn: rec.fn,
+        provisionFn: fakeProvision(),
+      })
+    ).rejects.toThrow(new RegExp(`${srcHead}[\\s\\S]*deadbeef|deadbeef[\\s\\S]*${srcHead}`));
+    expect(rec.calls).toHaveLength(0); // never launched
+    expect(listWorktrees(repo).length).toBe(worktreesBefore); // and no worktree was ever created
+  });
+
+  it("worktree unresolvable evalBaseRef aborts pre-launch — no session, no worktree", GIT_IT, async () => {
+    const rec = recorder();
+    const worktreesBefore = listWorktrees(repo).length;
+    await expect(
+      runRole({
+        ctx: ctxRepo,
+        roleKind: "evaluator",
+        brief: "grade",
+        useWorktree: true,
+        evalBaseRef: "no-such-ref-xyz",
+        runSessionFn: rec.fn,
+        provisionFn: fakeProvision(),
+      })
+    ).rejects.toThrow(/no-such-ref-xyz/);
+    expect(rec.calls).toHaveLength(0);
+    expect(listWorktrees(repo).length).toBe(worktreesBefore);
+  });
 });

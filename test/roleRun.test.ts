@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, makeHoldoutReadDecider, parseVerdict, type RoleKind } from "../src/build/roleRun.ts";
+import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
 import { mergedBuildEnv } from "../src/build/env.ts";
 import { RE_CRITIQUE_INSTRUCTION } from "../src/build/contract.ts";
@@ -112,6 +112,126 @@ describe("runRole — holdout wall", () => {
     ).rejects.toThrow(/holdout path not found/i);
     expect(rec.calls).toHaveLength(0);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — eval provenance (expectedHead + evalBaseRef, in-place judge)", () => {
+  const SRC_HEAD = "abcdef1234567890abcdef1234567890abcdef12";
+
+  /** All-fake git seams so no real repo is needed. `over` tweaks individual seams per test. */
+  function deps(over: Partial<EvalProvenanceDeps> = {}): EvalProvenanceDeps {
+    return {
+      headFn: () => SRC_HEAD,
+      resolveRefFn: () => "base0000000000000000000000000000000000000",
+      diffNamesFn: () => ["/repo/src/unitA.ts"],
+      wipFn: () => ["/repo/src/unitA-wip.ts"],
+      ...over,
+    };
+  }
+
+  it("expectedHead MATCH launches the session and injects a workspace-HEAD provenance header", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", expectedHead: SRC_HEAD, provenanceDeps: deps(), runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]!.prompt).toContain(`VERIFIED workspace HEAD: ${SRC_HEAD}`);
+    // In-place header must NOT claim a detached snapshot (that's the worktree wording).
+    expect(rec.calls[0]!.prompt).not.toMatch(/DETACHED WIP-SNAPSHOT/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("expectedHead SHORT-SHA prefix still matches (git abbreviation)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", expectedHead: SRC_HEAD.slice(0, 8), provenanceDeps: deps(), runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]!.prompt).toContain(`VERIFIED workspace HEAD: ${SRC_HEAD}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("expectedHead MISMATCH aborts naming BOTH SHAs — no session", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "grade", expectedHead: "9999999", provenanceDeps: deps(), runSessionFn: rec.fn })
+    ).rejects.toThrow(new RegExp(`${SRC_HEAD}[\\s\\S]*9999999|9999999[\\s\\S]*${SRC_HEAD}`));
+    expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("evalBaseRef injects a scope block listing base..HEAD + WIP, and EXCLUDES a foreign file (negative fixture)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", evalBaseRef: "HEAD~1", provenanceDeps: deps(), runSessionFn: rec.fn });
+    const prompt = rec.calls[0]!.prompt;
+    expect(prompt).toContain("[EVAL SCOPE]");
+    expect(prompt).toContain("/repo/src/unitA.ts"); // committed diff
+    expect(prompt).toContain("/repo/src/unitA-wip.ts"); // current WIP
+    // A file in NEITHER set must not appear — defeats a degenerate "list everything" impl.
+    expect(prompt).not.toContain("/repo/src/foreign-other-unit.ts");
+    expect(prompt).toMatch(/EXCLUDE it from scope\/deviation/);
+    expect(rec.calls).toHaveLength(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("unresolvable evalBaseRef aborts pre-launch naming the ref — no session", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "grade", evalBaseRef: "nope-ref", provenanceDeps: deps({ resolveRefFn: () => null }), runSessionFn: rec.fn })
+    ).rejects.toThrow(/nope-ref/);
+    expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an unresolvable workspace HEAD aborts pre-launch — no session", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "grade", expectedHead: SRC_HEAD, provenanceDeps: deps({ headFn: () => null }), runSessionFn: rec.fn })
+    ).rejects.toThrow(/could not resolve HEAD/);
+    expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(["generator", "contract-generator"] as RoleKind[])(
+    "%s (non-judge) with expectedHead is REJECTED pre-launch — no session",
+    async (kind) => {
+      const { ctx, dir } = await makeCtx(false);
+      const rec = recorder();
+      await expect(
+        runRole({ ctx, roleKind: kind, brief: "build the thing", expectedHead: SRC_HEAD, provenanceDeps: deps(), runSessionFn: rec.fn })
+      ).rejects.toThrow(/judge roles.*only|rejected for/i);
+      expect(rec.calls).toHaveLength(0);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  );
+
+  it.each(["generator", "contract-generator"] as RoleKind[])(
+    "%s (non-judge) with evalBaseRef is REJECTED pre-launch — no session",
+    async (kind) => {
+      const { ctx, dir } = await makeCtx(false);
+      const rec = recorder();
+      await expect(
+        runRole({ ctx, roleKind: kind, brief: "build the thing", evalBaseRef: "HEAD~1", provenanceDeps: deps(), runSessionFn: rec.fn })
+      ).rejects.toThrow(/judge roles.*only|rejected for/i);
+      expect(rec.calls).toHaveLength(0);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  );
+
+  it("resolveEvalProvenance returns '' and never spawns git when neither param is set", () => {
+    let called = 0;
+    const spy = deps({ headFn: () => { called++; return SRC_HEAD; } });
+    expect(resolveEvalProvenance({ roleKind: "evaluator" }, "/repo", { onWorktree: false }, spy)).toBe("");
+    expect(called).toBe(0);
+  });
+
+  it("resolveEvalProvenance worktree header states the detached WIP-snapshot parent semantics", () => {
+    const block = resolveEvalProvenance({ roleKind: "evaluator", expectedHead: SRC_HEAD }, "/repo", { onWorktree: true }, deps());
+    expect(block).toContain(`VERIFIED source HEAD: ${SRC_HEAD}`);
+    expect(block).toMatch(/DETACHED WIP-SNAPSHOT commit whose PARENT is/);
+    expect(block).toMatch(/NOT tampering/);
   });
 });
 

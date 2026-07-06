@@ -109,6 +109,17 @@ The few that matter most:
   `maxTokensPerItem` is off. The standalone role surfaces override the USD cap per call:
   `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s `--budget <usd>` (omit = config cap;
   `0` = unlimited).
+- **eval provenance (`expectedHead` / `evalBaseRef`, judge roles only)** — `run_role`'s
+  `expectedHead`/`evalBaseRef` (CLI `role run`/`eval`'s `--expected-head <sha>` / `--eval-base <ref>`)
+  make a judge deterministic about *what* it grades, verified **before any tokens are spent**.
+  `expectedHead` aborts (naming both SHAs) if the graded HEAD — the source checkout's on a
+  `worktree` run, the workspace's in place — isn't the commit the brief cites, so a judge never
+  grades the wrong tree; a match injects a provenance header (on a worktree run it notes the
+  workspace is a detached WIP-snapshot commit whose parent is that HEAD, so a differing in-workspace
+  `git rev-parse HEAD` isn't misread as tampering). `evalBaseRef` scopes the changed-files judgment
+  to `<base>..HEAD` + the source tree's WIP so a snapshot carrying another unit's uncommitted WIP
+  doesn't fail SCOPE/DEVIATION assertions on foreign files — instead of relying on prose to pin
+  the commit or exclude foreign WIP. Both are rejected on a writer/contract-generator. See `docs/role-runner.md`.
 - **`run_role` / `role run` `out` capture** — non-evaluator artifacts are normalized from the
   first markdown heading (heading-less output is trimmed + warned); evaluator `out` remains the
   harness verdict template. Every evaluator run ALSO **auto-persists** its redacted verdict to a

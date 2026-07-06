@@ -94,6 +94,11 @@ export function roleRequestFromFlags(
     // scratch; `--keep-worktree` retains it for inspection. Same strict boolean parse as --verify.
     useWorktree: flags.worktree === true ? true : undefined,
     keepWorktree: flags["keep-worktree"] === true ? true : undefined,
+    // Eval provenance (judge roles only): `--expected-head <sha>` is verified against the tree's HEAD
+    // before launch (mismatch aborts naming both SHAs); `--eval-base <ref>` scopes the changed-files
+    // judgment to this unit (`<ref>..HEAD` + WIP). Both are strings; anything else is dropped.
+    expectedHead: typeof flags["expected-head"] === "string" ? (flags["expected-head"] as string) : undefined,
+    evalBaseRef: typeof flags["eval-base"] === "string" ? (flags["eval-base"] as string) : undefined,
   };
 }
 

@@ -149,6 +149,18 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     expect(req.keepWorktree).toBeUndefined();
   });
 
+  it("forwards expectedHead / evalBaseRef (eval-provenance controls)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator", expectedHead: "09cb754", evalBaseRef: "HEAD~1" });
+    expect(req.expectedHead).toBe("09cb754");
+    expect(req.evalBaseRef).toBe("HEAD~1");
+  });
+
+  it("leaves expectedHead / evalBaseRef undefined when not set", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
+    expect(req.expectedHead).toBeUndefined();
+    expect(req.evalBaseRef).toBeUndefined();
+  });
+
   it("forwards priorCritiquePaths verbatim (contract-evaluator re-critique; .sparra/ paths OK)", () => {
     const req = toRunRoleRequest(ctx, {
       roleKind: "contract-evaluator",

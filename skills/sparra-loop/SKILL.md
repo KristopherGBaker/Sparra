@@ -118,6 +118,15 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    evaluator will run tests/builds** — it snapshots the WIP into a temporary linked worktree
    with writable scratch + provisioned deps; without it an in-place eval is read-only and
    false-blocks on scratch writes (EPERM on `node_modules/.vite-temp` → a bogus "tests failed").
+   **Pin what the judge grades with `expectedHead`/`evalBaseRef` — don't rely on prose.** When the
+   brief cites a specific commit, pass `expectedHead=<sha>`: the runner verifies it against the
+   source checkout's HEAD (worktree run) or the workspace HEAD (in place) **before spending any
+   tokens** and aborts naming both SHAs on a mismatch, so a judge never grades the wrong tree
+   (and, on a worktree run, is told its in-workspace `git rev-parse HEAD` is the snapshot commit
+   whose parent is the verified HEAD — not tampering). When you're grading ONE unit while another
+   unit's WIP sits uncommitted, pass `evalBaseRef=<base>`: the runner scopes the changed-files list
+   to `<base>..HEAD` + WIP and tells the judge to exclude foreign files from SCOPE/DEVIATION
+   judgments — instead of hoping prose keeps it from bouncing on someone else's WIP.
 4. **Decide.** Act on the subagent's returned summary (verdict + blocking points) —
    not a raw re-read of the verdict file. If it passes, accept (commit if the user
    wants). If it fails, feed the blocking issues plus each failed assertion's
@@ -197,8 +206,11 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
   use **`sparra build --step=contract,round,commit,item`** — don't re-implement the loop here.
 
 ### Standalone eval on a WIP tree
-`sparra eval [dir] --worktree --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--keep-worktree]`
+`sparra eval [dir] --worktree --contract contract.md [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--keep-worktree] [--expected-head <sha>] [--eval-base <ref>]`
 — grade whatever the user has been building, no full process. (Alias for `role run --kind evaluator`.)
+Add `--expected-head <sha>` when the brief names a commit (aborts before launch if the graded HEAD
+isn't it) and `--eval-base <ref>` to scope SCOPE/DEVIATION judgment to `<ref>..HEAD` + WIP so a
+snapshot carrying another unit's uncommitted WIP doesn't bounce the run on foreign files.
 **Use `--worktree` when the evaluator will exercise the tree** (run tests/builds): it snapshots the
 WIP — uncommitted edits, untracked files, deletions — into a TEMPORARY linked worktree, runs the
 eval there (writable exercise scratch, deps auto-provisioned; no manual `git worktree add` +
@@ -233,7 +245,7 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
-  `maxBudgetUsd`, `worktree`/`keepWorktree`). `worktree=true` (evaluator/reviewer) runs the role
+  `maxBudgetUsd`, `worktree`/`keepWorktree`, `expectedHead`/`evalBaseRef`). `worktree=true` (evaluator/reviewer) runs the role
   in a temp WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
   pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes).
   `maxBudgetUsd` (CLI: `--budget <usd>`) overrides `build.maxBudgetUsdPerItem`

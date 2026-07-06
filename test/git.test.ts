@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { mergeFfOnly, defaultBranch, isLinkedWorktree } from "../src/util/git.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { mergeFfOnly, defaultBranch, isLinkedWorktree, revParse, diffNames } from "../src/util/git.ts";
 
 /** A fake git runner that records the argv of every invocation and answers from a map. */
 function fakeRunner(answers: (args: string[]) => { ok: boolean; out: string }) {
@@ -109,5 +113,44 @@ describe("isLinkedWorktree", () => {
       "--git-common-dir": { ok: false, out: "fatal: not a git repository\n" },
     });
     expect(isLinkedWorktree("/repo", partial)).toBe(false);
+  });
+});
+
+describe("revParse / diffNames (eval-provenance seams)", () => {
+  function g(dir: string, args: string[]): string {
+    return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  }
+  /** Repo with a base commit then a second commit adding/modifying files. */
+  function makeRepo(): { dir: string; base: string; head: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-gittest-"));
+    g(dir, ["init"]);
+    fs.writeFileSync(path.join(dir, "a.txt"), "one\n");
+    g(dir, ["add", "-A"]);
+    g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"]);
+    const base = g(dir, ["rev-parse", "HEAD"]).trim();
+    fs.writeFileSync(path.join(dir, "a.txt"), "two\n");
+    fs.writeFileSync(path.join(dir, "b.txt"), "new\n");
+    g(dir, ["add", "-A"]);
+    g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "unit"]);
+    const head = g(dir, ["rev-parse", "HEAD"]).trim();
+    return { dir, base, head };
+  }
+
+  it("revParse resolves HEAD and a short SHA to the full commit; unknown ref → null", () => {
+    const { dir, head } = makeRepo();
+    expect(revParse(dir, "HEAD")).toBe(head);
+    expect(revParse(dir, head.slice(0, 8))).toBe(head);
+    expect(revParse(dir, "no-such-ref")).toBeNull();
+    expect(revParse("/nonexistent-dir", "HEAD")).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("diffNames returns absolute paths of files changed between base..HEAD; bad base → null", () => {
+    const { dir, base } = makeRepo();
+    const names = diffNames(dir, base);
+    expect(names).not.toBeNull();
+    expect(names!.sort()).toEqual([path.resolve(dir, "a.txt"), path.resolve(dir, "b.txt")]);
+    expect(diffNames(dir, "bogus-base")).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

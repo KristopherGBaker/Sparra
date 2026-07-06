@@ -33,6 +33,8 @@ export interface RunRoleToolArgs {
   allowVerify?: boolean;
   worktree?: boolean;
   keepWorktree?: boolean;
+  expectedHead?: string;
+  evalBaseRef?: string;
   resumeSessionId?: string;
   resumeBackend?: string;
 }
@@ -61,6 +63,8 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     allowVerify: args.allowVerify,
     useWorktree: args.worktree,
     keepWorktree: args.keepWorktree,
+    expectedHead: args.expectedHead,
+    evalBaseRef: args.evalBaseRef,
     resumeSessionId: args.resumeSessionId,
     resumeBackend: args.resumeBackend,
   };
@@ -204,6 +208,14 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .boolean()
         .optional()
         .describe("With `worktree`: retain the temp worktree after the run (its path is printed) instead of tearing it down."),
+      expectedHead: z
+        .string()
+        .optional()
+        .describe("Judge roles only (evaluator/reviewer/contract-evaluator): the commit SHA the brief cites as the artifact to grade. VERIFIED before launch against the source checkout's HEAD (worktree run) or the workspace HEAD (in place); a mismatch aborts naming both SHAs, so a judge never grades the wrong tree. A match injects a provenance header."),
+      evalBaseRef: z
+        .string()
+        .optional()
+        .describe("Judge roles only: a base ref that scopes the changed-files judgment to THIS unit (`<base>..HEAD` + the source tree's current WIP), so a worktree snapshot bundling another unit's uncommitted WIP doesn't fail scope/deviation assertions on foreign files. An unresolvable ref aborts pre-launch."),
       resumeSessionId: z
         .string()
         .optional()

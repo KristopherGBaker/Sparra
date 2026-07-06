@@ -117,6 +117,33 @@ describe("roleRequestFromFlags — --worktree / --keep-worktree (Item D)", () =>
   });
 });
 
+// U-P: `--expected-head <sha>` / `--eval-base <ref>` → the request's eval-provenance controls.
+describe("roleRequestFromFlags — --expected-head / --eval-base (U-P)", () => {
+  it("string values map to expectedHead / evalBaseRef", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { "expected-head": "09cb754", "eval-base": "HEAD~1" }, {});
+    expect(req.expectedHead).toBe("09cb754");
+    expect(req.evalBaseRef).toBe("HEAD~1");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent → both undefined (backward compatible)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", {}, {});
+    expect(req.expectedHead).toBeUndefined();
+    expect(req.evalBaseRef).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a value-less boolean flag does NOT set a bogus string", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { "expected-head": true, "eval-base": true }, {});
+    expect(req.expectedHead).toBeUndefined();
+    expect(req.evalBaseRef).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // Item A: the `sparra role run` CLI must EMIT the new not-a-fail signals (names + values) —
 // an MCP-only surfacing would leave a scripted CLI conductor blind to "the work landed".
 describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item A)", () => {

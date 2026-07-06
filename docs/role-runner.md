@@ -61,7 +61,8 @@ output). Wire it into Claude Code pointed at your project:
 ```
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
-holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree })`.
+holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree,
+expectedHead, evalBaseRef })`.
 `worktree` (read-only judge roles — `evaluator`, `reviewer`, **and `contract-evaluator`**) runs the
 eval/review/critique in a **temporary linked git worktree** snapshotted from `workspace`'s WIP — the
 same machinery as `sparra eval --worktree` (`keepWorktree` retains it). Pass it whenever the
@@ -75,6 +76,25 @@ that e.g. unix-domain-socket `listen(2)` is denied by sandbox **policy** even wi
 `TMPDIR`, so a socket-dependent gate is classified **UN-RUN** (environment-blocked, not an artifact
 FAIL) with at most one confirming probe — no re-proving it every round. A Claude judge (no OS sandbox)
 gets no notes. See [backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).
+
+**Eval provenance (`expectedHead` / `evalBaseRef`, judge roles only).** Two controls that make a
+judge run *deterministic about what it's grading* — verified **before any tokens are spent** (the
+session never launches on a mismatch), on both the `worktree` and in-place paths. CLI:
+`--expected-head <sha>` / `--eval-base <ref>` on `role run` and `eval`.
+- `expectedHead` — the commit SHA the brief cites as the artifact to grade. The runner resolves the
+  **source checkout's HEAD** (on a `worktree` run) or the **workspace HEAD** (in place) and **aborts
+  with an error naming BOTH SHAs** if they differ, so a judge never silently grades a tree at a
+  different commit than the brief claims. On a match it injects a provenance header stating the
+  verified HEAD; on a worktree run the header also notes the graded workspace is a **detached
+  WIP-snapshot commit whose parent is that HEAD** (matching `addWipWorktree`), so a judge that runs
+  `git rev-parse HEAD` in its workspace and sees the snapshot SHA doesn't misread it as tampering.
+- `evalBaseRef` — a base ref that **scopes the changed-files judgment to this unit**: the runner
+  computes `<base>..HEAD` plus the source tree's current WIP paths and injects a scope block telling
+  the judge to grade SCOPE/DEVIATION assertions **only** against those files and to treat every other
+  changed file in the snapshot as foreign WIP. This fixes the failure where a worktree snapshot
+  bundles another unit's uncommitted WIP and scope assertions FAIL on files that aren't the unit's.
+  An unresolvable ref aborts pre-launch. Both are rejected on a writer / contract-generator.
+
 `effort` (`low|medium|high|xhigh|max`)
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
