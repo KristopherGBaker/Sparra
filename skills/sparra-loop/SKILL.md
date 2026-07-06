@@ -64,8 +64,68 @@ You can re-run `sparra init` later (it preserves existing config/PLAN), and twea
   `verdictPath`) even when you pass no `out`, so `sparra reflect` has evaluator-side evidence.
 
 ## The loop
-Run **every** `run_role` call below inside a subagent that returns only a summary —
-see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
+Drive the loop as a **scheduler turn**, not a sequential recipe: every conductor reply re-plans
+the whole board, launches all work that can run now in one shot, and only then does its own
+thinking. The numbered stages further down define each *step* (contract → generate → evaluate →
+decide → review → reflect); the scheduler turn decides which stages run this turn and which run
+together. Run **every** `run_role` call inside a subagent that returns only a summary — see
+[How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
+
+**Each reply, do these in order:**
+
+1. **Update the tracker table** — one row per unit: its current stage, status, and what it waits
+   on. Maintain it in every reply so the board state is explicit before you schedule:
+
+   | Unit | Stage    | Status        | Waiting on         |
+   | ---- | -------- | ------------- | ------------------ |
+   | U-A  | evaluate | launched (bg) | evaluator verdict  |
+   | U-B  | generate | runnable      | —                  |
+   | U-C  | contract | runnable      | —                  |
+
+2. **Compute the runnable set** from the mechanical **parallel-safety matrix** — apply it, don't
+   judgement-call it:
+   - **contract-generator / contract-evaluator:** always safe to run concurrently across units
+     (read-only critique, or their own scratch).
+   - **evaluator / reviewer with `worktree: true`:** likewise safe across units — each grades in
+     its own throwaway WIP-snapshot worktree, so no two collide.
+   - **generators (writers):** safe **iff** they target **distinct workspaces / `unitWorktree`
+     names** — two writers must never share one workspace concurrently.
+   - **within one unit, stages are sequential** — a unit's contract → generate → evaluate → decide
+     never overlap with each other.
+
+   A stage joins the runnable set when its unit isn't blocked on an earlier stage of its own and it
+   doesn't collide with an in-flight run under the matrix.
+
+3. **Launch every runnable role-run in ONE message** as background subagents
+   (`run_in_background: true` — see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent)).
+   A single message with N spawns *is* the parallel launch; don't launch one, wait for it, then
+   launch the next.
+
+4. **Do conductor-local work last** — only after the launches: fold a returned verdict into the
+   next brief, commit an accepted unit, update memory, talk to the user. Never spend the turn on
+   local work while runnable role-runs sit unlaunched.
+
+**Under-scheduling tripwire:** if two or more units are pending but you just launched only one
+subagent this turn, you **under-scheduled** — recompute the runnable set and launch the rest before
+ending the turn.
+
+**Worked example — one conductor message, three independent launches:**
+```
+(single conductor message — all three spawned together, run_in_background: true)
+→ Task sparra-role: U-A evaluator, worktree:true, workspace=wt-A
+      evaluate stage · own WIP-snapshot worktree ⇒ safe across units
+→ Task sparra-role: U-B generator, unitWorktree="ub", workspace=wt-B
+      generate stage · distinct unitWorktree ⇒ no writer collision
+→ Task sparra-role: U-C contract-evaluator, contractPath=.sparra/uc.contract.md
+      contract stage · read-only critique ⇒ matrix-safe
+(then, conductor-local, AFTER the three launches:)
+   fold U-D's just-returned verdict into its next generator brief.
+```
+Each writer sits on its own `unitWorktree` and the evaluator on a throwaway snapshot, so nothing
+shares a workspace — all three role-runs proceed at once, and the conductor's own work happens only
+once they're launched.
+
+### Stages — what each step does (the scheduler turn decides *when*)
 
 1. **Contract — negotiate it through the evaluator BEFORE locking it.** Don't lock a
    contract you wrote (or the user wrote) without an adversarial pass — that's how a
@@ -140,6 +200,14 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    surfaces `limitHit` — then switch that role to another backend/model
    (`--backend`/`backend`) or retry later. (This is the interactive analogue of the CLI
    loop's auto-restart/fallback.)
+   **No verdict ≠ fail — never replay the full brief:** if an eval round dies with NO verdict
+   (a limit/cap/empty completion on the evaluator), the artifact was never graded. Two cases:
+   with the artifact **UNCHANGED** since the last generator run, **skip regeneration** (or resume
+   the generator report-only) and just re-run the evaluator; with **landed or ambiguous** generator
+   changes, **resume the generator with a report-only instruction** to re-emit its report, then
+   re-evaluate. NEVER re-run the generator on the original full brief — a fresh full-brief resume
+   makes it re-verify intact work and re-emit the same report (a pure wasted round: full test
+   re-run, no change).
    **Empty completion + work landed ≠ fail — RESUME or ACCEPT:** if a generator summary
    carries `emptyCompletion: true` (always with `filesChanged > 0`), the work LANDED on
    disk and only the completion report failed to emit. The runner **already re-asks
@@ -288,21 +356,22 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
   `HOLDOUT.md`, pass it by path, read the redacted verdict (not raw output/traces),
   and return no holdout text. The conductor never receives holdout.
 
-### Parallelism
-Independent role-runs can run as **concurrent subagents** — e.g. evaluate item A
-while generating item B, or get two cross-model second opinions at once. Read-only
-roles (evaluator, reviewer, contract-evaluator) are always safe to parallelize. The
-one caveat: **two WRITER role-runs (generators) must not target the same workspace
-concurrently** — **generators run in parallel iff they use distinct workspaces /
-`unitWorktree` names.** The clean way to get that is to give each unit its own
-**`unitWorktree="<name>"`** (generator-only): first use creates a **persistent, named
-per-unit worktree** on a `sparra/<name>` branch (deps provisioned), and every later
-round with the same name **reuses** it so that unit's WIP survives round→round — no
-hand-rolled `git worktree add` + `node_modules` copying, no serializing. It's distinct
-from the evaluator's throwaway `worktree=true` snapshot and mutually exclusive with it;
-the result's `unitWorktree` field carries the `{name,dir,branch}`. Tear each one down on
-accept/abandon with **`remove_unit_worktree(name=…)`** (or `sparra role rm-worktree
---name <name>`) — WIP-safe: it refuses a dirty tree / unmerged branch unless `force`.
+### Per-unit worktrees for parallel generators
+The scheduler turn's matrix makes generators run in parallel **iff they use distinct workspaces /
+`unitWorktree` names**; the clean way to get that is to give each unit its own
+**`unitWorktree="<name>"`** (generator-only): first use creates a **persistent, named per-unit
+worktree** on a `sparra/<name>` branch (deps provisioned), and every later round with the same
+name **reuses** it so that unit's WIP survives round→round — no hand-rolled `git worktree add` +
+`node_modules` copying, no serializing. It's distinct from the evaluator's throwaway
+`worktree=true` snapshot and mutually exclusive with it; the result's `unitWorktree` field carries
+the `{name,dir,branch}`. Tear each one down on accept/abandon with
+**`remove_unit_worktree(name=…)`** (or `sparra role rm-worktree --name <name>`) — WIP-safe: it
+refuses a dirty tree / unmerged branch unless `force`.
+
+When a writer and an eval must both touch **one shared workspace**, don't stagger them with sleeps
+(a backgrounded subagent sleep can stall and need a manual nudge): commit the unit first, pass the
+evaluator `expectedHead=<sha>` (+ `evalBaseRef` to scope the changed-files judgment), and tell it
+to ignore foreign WIP — the runner pins what it grades without a timing race.
 
 ### Live progress while a role runs (optional)
 A backgrounded role streams its transcript to disk *as it works* (the runner's

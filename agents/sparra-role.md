@@ -5,8 +5,8 @@ description: >-
   contract-evaluator, reviewer) in an isolated context and returns ONLY a short,
   decision-relevant summary to the caller. Use this from the /sparra-loop
   conductor so the raw diff / full verdict / role output never lands in the main
-  session. Invoke once per role-run; independent runs can use several of these in
-  parallel.
+  session. Invoke once per role-run; the conductor spawns independent role-runs
+  concurrently by default — per the parallel-safety matrix they are safe to run at once.
 tools: mcp__sparra-run__run_role, Bash, Read
 ---
 
