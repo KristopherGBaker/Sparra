@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadCtxForRole, type Ctx } from "../context.ts";
 import { runRole, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
 /** Holdout-safe prompt-drift note for the MCP payload: role names + the one-line note ONLY (never a
@@ -33,6 +34,7 @@ export interface RunRoleToolArgs {
   allowVerify?: boolean;
   worktree?: boolean;
   keepWorktree?: boolean;
+  unitWorktree?: string;
   expectedHead?: string;
   evalBaseRef?: string;
   resumeSessionId?: string;
@@ -63,6 +65,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     allowVerify: args.allowVerify,
     useWorktree: args.worktree,
     keepWorktree: args.keepWorktree,
+    unitWorktree: args.unitWorktree,
     expectedHead: args.expectedHead,
     evalBaseRef: args.evalBaseRef,
     resumeSessionId: args.resumeSessionId,
@@ -130,6 +133,7 @@ export function buildRunRolePayload(
         emptyCompletion: r.emptyCompletion, // writer's report failed to emit but files changed → work LANDED: resume/accept, NOT a fail
         filesChanged: r.filesChanged, // writer telemetry: newly-changed path count (>0 → work landed)
         hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
+        unitWorktree: r.unitWorktree, // persistent per-unit writer tree {name,dir,branch,created} — reuse next round / tear down on accept
       };
 }
 
@@ -208,6 +212,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .boolean()
         .optional()
         .describe("With `worktree`: retain the temp worktree after the run (its path is printed) instead of tearing it down."),
+      unitWorktree: z
+        .string()
+        .optional()
+        .describe(
+          "GENERATOR only: run in a PERSISTENT, NAMED per-unit git worktree (created on first use on a `sparra/<name>` branch, deps provisioned, reused across this unit's rounds so the generator's WIP survives round→round). Distinct from `worktree` (the judges' throwaway snapshot) and mutually exclusive with it. The returned `unitWorktree` {name,dir,branch} tells you where the WIP lives — reuse it next round with the SAME name; tear it down with `remove_unit_worktree` on accept/abandon. Lets parallel generators run iff distinct names/workspaces."
+        ),
       expectedHead: z
         .string()
         .optional()
@@ -242,6 +252,26 @@ export async function startRunRoleServer(root: string): Promise<void> {
       } catch (e) {
         // Holdout-leak and other failures surface as a (sanitized) tool error.
         return { content: [{ type: "text" as const, text: `run_role failed: ${(e as Error).message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "remove_unit_worktree",
+    "Tear down a PERSISTENT per-unit generator worktree created via run_role's `unitWorktree` (on accept/abandon). " +
+      "By DEFAULT refuses a dirty tree (uncommitted WIP) and an unmerged branch — pass `force: true` to override each. " +
+      "An unknown name lists the known ones. Removes the worktree, deletes its `sparra/<name>` branch, and drops the registry entry.",
+    {
+      name: z.string().describe("The unitWorktree name to dispose of."),
+      force: z.boolean().optional().describe("Override the dirty-tree and unmerged-branch refusals (force-remove + `branch -D`)."),
+    },
+    async (args) => {
+      try {
+        const ctx = await loadCtxForRole(root);
+        const r = await removeUnitWorktree(ctx, args.name, { force: args.force });
+        return { content: [{ type: "text" as const, text: JSON.stringify(r, null, 2) }], isError: !r.ok };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `remove_unit_worktree failed: ${(e as Error).message}` }], isError: true };
       }
     }
   );

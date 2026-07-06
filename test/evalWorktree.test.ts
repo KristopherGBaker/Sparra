@@ -201,6 +201,31 @@ describe("runRoleInTempWorktree — WIP-faithful temp worktree (Item D)", () => 
     expect(fs.existsSync(seen.workspace!)).toBe(false);
   });
 
+  it("U-W #5: an evaluator --worktree run whose workspace IS a persistent unit worktree snapshots THAT tree (WIP included)", GIT_IT, async () => {
+    // A generator's persistent unit worktree, cut from `repo`, carrying its own WIP.
+    const unitDir = path.join(path.dirname(repo), `${path.basename(repo)}-unit-eval5`);
+    g(repo, ["worktree", "add", "-b", "sparra/eval5", unitDir, "HEAD"]);
+    try {
+      fs.writeFileSync(path.join(unitDir, "tracked.txt"), "unit-edited\n"); // the unit's WIP, divergent from repo
+      const seen: Seen = {};
+      const res = await runRoleInTempWorktree(
+        { ctx: ctxRepo, roleKind: "evaluator", workspace: unitDir, brief: "grade the unit tree" },
+        { runRoleFn: observer(seen) }
+      );
+      expect(res.ok).toBe(true);
+      // The snapshot mirrors the UNIT tree's WIP (not the source repo's) and is a throwaway linked worktree.
+      expect(seen.linked).toBe(true);
+      expect(path.resolve(seen.workspace!)).not.toBe(path.resolve(unitDir));
+      expect(seen.tracked).toBe("unit-edited"); // the unit's WIP travelled into the graded snapshot
+      expect(fs.existsSync(seen.workspace!)).toBe(false); // throwaway snapshot torn down
+      // The persistent unit tree itself is untouched by the judge snapshot.
+      expect(fs.readFileSync(path.join(unitDir, "tracked.txt"), "utf8")).toBe("unit-edited\n");
+    } finally {
+      g(repo, ["worktree", "remove", "--force", unitDir]);
+      g(repo, ["branch", "-D", "sparra/eval5"]);
+    }
+  });
+
   it("the contract-evaluator is ACCEPTED on the worktree path (U-A #4) — not rejected", GIT_IT, async () => {
     const seen: Seen = {};
     const res = await runRoleInTempWorktree(

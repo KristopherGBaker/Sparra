@@ -6,7 +6,7 @@ import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
-import { cmdRoleRun, roleRequestFromFlags } from "../src/phases/role.ts";
+import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags } from "../src/phases/role.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
 async function makeCtx(): Promise<{ ctx: Ctx; dir: string }> {
@@ -53,6 +53,53 @@ describe("roleRequestFromFlags — CLI --verify → allowVerify (H7 assertion 7d
     expect(req.backend).toBe("codex");
     expect(req.model).toBe("m");
     expect(req.brief).toBe("build");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("roleRequestFromFlags — CLI --unit-worktree → unitWorktree (U-W)", () => {
+  it("--unit-worktree <name> (string) → unitWorktree: name", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "generator", { "unit-worktree": "u1" }, { briefText: "build" });
+    expect(req.unitWorktree).toBe("u1");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a bare/absent --unit-worktree contributes no name", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(roleRequestFromFlags(ctx, "generator", {}, { briefText: "build" }).unitWorktree).toBeUndefined();
+    expect(roleRequestFromFlags(ctx, "generator", { "unit-worktree": true }, { briefText: "build" }).unitWorktree).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdRoleRemoveWorktree — CLI role rm-worktree", () => {
+  it("requires --name (errors without it, never calls the remover)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const remove = vi.fn();
+    const prior = process.exitCode;
+    await cmdRoleRemoveWorktree(ctx, {}, remove as never);
+    expect(remove).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    process.exitCode = prior;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("forwards --name and --force to removeUnitWorktree", async () => {
+    const { ctx, dir } = await makeCtx();
+    const remove = vi.fn(async () => ({ ok: true, message: "removed" }));
+    await cmdRoleRemoveWorktree(ctx, { name: "u1", force: true }, remove as never);
+    expect(remove).toHaveBeenCalledWith(ctx, "u1", { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("sets exit code 1 when the removal is refused (dirty/unmerged/unknown)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const remove = vi.fn(async () => ({ ok: false, message: "refusing: dirty" }));
+    const prior = process.exitCode;
+    await cmdRoleRemoveWorktree(ctx, { name: "u1" }, remove as never);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = prior;
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

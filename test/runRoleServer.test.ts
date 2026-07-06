@@ -74,6 +74,12 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     expect("verdict" in p).toBe(false);
   });
 
+  it("surfaces the unitWorktree {name,dir,branch,created} on the (non-evaluator) generator branch", () => {
+    const uw = { name: "u1", dir: "/proj-unit-u1", branch: "sparra/u1", created: true };
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator", unitWorktree: uw }), 75);
+    expect(p.unitWorktree).toEqual(uw);
+  });
+
   it("carries the not-a-fail signals through both branches", () => {
     const limited = buildRunRolePayload(baseResult({ limitHit: { backend: "codex" } as any, hitMaxTurns: true }), 75);
     expect(limited.limitHit).toBeTruthy();
@@ -147,6 +153,15 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
     expect(req.useWorktree).toBeUndefined();
     expect(req.keepWorktree).toBeUndefined();
+  });
+
+  it("forwards unitWorktree (persistent per-unit generator tree)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator", brief: "build", unitWorktree: "u1" });
+    expect(req.unitWorktree).toBe("u1");
+  });
+
+  it("leaves unitWorktree undefined when not set", () => {
+    expect(toRunRoleRequest(ctx, { roleKind: "generator", brief: "build" }).unitWorktree).toBeUndefined();
   });
 
   it("forwards expectedHead / evalBaseRef (eval-provenance controls)", () => {

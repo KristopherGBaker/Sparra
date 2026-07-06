@@ -108,6 +108,12 @@ export interface SparraState {
      *  selection (skip a limited backend) and resumes correctly across a process restart. */
     limitedRoles?: Record<string, number>;
     items: Record<string, ItemState>;
+    /** PERSISTENT per-unit writer worktrees (U-W), keyed by the caller-chosen `unitWorktree` name:
+     *  each is created on first use on a `sparra/`-prefixed branch, reused across that unit's rounds
+     *  (the generator's WIP survives round N → N+1), and torn down explicitly on accept/abandon.
+     *  DISTINCT from the judges' throwaway `useWorktree` snapshots (which register nothing). `src` is
+     *  the source checkout the worktree was cut from, so teardown removes it from the right repo. */
+    unitWorktrees?: Record<string, { dir: string; branch: string; src: string }>;
     /** Hash of the frozen plan the current items were decomposed from — lets `build`
      *  warn when the plan changed but the run wasn't re-decomposed (`--fresh` / `new`). */
     lastBuiltPlanHash?: string;

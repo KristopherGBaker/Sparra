@@ -62,10 +62,22 @@ output). Wire it into Claude Code pointed at your project:
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
 holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree,
-expectedHead, evalBaseRef })`.
+unitWorktree, expectedHead, evalBaseRef })`.
 `worktree` (read-only judge roles — `evaluator`, `reviewer`, **and `contract-evaluator`**) runs the
-eval/review/critique in a **temporary linked git worktree** snapshotted from `workspace`'s WIP — the
-same machinery as `sparra eval --worktree` (`keepWorktree` retains it). Pass it whenever the
+eval/review/critique in a **temporary, throwaway linked git worktree** snapshotted from `workspace`'s
+WIP — the same machinery as `sparra eval --worktree` (`keepWorktree` retains it), torn down after the
+run.
+
+`unitWorktree: <name>` is the **generator (writer)** counterpart and is a *different* thing: a
+**PERSISTENT, named per-unit worktree** on a `sparra/<name>` branch, created on first use (deps
+provisioned) and **reused across that unit's rounds** so the generator's WIP survives round N → N+1.
+The worktree IS the writer's safety boundary. It's writer-only (rejected on a judge role) and
+mutually exclusive with `worktree`. The result surfaces `unitWorktree: { name, dir, branch, created }`
+so the conductor knows where the WIP lives; tear it down explicitly on accept/abandon with the
+`remove_unit_worktree` MCP tool or `sparra role rm-worktree --name <name> [--force]` (WIP-safe —
+refuses a dirty tree / unmerged branch unless forced). This makes **parallel generators run iff they
+use distinct `unitWorktree` names / workspaces**, so conductors no longer hand-roll `git worktree
+add` + dep provisioning or serialize. Pass it whenever the
 evaluator will **exercise** the tree (run `npm test`/builds), or a **contract-evaluator** will run
 the contract's verify commands to prove they're runnable: it gives the exercise/probe writable
 scratch + provisioned deps, whereas an in-place `run_role` eval stays read-only and false-blocks on

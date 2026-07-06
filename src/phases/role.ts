@@ -1,5 +1,6 @@
 import type { Ctx } from "../context.ts";
 import { runRole, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
+import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { banner, detail, err, info, ok, warn } from "../util/log.ts";
 
 const VALID_KINDS: RoleKind[] = ["generator", "contract-generator", "contract-evaluator", "evaluator", "reviewer"];
@@ -44,6 +45,12 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     const v = res.verdict;
     (v.verdict === "pass" ? ok : warn)(`verdict: ${v.verdict} (${v.weightedTotal}/${ctx.config.rubric.passThreshold}); ${v.blocking.length} blocking`);
   }
+  // The persistent per-unit generator worktree (U-W) — surface WHERE the WIP lives so the caller
+  // can reuse it next round or tear it down (`role rm-worktree --name <n>`) on accept/abandon.
+  if (res.unitWorktree)
+    detail(
+      `unit worktree "${res.unitWorktree.name}": ${res.unitWorktree.dir} (branch ${res.unitWorktree.branch}${res.unitWorktree.created ? ", created" : ", reused"})`
+    );
   // The auto-persisted redacted verdict (evaluator) — surfaced separately from a caller `--out`.
   if (res.verdictPath) detail(`verdict persisted: ${res.verdictPath}`);
   if (res.outPath) detail(`wrote: ${res.outPath}`);
@@ -55,6 +62,31 @@ export async function cmdRoleRun(ctx: Ctx, flags: Record<string, string | boolea
     warn(`emptyCompletion: true — work LANDED (${res.filesChanged ?? 0} file(s) changed) but the report failed to emit; resume sessionId=${res.sessionId} or accept the landed work — NOT a behavioral fail`);
   if (res.hitBudget) warn(`hitBudget: true — stopped on the per-call budget cap; resume sessionId=${res.sessionId} (backend=${res.backend})`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
+}
+
+/**
+ * `sparra role rm-worktree --name <n> [--force]` — WIP-safe teardown of a persistent per-unit
+ * generator worktree (U-W). Refuses a dirty tree / unmerged branch unless `--force`; an unknown
+ * name lists the known ones. Delegates to `removeUnitWorktree` (the same logic the MCP tool uses).
+ */
+export async function cmdRoleRemoveWorktree(
+  ctx: Ctx,
+  flags: Record<string, string | boolean | string[]>,
+  removeFn: typeof removeUnitWorktree = removeUnitWorktree
+): Promise<void> {
+  banner("sparra role rm-worktree");
+  const name = typeof flags.name === "string" ? (flags.name as string) : "";
+  if (!name) {
+    err("provide the worktree name: --name <name>");
+    process.exitCode = 1;
+    return;
+  }
+  const res = await removeFn(ctx, name, { force: flags.force === true });
+  if (res.ok) ok(res.message);
+  else {
+    warn(res.message);
+    process.exitCode = 1;
+  }
 }
 
 /**
@@ -94,6 +126,9 @@ export function roleRequestFromFlags(
     // scratch; `--keep-worktree` retains it for inspection. Same strict boolean parse as --verify.
     useWorktree: flags.worktree === true ? true : undefined,
     keepWorktree: flags["keep-worktree"] === true ? true : undefined,
+    // `--unit-worktree <name>` runs the GENERATOR in a PERSISTENT, named per-unit worktree reused
+    // across rounds (its WIP survives). A string only; a bare/absent flag contributes nothing.
+    unitWorktree: typeof flags["unit-worktree"] === "string" ? (flags["unit-worktree"] as string) : undefined,
     // Eval provenance (judge roles only): `--expected-head <sha>` is verified against the tree's HEAD
     // before launch (mismatch aborts naming both SHAs); `--eval-base <ref>` scopes the changed-files
     // judgment to this unit (`<ref>..HEAD` + WIP). Both are strings; anything else is dropped.

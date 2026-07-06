@@ -241,7 +241,7 @@ your-project/
 ├─ prototypes/         # throwaway prototypes (greenfield)
 └─ .sparra/
    ├─ config.yaml      # every knob
-   ├─ state.json       # phase machine + per-item status/cost/tokens + session ids (resume)
+   ├─ state.json       # phase machine + per-item status/cost/tokens + session ids (resume) + persistent unit-worktree registry (name→dir/branch/src)
    ├─ memory.md        # durable cross-run learnings (capped); roles read it each item
    ├─ environment.md   # optional user/reflect-authored environment notes injected into writer prompts
    ├─ frozen/          # PLAN.frozen.md, CODEBASE_MAP.frozen.md, HOLDOUT.frozen.md (build input)

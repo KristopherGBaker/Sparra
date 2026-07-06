@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
+import { branchExists, listWorktrees } from "../src/util/git.ts";
+import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
 import { mergedBuildEnv } from "../src/build/env.ts";
 import { RE_CRITIQUE_INSTRUCTION } from "../src/build/contract.ts";
@@ -2457,5 +2459,156 @@ describe("runRole evaluator — anchored functionality cap (parity with evaluate
     expect(r.verdict?.scores.functionality).toBe(30);
     expect(r.verdict?.notes).not.toContain("capped");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── U-W: persistent per-unit WRITER worktrees via `runRole({ unitWorktree })`. Real git repo +
+//    an injected recorder session (no live model, no real dep copy — provisionFn is always fake). ──
+describe("runRole — unitWorktree (persistent generator tree)", () => {
+  const GIT_IT = { timeout: 20_000 };
+
+  function ggit(dir: string, args: string[]): string {
+    return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  }
+  /** A git-repo ctx (makeCtx above is a bare temp dir; the unit worktree needs a real repo). */
+  async function makeRepoCtx(): Promise<{ ctx: Ctx; dir: string }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-uwrole-"));
+    ggit(dir, ["init"]);
+    fs.writeFileSync(path.join(dir, "base.txt"), "base\n");
+    fs.writeFileSync(path.join(dir, ".gitignore"), ".sparra/\n");
+    ggit(dir, ["add", "-A"]);
+    ggit(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"]);
+    ggit(dir, ["branch", "-M", "main"]);
+    const paths = new Paths(dir);
+    await paths.ensureScaffold();
+    const store = StateStore.create(paths, "greenfield");
+    return { ctx: { root: dir, paths, config: defaultConfig(), store }, dir };
+  }
+  const fakeProvision = () => vi.fn(() => ({ copied: [], skipped: [], failed: [] }));
+  const cleanup = (ctx: Ctx, dir: string) => {
+    for (const name of Object.keys(ctx.store.data.build.unitWorktrees ?? {})) {
+      const rec = ctx.store.data.build.unitWorktrees![name]!;
+      try { ggit(dir, ["worktree", "remove", "--force", rec.dir]); } catch { /* ignore */ }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+
+  it("assertion 1: creates the worktree, runs the generator IN it, provisions deps, registers it", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec = recorder();
+      const provisionFn = fakeProvision();
+      const res = await runRole({ ctx, roleKind: "generator", brief: "build", unitWorktree: "u1", runSessionFn: rec.fn, provisionFn });
+      const call = rec.calls[0]!;
+      // Ran in the worktree (≠ the source), which is a registered linked worktree on sparra/u1.
+      expect(path.resolve(call.cwd!)).not.toBe(path.resolve(dir));
+      expect(branchExists(dir, "sparra/u1")).toBe(true);
+      expect(ctx.store.data.build.unitWorktrees!.u1!.dir).toBe(call.cwd);
+      // Deps provisioned FROM the source INTO the worktree via the existing seam.
+      expect(provisionFn).toHaveBeenCalledWith(dir, call.cwd, ctx.config.git.provisionDeps);
+      // The result surfaces the tree (assertion 9).
+      expect(res.unitWorktree).toEqual({ name: "u1", dir: call.cwd, branch: "sparra/u1", created: true });
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 4: the worktree is the WRITE boundary; holdout excluded from reads; global build state untouched", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec = recorder();
+      await runRole({ ctx, roleKind: "generator", brief: "build", unitWorktree: "u1", runSessionFn: rec.fn, provisionFn: fakeProvision() });
+      const call = rec.calls[0]!;
+      // writeScope is EXACTLY the worktree (recording-guard): a write inside is allowed, outside denied.
+      expect(call.writeScope).toEqual([call.cwd]);
+      expect(denyWriteOutsideRoots("Write", { file_path: path.join(call.cwd!, "src/x.ts") }, call.writeScope!)).toBeNull();
+      expect(denyWriteOutsideRoots("Write", { file_path: path.join(dir, "src/x.ts") }, call.writeScope!)).toMatch(/outside the allowed work scope/);
+      // Read scopes/holdout exclusion are computed against the worktree cwd: ctx.root (holdout-bearing) is NOT granted.
+      expect((call.additionalDirectories ?? []).map((d) => path.resolve(d))).not.toContain(path.resolve(dir));
+      // No unrelated global build state was mutated.
+      expect(ctx.store.data.build.branch).toBeUndefined();
+      expect(ctx.store.data.build.workspaceDir).toBeUndefined();
+      expect(ctx.store.data.build.currentItem).toBeUndefined();
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 3: reuse across rounds — same dir/branch, no duplicates, prior WIP survives byte-identical", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec1 = recorder();
+      const r1 = await runRole({ ctx, roleKind: "generator", brief: "round1", unitWorktree: "u1", runSessionFn: rec1.fn, provisionFn: fakeProvision() });
+      const wtDir = r1.unitWorktree!.dir;
+      fs.writeFileSync(path.join(wtDir, "wip.txt"), "landed work\n"); // WIP left between rounds
+      const wtCountBefore = listWorktrees(dir).length;
+
+      const rec2 = recorder();
+      const r2 = await runRole({ ctx, roleKind: "generator", brief: "round2", unitWorktree: "u1", runSessionFn: rec2.fn, provisionFn: fakeProvision() });
+      expect(r2.unitWorktree).toEqual({ name: "u1", dir: wtDir, branch: "sparra/u1", created: false });
+      expect(path.resolve(rec2.calls[0]!.cwd!)).toBe(path.resolve(wtDir));
+      expect(Object.keys(ctx.store.data.build.unitWorktrees!)).toEqual(["u1"]); // no duplicate entry
+      expect(listWorktrees(dir).length).toBe(wtCountBefore); // no extra linked worktree
+      expect(fs.readFileSync(path.join(wtDir, "wip.txt"), "utf8")).toBe("landed work\n"); // WIP survived
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 8: two writers with DIFFERENT names get DISTINCT write boundaries (each denied the other's tree)", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const recA = recorder();
+      const recB = recorder();
+      const a = await runRole({ ctx, roleKind: "generator", brief: "A", unitWorktree: "ua", runSessionFn: recA.fn, provisionFn: fakeProvision() });
+      const b = await runRole({ ctx, roleKind: "generator", brief: "B", unitWorktree: "ub", runSessionFn: recB.fn, provisionFn: fakeProvision() });
+      expect(a.unitWorktree!.dir).not.toBe(b.unitWorktree!.dir);
+      // A is denied B's tree and vice versa.
+      expect(denyWriteOutsideRoots("Write", { file_path: path.join(b.unitWorktree!.dir, "x.ts") }, recA.calls[0]!.writeScope!)).toMatch(/outside/);
+      expect(denyWriteOutsideRoots("Write", { file_path: path.join(a.unitWorktree!.dir, "x.ts") }, recB.calls[0]!.writeScope!)).toMatch(/outside/);
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 8: unitWorktree on a JUDGE role is a clear error — no session, no worktree", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec = recorder();
+      await expect(
+        runRole({ ctx, roleKind: "evaluator", brief: "grade", unitWorktree: "u1", runSessionFn: rec.fn })
+      ).rejects.toThrow(/generator role only/i);
+      expect(rec.calls).toHaveLength(0);
+      expect(listWorktrees(dir).map((w) => fs.realpathSync(w.path))).toEqual([fs.realpathSync(dir)]);
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 8: unitWorktree + useWorktree together is a clear error", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec = recorder();
+      await expect(
+        runRole({ ctx, roleKind: "generator", brief: "build", unitWorktree: "u1", useWorktree: true, runSessionFn: rec.fn })
+      ).rejects.toThrow(/mutually exclusive/i);
+      expect(rec.calls).toHaveLength(0);
+    } finally {
+      cleanup(ctx, dir);
+    }
+  });
+
+  it("assertion 2: an invalid name is rejected before any git/fs action", GIT_IT, async () => {
+    const { ctx, dir } = await makeRepoCtx();
+    try {
+      const rec = recorder();
+      await expect(
+        runRole({ ctx, roleKind: "generator", brief: "build", unitWorktree: "../escape", runSessionFn: rec.fn })
+      ).rejects.toThrow(/invalid unitWorktree name/i);
+      expect(rec.calls).toHaveLength(0);
+      expect(listWorktrees(dir).map((w) => fs.realpathSync(w.path))).toEqual([fs.realpathSync(dir)]);
+    } finally {
+      cleanup(ctx, dir);
+    }
   });
 });

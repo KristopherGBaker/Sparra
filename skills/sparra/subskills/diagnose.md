@@ -17,7 +17,7 @@ From the project root (the dir you ran `sparra` in):
    ```bash
    node -e "const s=require('./.sparra/state.json');console.log('phase:',s.phase,'mode:',s.mode);console.log('workspace:',s.build.workspaceNote||'-');if(s.build.waitingUntil)console.log('PAUSED on limit until',new Date(s.build.waitingUntil).toLocaleString());if(s.build.limitedRoles&&Object.keys(s.build.limitedRoles).length)console.log('limited backends:',s.build.limitedRoles);for(const[k,v]of Object.entries(s.build.items||{}))console.log(' ',k,JSON.stringify({status:v.status,round:v.round,pivots:v.pivots,lastScore:v.lastScore,cost:+(v.costUsd||0).toFixed(3),tok:v.tokensUsed}))"
    ```
-   `costUsd` is `$0` for Codex roles (it reports tokens) — look at `tokensUsed`. `waitingUntil`/`limitedRoles` appear when `build.autoRestart` paused the run on a provider limit (see signatures).
+   `costUsd` is `$0` for Codex roles (it reports tokens) — look at `tokensUsed`. `waitingUntil`/`limitedRoles` appear when `build.autoRestart` paused the run on a provider limit (see signatures). `build.unitWorktrees` (name→`{dir,branch,src}`) is the registry of **persistent per-unit generator worktrees** (`run_role`'s `unitWorktree`); a stale entry whose `dir` is gone means a teardown was interrupted — dispose it with `sparra role rm-worktree --name <name> [--force]`.
 
 2. **`.sparra/workitems/items.json`** — the decomposition. Check the *shape*: how many items,
    and whether any are setup/verification-only (a smell — see signatures). Each item carries

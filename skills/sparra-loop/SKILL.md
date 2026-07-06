@@ -245,9 +245,11 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
-  `maxBudgetUsd`, `worktree`/`keepWorktree`, `expectedHead`/`evalBaseRef`). `worktree=true` (evaluator/reviewer) runs the role
-  in a temp WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
-  pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes).
+  `maxBudgetUsd`, `worktree`/`keepWorktree`, `unitWorktree`, `expectedHead`/`evalBaseRef`). `worktree=true` (evaluator/reviewer) runs the role
+  in a temp, throwaway WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
+  pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes). `unitWorktree="<name>"`
+  (generator-only, mutually exclusive with `worktree`) runs the writer in a **persistent** named per-unit worktree reused
+  across rounds — tear it down with `remove_unit_worktree(name=…)` on accept/abandon.
   `maxBudgetUsd` (CLI: `--budget <usd>`) overrides `build.maxBudgetUsdPerItem`
   for that one call (`0` = unlimited; omit for the config cap). If that
   agent isn't available, spawn a general subagent and instruct it to call the
@@ -291,7 +293,16 @@ Independent role-runs can run as **concurrent subagents** — e.g. evaluate item
 while generating item B, or get two cross-model second opinions at once. Read-only
 roles (evaluator, reviewer, contract-evaluator) are always safe to parallelize. The
 one caveat: **two WRITER role-runs (generators) must not target the same workspace
-concurrently** — give them separate workspaces or run them in sequence.
+concurrently** — **generators run in parallel iff they use distinct workspaces /
+`unitWorktree` names.** The clean way to get that is to give each unit its own
+**`unitWorktree="<name>"`** (generator-only): first use creates a **persistent, named
+per-unit worktree** on a `sparra/<name>` branch (deps provisioned), and every later
+round with the same name **reuses** it so that unit's WIP survives round→round — no
+hand-rolled `git worktree add` + `node_modules` copying, no serializing. It's distinct
+from the evaluator's throwaway `worktree=true` snapshot and mutually exclusive with it;
+the result's `unitWorktree` field carries the `{name,dir,branch}`. Tear each one down on
+accept/abandon with **`remove_unit_worktree(name=…)`** (or `sparra role rm-worktree
+--name <name>`) — WIP-safe: it refuses a dirty tree / unmerged branch unless `force`.
 
 ### Live progress while a role runs (optional)
 A backgrounded role streams its transcript to disk *as it works* (the runner's

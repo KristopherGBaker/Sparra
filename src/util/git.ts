@@ -297,9 +297,24 @@ export function isBranchMerged(root: string, branch: string, base: string): bool
   return git(root, ["merge-base", "--is-ancestor", branch, base]).ok;
 }
 
-/** Remove a git worktree (the build's isolated checkout). */
-export function removeWorktree(root: string, dir: string): { ok: boolean; out: string } {
-  return git(root, ["worktree", "remove", dir]);
+/** Remove a git worktree (the build's isolated checkout). `force` (`--force`) removes even a dirty
+ *  worktree — used by the WIP-safe teardown ONLY after the dirty-tree refusal has been overridden. */
+export function removeWorktree(root: string, dir: string, force = false): { ok: boolean; out: string } {
+  return git(root, ["worktree", "remove", ...(force ? ["--force"] : []), dir]);
+}
+
+/**
+ * Create a PERSISTENT linked worktree at `wtDir` on a NEW branch cut from `srcDir`'s HEAD
+ * (`git worktree add -b <branch> <wtDir> HEAD`) — the same primitive the build loop's
+ * `prepareWorkspace` uses. Unlike `addWipWorktree` (a DETACHED, throwaway WIP-snapshot commit), this
+ * is a durable named branch a generator's WIP lives on ACROSS rounds. Refuses if the target dir
+ * already exists (never adopts a foreign dir). The user's HEAD/index/working tree are untouched — a
+ * `worktree add` only reads the source repo and checks out into the sibling dir.
+ */
+export function addNamedWorktree(srcDir: string, wtDir: string, branch: string): { ok: boolean; out: string } {
+  if (!isGitRepo(srcDir) || !hasCommits(srcDir)) return { ok: false, out: `${srcDir} is not a git repo with commits` };
+  if (exists(wtDir)) return { ok: false, out: `worktree target already exists: ${wtDir}` };
+  return git(srcDir, ["worktree", "add", "-b", branch, wtDir, "HEAD"]);
 }
 
 // ── Temp WIP-snapshot worktrees (the `sparra eval --worktree` isolation seam). ──

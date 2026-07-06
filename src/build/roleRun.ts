@@ -25,6 +25,7 @@ import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
+import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
@@ -231,6 +232,17 @@ export interface RoleRunRequest {
   /** With `useWorktree`: keep the temp worktree after the run (its path is printed) instead of
    *  removing it — for inspecting exactly what was graded. */
   keepWorktree?: boolean;
+  /** Run the GENERATOR (writer) in a PERSISTENT, named per-unit git worktree (U-W): first use
+   *  creates a linked worktree on a `sparra/<name>` branch cut from the source HEAD, provisions deps,
+   *  and registers it in the build store; subsequent rounds with the same name REUSE that tree, so
+   *  the generator's WIP survives round N → N+1 (distinct from the judges' throwaway `useWorktree`
+   *  snapshot). The worktree IS the writer's safety boundary. Torn down explicitly via
+   *  `removeUnitWorktree` (CLI `role rm-worktree` / MCP `remove_unit_worktree`) on accept/abandon.
+   *  WRITER role ONLY; rejected for a judge role, and mutually exclusive with `useWorktree`. */
+  unitWorktree?: string;
+  /** Injectable git/fs seams for the persistent unit-worktree lifecycle (tests inject fakes so no
+   *  real worktree add / dep copy is needed). */
+  unitWorktreeDeps?: UnitWorktreeDeps;
   /** Eval provenance (JUDGE roles only — evaluator, reviewer, contract-evaluator): the commit SHA
    *  the brief cites as the artifact to grade. VERIFIED before any session launches — the runner
    *  resolves the SOURCE checkout's HEAD (on a `useWorktree` run) or the workspace HEAD (in place)
@@ -349,6 +361,10 @@ export interface RoleRunResult {
    *  `sessionId`/`backend` (raising the cap if warranted) rather than re-running or treating it
    *  as a FAIL. */
   hitBudget?: boolean;
+  /** Set for a `unitWorktree` writer run (U-W): the PERSISTENT per-unit worktree the generator ran
+   *  in — its name, dir, branch, and whether THIS call created it. Surfaced over MCP + CLI so the
+   *  conductor knows WHERE the WIP lives (to reuse next round, or tear down on accept/abandon). */
+  unitWorktree?: { name: string; dir: string; branch: string; created: boolean };
 }
 
 /** True when `text` carries a parseable GENERATOR completion report — a JSON block with a
@@ -576,8 +592,50 @@ export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: Exerci
  * checkout, torn down after the run); the default stays the in-place run, unchanged.
  */
 export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
+  // A `unitWorktree` request (writer-only) routes through the PERSISTENT per-unit worktree wrapper —
+  // checked first (even an empty string routes here, so its name-validation fires) and mutually
+  // exclusive with the judge-only `useWorktree` snapshot.
+  if (req.unitWorktree !== undefined) return runRoleInUnitWorktree(req);
   if (req.useWorktree) return runRoleInTempWorktree(req);
   return runRoleInPlace(req);
+}
+
+/**
+ * `unitWorktree`: run the GENERATOR in a PERSISTENT, named per-unit worktree (U-W). Validates the
+ * role/flag combination and the name, ensures the worktree (create-on-first-use, reuse thereafter —
+ * see `ensureUnitWorktree`), then delegates to the ordinary in-place run with the worktree as its
+ * workspace. Because the delegate sees a linked-worktree workspace ≠ ctx.root, the existing paths
+ * apply UNCHANGED: dep provisioning (via `depSourceDir = src`), the writer guard scoped to the tree,
+ * read-scope + holdout exclusion computed against the worktree cwd. NOT torn down after the run — the
+ * WIP is meant to survive to the next round; explicit `removeUnitWorktree` disposes it.
+ */
+export async function runRoleInUnitWorktree(req: RoleRunRequest): Promise<RoleRunResult> {
+  const { ctx, roleKind } = req;
+  const name = req.unitWorktree ?? "";
+  if (roleKind !== "generator") {
+    throw new Error(
+      `unitWorktree is a PERSISTENT writer worktree for the generator role only; rejected for "${roleKind}" — ` +
+        `a judge role uses the throwaway --worktree snapshot instead. Drop unitWorktree, or run the generator.`
+    );
+  }
+  if (req.useWorktree) {
+    throw new Error(
+      `unitWorktree (persistent generator tree) and useWorktree (throwaway judge snapshot) are mutually exclusive — pick one.`
+    );
+  }
+  const src = req.workspace ?? ctx.root;
+  const wt = await ensureUnitWorktree(ctx, name, src, req.unitWorktreeDeps);
+  info(
+    `role-run-${roleKind}: ${wt.created ? "created" : "reusing"} persistent unit worktree "${name}" at ${wt.dir} on ${wt.branch}`
+  );
+  const result = await runRoleInPlace({
+    ...req,
+    workspace: wt.dir,
+    unitWorktree: undefined,
+    useWorktree: false,
+    depSourceDir: src,
+  });
+  return { ...result, unitWorktree: { name, dir: wt.dir, branch: wt.branch, created: wt.created } };
 }
 
 /** Injectable seams for the temp-worktree wrapper — tests use a throwaway git repo + a fake

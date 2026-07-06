@@ -16,7 +16,7 @@ import { cmdNew } from "./phases/new.ts";
 import { cmdFinish } from "./phases/finish.ts";
 import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
-import { cmdRoleRun } from "./phases/role.ts";
+import { cmdRoleRun, cmdRoleRemoveWorktree } from "./phases/role.ts";
 import { cmdMeasure } from "./phases/measure.ts";
 import { promptDrift, summarizePromptDrift } from "./prompts.ts";
 import { parse } from "./util/args.ts";
@@ -48,8 +48,9 @@ ${color.bold("Commands")}
   finish [--pr|--merge --yes] [--teardown] [--force] [--branch <name>] [--new "<title>"]
                                                 close out a cycle: land the Sparra branch (PR/ff-only), tear down, archive
   clean [--yes] [--force]                       prune stale sparra worktrees/branches (dry-run by default)
-  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--prior-critique f]… [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify] [--worktree [--keep-worktree]] [--expected-head <sha>] [--eval-base <ref>]
-                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands; --worktree runs an evaluator/reviewer/contract-evaluator in a temp WIP-snapshot worktree, torn down after — --keep-worktree retains it; repeatable --prior-critique inlines prior-round critique files into a contract-evaluator re-critique, .sparra/ paths OK; judge roles: --expected-head <sha> verifies the graded HEAD before launch, --eval-base <ref> scopes the changed-files judgment to <ref>..HEAD + WIP)
+  role run --kind <r> [--backend b] [--model m] [--effort low|medium|high|xhigh|max] [--brief f|--brief-text s] [--contract f] [--prior-critique f]… [--holdout f] [--out f] [--workspace d] [--budget <usd>] [--verify] [--worktree [--keep-worktree]] [--unit-worktree <name>] [--expected-head <sha>] [--eval-base <ref>]
+                                                run ONE role once on a chosen backend (holdout wall enforced) — the cross-model seam (--budget overrides build.maxBudgetUsdPerItem, 0 = unlimited; --verify lets an in-place generator auto-run build.verifyCommands; --worktree runs an evaluator/reviewer/contract-evaluator in a temp WIP-snapshot worktree, torn down after — --keep-worktree retains it; --unit-worktree <name> runs the GENERATOR in a PERSISTENT named per-unit worktree reused across rounds — tear down with 'role rm-worktree'; repeatable --prior-critique inlines prior-round critique files into a contract-evaluator re-critique, .sparra/ paths OK; judge roles: --expected-head <sha> verifies the graded HEAD before launch, --eval-base <ref> scopes the changed-files judgment to <ref>..HEAD + WIP)
+  role rm-worktree --name <name> [--force]     tear down a persistent per-unit generator worktree (--unit-worktree) — refuses a dirty tree / unmerged branch unless --force
   eval [dir] [--contract f] [--backend b] [--model m] [--effort x] [--holdout f] [--out f] [--budget <usd>] [--worktree [--keep-worktree]] [--expected-head <sha>] [--eval-base <ref>]
                                                 grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator; --worktree gives the exercise writable scratch in a temp worktree that mirrors your WIP; --expected-head <sha> aborts before launch if the graded HEAD isn't the one cited; --eval-base <ref> scopes scope/deviation judgment to <ref>..HEAD + WIP so foreign uncommitted WIP doesn't fail assertions)
   measure [dir] [--worktree [--keep-worktree]] [--set-baseline] [--out f]
@@ -92,8 +93,9 @@ async function main(): Promise<void> {
     if (roleDrift.actionable && roleDrift.line) info(`Note: ${roleDrift.line}.`);
     if (cmd === "role") {
       if (positionals[1] === "run") await cmdRoleRun(roleCtx, flags);
+      else if (positionals[1] === "rm-worktree") await cmdRoleRemoveWorktree(roleCtx, flags);
       else {
-        err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run)`);
+        err(`Unknown role subcommand: ${positionals[1] ?? "(none)"} (try: role run, role rm-worktree)`);
         process.exitCode = 1;
       }
     } else if (cmd === "measure") {
