@@ -122,7 +122,15 @@ build:
     [npm test, tsc, ...]      #   writing blind — auto-approved on a worktree boundary, or in-place via
                               #   run_role `allowVerify` / `--verify`; [] disables. Also the explicit
                               #   opt-in for the harness executor's argv[0] allowlist (probe/rerun gate):
-                              #   unknown tools are rejected by default; a prefix match here allows them
+                              #   unknown tools are rejected by default; a prefix match here allows them.
+                              #   PIPE SPLIT: the harness EXECUTOR (probe/rerun/preflight/measure) spawns
+                              #   argv with no shell and rejects EVERY pipe (`npm test | tail` is unsafe
+                              #   there). The generator's self-verify Bash ALLOW-HOOK is the one narrow
+                              #   exception: it permits a read-only output-shaping filter pipe AFTER an
+                              #   allowlisted command (`npm test 2>&1 | tail -5`) — the left stage is
+                              #   re-checked for forbidden tokens so nothing launders behind the prefix,
+                              #   and each filter stage is arg-validated (no file read/write). See
+                              #   build-loop.md / role-runner.md.
   flakinessReruns: 2          # after a PASSING verdict the harness re-runs the contract's verify
                               #   commands this many times; ANY non-ok result demotes the pass to a
                               #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped,

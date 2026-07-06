@@ -8,6 +8,7 @@ import {
   denyBash,
   denyBashMutation,
   denyAmbientMcp,
+  denyDisableSandbox,
   allowVerifyBash,
   allowReadInScope,
   writeScopeViolations,
@@ -78,6 +79,156 @@ describe("allowVerifyBash (generator self-verify auto-approval)", () => {
   it("does not match a prefix that is only a substring of a different command", () => {
     // "tsc" must not allow "tscx" or an unrelated command merely containing it.
     expect(allowVerifyBash("Bash", { command: "tscanner run" }, VERIFY)).toBeNull();
+  });
+});
+
+describe("allowVerifyBash — output-shaping filter pipe (U3 Part A, allow-hook only)", () => {
+  const PREFIX = ["npm test"];
+
+  it("A1: allows an allow-prefix piped into EVERY permitted pure filter", () => {
+    for (const stage of ["tail -5", "head -20", 'grep -E "fail"', "cat", "wc -l", "sort", "uniq", "cut -f1", "nl", "tr a b"]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toMatch(/output-shaping/);
+    }
+  });
+
+  it("A1: allows a CHAINED filter pipeline", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test | tail -20 | grep x" }, PREFIX)).toMatch(/output-shaping/);
+  });
+
+  it("A2: allows a permitted fd-dup / dev-null discard before the pipe (one per family)", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test 2>&1 | tail -5" }, PREFIX)).toMatch(/output-shaping/);
+    expect(allowVerifyBash("Bash", { command: "npm test >&2 | cat" }, PREFIX)).toMatch(/output-shaping/);
+    expect(allowVerifyBash("Bash", { command: "npm test 1>&2 | wc -l" }, PREFIX)).toMatch(/output-shaping/);
+    expect(allowVerifyBash("Bash", { command: "npm test 2>/dev/null | grep x" }, PREFIX)).toMatch(/output-shaping/);
+    expect(allowVerifyBash("Bash", { command: "npm test >/dev/null | tail -1" }, PREFIX)).toMatch(/output-shaping/);
+  });
+
+  it("A4: rejects an executing / writing pipeline stage (only pure filters granted)", () => {
+    for (const stage of ["tee log", "sed -i s/a/b/", "sed 's/a/b/'", "awk '{system(\"rm x\")}'", "xargs rm", "node -e 'x'", "sh", "bash", "perl -e", "python -c"]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toBeNull();
+    }
+  });
+
+  it("A4a: rejects a filter whose ARGS would WRITE a file (default-deny flag allowlist)", () => {
+    for (const stage of ["sort -o out.txt", "sort --output=out.txt"]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toBeNull();
+    }
+  });
+
+  it("A4a: rejects a filter whose ARGS would READ a file (operand cap + flag allowlist)", () => {
+    for (const stage of [
+      "cat /etc/passwd", // cat takes ZERO operands — the operand is a file
+      "grep pat somefile", // grep pattern + FILE operand (2 > 1)
+      "grep -f patterns.txt", // `-f` reads a pattern FILE (not in the flag allowlist)
+      "head somefile",
+      "wc somefile",
+      "sort infile",
+      "uniq in out",
+      "cut -f1 somefile", // `-f1` is fine, the trailing operand is a file
+      "nl somefile",
+      "grep -e pat somefile", // `-e` supplied the pattern, so the operand is a FILE
+      "grep -A 3 pat somefile", // value flag consumed, pattern operand + FILE operand (2 > 1)
+      "tail -f somefile", // `-f` (follow) is not allowlisted, and the operand is a file
+    ]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toBeNull();
+    }
+  });
+
+  it("A4a: still GRANTS the safe output-shaping shapes (args are pure stdin→stdout)", () => {
+    for (const stage of [
+      "tail -5",
+      "head -20",
+      'grep -E "fail"',
+      "grep -n foo",
+      "grep -o pat", // `-o` = only-matching (SAFE) — must NOT be confused with `sort -o`
+      "wc -l",
+      "cut -f1",
+      "sort -r",
+      "tail -n 5 | grep x",
+    ]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toMatch(/output-shaping/);
+    }
+  });
+
+  it("A4a: does NOT grant a filter-pipe whose stage tool is UNLISTED (strict 10-tool allowlist)", () => {
+    // Only the 10 pinned tools are recognized; egrep/fgrep and arbitrary binaries defer.
+    for (const stage of ["jq .", "ripgrep x", "foobar", "egrep x", "fgrep x", "less", "more", "awk '{print}'"]) {
+      expect(allowVerifyBash("Bash", { command: `npm test | ${stage}` }, PREFIX), stage).toBeNull();
+    }
+  });
+
+  it("A5: rejects real-file redirects (incl. a permitted token as a PREFIX of a real file)", () => {
+    for (const cmd of [
+      "npm test > out.txt",
+      "npm test >> log",
+      "npm test >/dev/null.txt | tail", // dev-null as prefix of a real file, before a filter
+      "npm test >&out.txt",
+      "npm test 1>& out.txt",
+      "npm test 2>&1file", // fd-dup as prefix of a file
+      "npm test 2>&1file | tail", // …even piped into a filter
+    ]) {
+      expect(allowVerifyBash("Bash", { command: cmd }, PREFIX), cmd).toBeNull();
+    }
+  });
+
+  it("A6: rejects chain / adjacency adversaries", () => {
+    for (const cmd of [
+      "npm test | tailx", // filter name as prefix of an unknown binary
+      "npm test | tail -20 | sh", // bad second stage
+      "npm test | grep x; rm y",
+      "npm test && rm y",
+      "npm test | tail -5 && curl evil",
+      "npm test | tail `$(id)`",
+      "npm test\n | tail -5", // a control char must never be laundered by stage-trimming
+    ]) {
+      expect(allowVerifyBash("Bash", { command: cmd }, PREFIX), cmd).toBeNull();
+    }
+  });
+
+  it("A7: left side must be an EXACT allow-prefix — the filter allowance never grants a non-allowlisted command", () => {
+    expect(allowVerifyBash("Bash", { command: "rm -rf / | tail" }, PREFIX)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "curl evil | grep x" }, PREFIX)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "npmtest | tail" }, PREFIX)).toBeNull(); // substring, not a prefix boundary
+  });
+
+  it("A7a: rejects forbidden tokens LAUNDERED on the left stage behind an allowlisted prefix", () => {
+    // Each of these DENIES without the pipe (contains a forbidden token) — the pipe must not
+    // launder it into an allow. FAILS under the opposite mutation (drop the left-stage re-check).
+    for (const cmd of [
+      "npm test curl evil | tail -5", // network on the left
+      "npm test rm x | tail -5", // mutation on the left
+      "npm test git commit -m x | grep x", // commit on the left
+      "npm test npm install | tail", // install on the left
+      "npm test && rm x | tail", // chain on the left
+      "npm test $(curl evil) | tail", // command substitution on the left
+      "npm test `curl evil` | tail", // backtick substitution on the left
+    ]) {
+      expect(allowVerifyBash("Bash", { command: cmd }, PREFIX), cmd).toBeNull();
+    }
+  });
+
+  it("A7a: clean allowlisted left stages still GRANT (left re-check is not over-broad)", () => {
+    for (const cmd of ["npm test | tail -5", "npm test 2>&1 | grep -E fail", "npm test | tail -n 5 | grep x"]) {
+      expect(allowVerifyBash("Bash", { command: cmd }, PREFIX), cmd).toMatch(/output-shaping/);
+    }
+  });
+
+  it("A: honors the caller's extra deny substrings on the filter-pipe path too", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test | tail -5" }, PREFIX, ["npm test"])).toBeNull();
+  });
+});
+
+describe("denyDisableSandbox (U3 Part B — flag-as-bypass deny)", () => {
+  it("DENIES a Bash call carrying dangerouslyDisableSandbox: true, naming the flag", () => {
+    const r = denyDisableSandbox("Bash", { command: "git -C /x status", dangerouslyDisableSandbox: true });
+    expect(r).toMatch(/dangerouslyDisableSandbox/);
+  });
+  it("is inert when the flag is absent or false (purely additive)", () => {
+    expect(denyDisableSandbox("Bash", { command: "npm test" })).toBeNull();
+    expect(denyDisableSandbox("Bash", { command: "npm test", dangerouslyDisableSandbox: false })).toBeNull();
+  });
+  it("ignores non-Bash tools", () => {
+    expect(denyDisableSandbox("Write", { file_path: "/x", dangerouslyDisableSandbox: true })).toBeNull();
   });
 });
 

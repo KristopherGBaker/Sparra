@@ -6,6 +6,7 @@ import {
   denyAnyWrite,
   denyBash,
   denyBashMutation,
+  denyDisableSandbox,
   denyTreeMutatingGit,
   denyWriteNotFile,
   denyWriteOutsideRoots,
@@ -104,6 +105,7 @@ export function scopedWriterHooks(
   const { readScopes = [], extraDeny = [] } = opts;
   const deny: Decider[] = [
     (t) => denyAmbientMcp(t),
+    (t, i) => denyDisableSandbox(t, i),
     (t, i) => denyWriteOutsideRoots(t, i, writeRoots),
     (t, i) => denyBash(t, i, denyBashContains),
     ...extraDeny, // e.g. the holdout-read block — checked BEFORE the read allow below, so deny wins
@@ -118,6 +120,7 @@ export function scopedWriterHooks(
 export function singleFileHooks(allowedFile: string, denyBashContains: string[]): HookConfig {
   return makeDenyHook([
     (t) => denyAmbientMcp(t),
+    (t, i) => denyDisableSandbox(t, i),
     (t, i) => denyWriteNotFile(t, i, allowedFile),
     (t, i) => denyBashMutation(t, i, denyBashContains),
   ]);
@@ -127,7 +130,7 @@ export function singleFileHooks(allowedFile: string, denyBashContains: string[])
  *  `readScopes` is given, so a read-only role can always read its workspace. */
 export function readOnlyHooks(denyBashContains: string[], opts: RoleHookOpts = {}): HookConfig {
   const { readScopes = [], extraDeny = [] } = opts;
-  const deny: Decider[] = [(t) => denyAmbientMcp(t), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains), ...extraDeny];
+  const deny: Decider[] = [(t) => denyAmbientMcp(t), (t, i) => denyDisableSandbox(t, i), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains), ...extraDeny];
   const allow: Decider[] = readScopes.length ? [(t, i) => allowReadInScope(t, i, readScopes)] : [];
   return makeGuardHook(deny, allow);
 }
@@ -138,6 +141,7 @@ export function evaluatorHooks(denyBashContains: string[], opts: RoleHookOpts = 
   const { readScopes = [], extraDeny = [] } = opts;
   const deny: Decider[] = [
     (t) => denyAmbientMcp(t),
+    (t, i) => denyDisableSandbox(t, i),
     (t) => (denyAnyWrite(t) ? `Evaluator does not edit source (${t} blocked). Exercise via Bash / the exercise tools.` : null),
     (t, i) => denyBash(t, i, denyBashContains),
     // Best-effort raw-Bash residual (like denyBash): deny tree-mutating git so the read-only evaluator

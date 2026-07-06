@@ -76,8 +76,16 @@ i.e. the interactive `/sparra-loop` path — auto-run its project's `build.verif
 so each self-verify gate isn't blocked by the permission wall on a hooks-only backend (Claude
 without `auto`). It reuses the existing `allowVerifyBash` decider unchanged — a single,
 self-contained verify command matching a `build.verifyCommands` prefix, with **no** command
-chaining / redirect / pipe / network / mutation / install / commit — so it adds no new
-auto-approval surface; the opt-in only drops the branch precondition. It is a **no-op for
+chaining / redirect / network / mutation / install / commit — so it adds no new
+auto-approval surface; the opt-in only drops the branch precondition. The one **narrow**
+allow-hook-only exception is an **output-shaping filter pipe**: an allow-prefix (with an optional
+`2>&1` / `>/dev/null` discard) piped into pure, non-executing text filters — `npm test 2>&1 | tail -5`,
+`… | grep -E "fail"`, `… | wc -l` — so a giant test dump can be trimmed instead of false-blocked.
+Each filter stage is validated **argument-by-argument against a per-tool allowlist** (default-deny):
+non-flag operands are capped (a file path is rejected) and only known output-shaping flags are
+accepted, so a file-reading/writing arg (`sort -o out`, `cat /etc/passwd`, `grep -f pat.txt`) is
+still rejected. This carve-out lives ONLY in the allow-hook (the real-shell Claude Bash tool); the
+harness executor spawns argv with no shell and stays strict, rejecting any pipe. It is a **no-op for
 read-only roles** (only the generator's writer guard consumes it; the evaluator does not
 self-verify). The **`sparra-loop` skill** is the driving playbook.
 

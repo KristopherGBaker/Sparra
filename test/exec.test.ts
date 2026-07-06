@@ -4,13 +4,32 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { runVerifyCommand, extractVerifyCommands, classifyExec, rerunVerifyCommands, type ExecOutcome } from "../src/build/exec.ts";
+import { runVerifyCommand, unsafeExecReason, extractVerifyCommands, classifyExec, rerunVerifyCommands, type ExecOutcome } from "../src/build/exec.ts";
+import { allowVerifyBash } from "../src/sdk/scoping.ts";
 
 /**
  * Q3: the harness-side no-model executor. Real-command tests use ONLY local built-ins
  * (`true`/`false`/`echo`/`ls`) — no network, no model calls. `spawnFn` is dependency-injected
  * (a spy wrapping the real spawn) so the safety tests PROVE an unsafe command never spawns.
  */
+
+describe("U3 Part A: the executor path stays strict where the allow-hook loosened (deliberate divergence)", () => {
+  const spySpawn = () =>
+    vi.fn((...args: Parameters<typeof spawn>) => spawn(...args)) as unknown as typeof spawn & { mock: { calls: unknown[] } };
+
+  it("unsafeExecReason STILL rejects a filter pipe — the executor spawns argv directly, no shell", async () => {
+    // The allow-hook grants the filter-pipe shape (Claude Bash runs a real shell)…
+    expect(allowVerifyBash("Bash", { command: "npm test | tail -5" }, ["npm test"])).toMatch(/output-shaping/);
+    // …but the harness executor must NOT — a pipe would become bogus argv to `npm`.
+    expect(unsafeExecReason("npm test | tail -5", ["npm test"])).not.toBeNull();
+    expect(unsafeExecReason("npm test 2>&1 | tail -5", ["npm test"])).not.toBeNull();
+    // …and it never actually spawns the pipeline.
+    const spawnFn = spySpawn();
+    const o = await runVerifyCommand(os.tmpdir(), "npm test | tail -5", { spawnFn, allowPrefixes: ["npm test"] });
+    expect(o.ran).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+});
 
 describe("runVerifyCommand — safety rules (shared with the self-verify allow-path)", () => {
   /** Spy that passes through to the real spawn — counts every actual process launch. */
