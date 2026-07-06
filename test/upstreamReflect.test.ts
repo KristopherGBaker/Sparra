@@ -242,7 +242,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // batch every mandatory clause in round 1), evaluator (GUARD/ALLOW-DENY SURFACES probe-in-round-1;
     // env-blocked gate never alone a FAIL), generator (guard-arg/left-prefix adversaries; fix-brief vs
     // agreed-contract precedence; emit report JSON as gates verify).
-    expect(h.digest("hex")).toBe("28ae33af2b6457e5568dd0531ca78389dce216e2ea448a50b76221a493d02d69");
+    // Regenerated 2026-07-06 (0706b/0706c prompt-fold): folded the 8 locally-applied reflect lessons
+    // from .sparra/prompts back into DEFAULT_PROMPTS — contract-generator + contract-evaluator
+    // (stale-claim sweep for widened shipped behavior; retry/recover output gated by the SAME
+    // validation + garbage-retry negative; judge-sandbox-denied gates unsatisfiable), generator
+    // (load-reliable gating suites; stub side-effectful calls in pre-existing test paths; don't
+    // end-load doc/version sweeps), evaluator (exerciseStatus reflects contract gates, not own probes).
+    expect(h.digest("hex")).toBe("2dbe47b3d73c25764f848e3b6f757f1178d5ef257bf1dc68eb0234ce83d501fe");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
