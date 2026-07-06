@@ -259,7 +259,15 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // report is tool-free plain text), evaluator (verify pre-existing-failure carveouts against the
     // baseline; exactly one assertions entry per contract id), contract-evaluator (a shared-signal
     // fix must enumerate ALL call sites + require an observable per consumer).
-    expect(h.digest("hex")).toBe("ca1c1a7304f84c60539536c01e9424c30cd82638f93f0b63fb733ec121eb62a4");
+    // Regenerated 2026-07-06 (loop-0706f prompt-fold): folded 5 reflect-earned lessons into
+    // DEFAULT_PROMPTS — contract-evaluator + contract-generator (a guard on a capability with
+    // multiple entry surfaces must pin enforcement to the one core choke point + a test driving it
+    // directly; validate/execute sharing an allowlist needs a NON-DEFAULT-policy end-to-end
+    // fixture), evaluator (apply the first-round CORE-entry probe standard to fails-closed-before-
+    // launch + cleanup-on-error assertions too), generator (after a fix, re-verify rerouted
+    // assertions through the REAL default path; diff-check every contract-Scope-named file before
+    // reporting).
+    expect(h.digest("hex")).toBe("c476de37ea84692f3f0ba4a479562ba7b758cf7b8e717d46197b30ce9781ab59");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
