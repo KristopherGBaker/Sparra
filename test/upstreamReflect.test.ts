@@ -237,7 +237,12 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // instruction is now a {{EXERCISE_RUN_INSTRUCTION}} placeholder (backend-aware), replacing the
     // hard-coded `mcp__exercise__run_command` sentence — so a no-inProcessMcp evaluator carries no
     // phantom mandate in its STATIC template.
-    expect(h.digest("hex")).toBe("c7fb046075bc595e14c5dfdc34d7773a4b656d4f2bfa76cd60a4fd39c78095f1");
+    // Regenerated 2026-07-06 (prompt-fold cycle): folded 6 reflect-earned lessons into DEFAULT_PROMPTS —
+    // contract-evaluator (guard-evasion enumeration = every grammar element the carve-out touches;
+    // batch every mandatory clause in round 1), evaluator (GUARD/ALLOW-DENY SURFACES probe-in-round-1;
+    // env-blocked gate never alone a FAIL), generator (guard-arg/left-prefix adversaries; fix-brief vs
+    // agreed-contract precedence; emit report JSON as gates verify).
+    expect(h.digest("hex")).toBe("28ae33af2b6457e5568dd0531ca78389dce216e2ea448a50b76221a493d02d69");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
