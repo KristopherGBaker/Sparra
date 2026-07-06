@@ -199,7 +199,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
       worktree: z
         .boolean()
         .optional()
-        .describe("Read-only judge roles (evaluator/reviewer): run in a TEMPORARY linked git worktree snapshotted from `workspace`'s WIP (torn down after). Gives the exercise WRITABLE scratch + provisioned deps so `npm test`/build tools run — an in-place eval stays read-only and false-blocks on scratch writes (EPERM on node_modules/.vite-temp etc.). Use whenever the evaluator will exercise the tree."),
+        .describe("Read-only judge roles (evaluator/reviewer/contract-evaluator): run in a TEMPORARY linked git worktree snapshotted from `workspace`'s WIP (torn down after). Gives the exercise/verify probe WRITABLE scratch + provisioned deps so `npm test`/build tools run — an in-place eval stays read-only and false-blocks on scratch writes (EPERM on node_modules/.vite-temp etc.). Use whenever the evaluator (or a contract-evaluator proving verify commands) will exercise the tree."),
       keepWorktree: z
         .boolean()
         .optional()

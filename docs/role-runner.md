@@ -62,11 +62,13 @@ output). Wire it into Claude Code pointed at your project:
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
 holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree })`.
-`worktree` (read-only judge roles) runs the eval/review in a **temporary linked git worktree**
-snapshotted from `workspace`'s WIP — the same machinery as `sparra eval --worktree` (`keepWorktree`
-retains it). Pass it whenever the evaluator will **exercise** the tree (run `npm test`/builds): it
-gives the exercise writable scratch + provisioned deps, whereas an in-place `run_role` eval stays
-read-only and false-blocks on scratch writes (EPERM on `node_modules/.vite-temp` etc.). `effort` (`low|medium|high|xhigh|max`)
+`worktree` (read-only judge roles — `evaluator`, `reviewer`, **and `contract-evaluator`**) runs the
+eval/review/critique in a **temporary linked git worktree** snapshotted from `workspace`'s WIP — the
+same machinery as `sparra eval --worktree` (`keepWorktree` retains it). Pass it whenever the
+evaluator will **exercise** the tree (run `npm test`/builds), or a **contract-evaluator** will run
+the contract's verify commands to prove they're runnable: it gives the exercise/probe writable
+scratch + provisioned deps, whereas an in-place `run_role` eval stays read-only and false-blocks on
+scratch writes (EPERM on `node_modules/.vite-temp` etc.). `effort` (`low|medium|high|xhigh|max`)
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
 `build.maxBudgetUsdPerItem` for that one call (`0` = unlimited; omit to use the config cap).
