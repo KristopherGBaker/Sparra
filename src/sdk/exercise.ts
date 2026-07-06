@@ -201,10 +201,63 @@ Every UI assertion in the contract must be backed by an XCUITest assertion you r
 }
 
 /**
+ * Preamble prepended to the exercise guidance for an evaluator backend that CANNOT host the
+ * in-process exercise MCP server (`BackendCapabilities.inProcessMcp === false`, e.g. Codex). It
+ * states the honest boundary: there is no `mcp__exercise__*` tool, the harness cannot observe or
+ * classify exit codes, so the evaluator exercises via its OWN native command runner and sets
+ * `exerciseStatus` truthfully from what it actually ran. Stated ONCE here (single source of truth).
+ */
+const NATIVE_RUNNER_PREAMBLE =
+  "NOTE — this evaluator backend cannot host the in-process exercise MCP server, so there is NO harness exercise tool available and the harness CANNOT observe or classify exit codes for you. Exercise the artifact via your OWN native command runner (your shell/Bash), assert on real exit codes and output, and set `exerciseStatus` HONESTLY from what you actually ran and saw — do NOT claim a harness-observed run.";
+
+/**
+ * The evaluator base-template PROCESS-step run-instruction ({{EXERCISE_RUN_INSTRUCTION}}), made
+ * backend-aware so a no-in-process-MCP evaluator (Codex) never carries the phantom
+ * `mcp__exercise__run_command` mandate in its STATIC system prompt. Single source of truth, filled at
+ * BOTH assembly sites (roleRun.ts `roleSystemPrompt`, evaluate.ts).
+ * - `inProcessMcp === true`  → run gates via the harness `mcp__exercise__run_command` (it classifies
+ *   exit codes + sets exerciseStatus). Unchanged from before this capability existed.
+ * - `inProcessMcp === false` → run gates via the native command runner; the harness cannot classify
+ *   exit codes here, so `exerciseStatus` is self-reported honestly. Contains ZERO `mcp__exercise__`
+ *   token (assertion 5).
+ */
+export function exerciseRunInstruction(inProcessMcp: boolean): string {
+  return inProcessMcp
+    ? "Run via `mcp__exercise__run_command` (not raw Bash) so the harness classifies exit codes and sets exerciseStatus — Bash-run commands are unobserved and fall back to self-report."
+    : "Run gates via your native command runner (your shell/Bash): this backend has no harness exercise tool, so the harness cannot classify exit codes for you — set exerciseStatus HONESTLY from what you actually ran (do not claim a harness-observed run).";
+}
+
+/**
+ * Rewrite mechanism guidance for a no-in-process-MCP backend: strip every `mcp__exercise__*` /
+ * bare `run_command`/`http_request` tool reference (those tools don't exist there) into a
+ * native-command-runner reference, and prepend the honest-report preamble. The SUBSTANCE (exercise
+ * real behavior, assert on exit codes/output, don't grade the diff) is unchanged — only the
+ * tool-reference wording. Branched ONCE here so per-mechanism strings aren't duplicated.
+ */
+export function nativeRunnerGuidance(guidance: string): string {
+  const rewritten = guidance
+    .replaceAll("mcp__exercise__run_command", "your shell/Bash")
+    .replaceAll("mcp__exercise__http_request", "your shell (e.g. curl)")
+    .replaceAll("http_request", "your shell (e.g. curl)")
+    .replaceAll("run_command", "your shell/Bash");
+  return `${NATIVE_RUNNER_PREAMBLE}\n\n${rewritten}`;
+}
+
+/**
  * Build the exerciser for a given mechanism. The artifact directory (the cwd the
  * generator built into) is captured so commands run in the right place.
+ *
+ * `inProcessMcp` (default true) reflects whether the EVALUATOR backend can host the in-process
+ * exercise MCP server. When false (e.g. a Codex evaluator), the `guidance` is rewritten to drop the
+ * phantom `mcp__exercise__*` tool mandate and instruct exercising via the native runner instead —
+ * the caller ALSO must not attach `mcpServers`/`allowedTools` (they'd be silently dropped). Default
+ * true keeps the Claude path byte-for-byte.
  */
-export function buildExerciser(config: SparraConfig, artifactDir: string, opts: { spawnFn?: typeof spawn } = {}): Exerciser {
+export function buildExerciser(
+  config: SparraConfig,
+  artifactDir: string,
+  opts: { spawnFn?: typeof spawn; inProcessMcp?: boolean } = {}
+): Exerciser {
   const mech: ExerciseMechanism = config.exercise.mechanism;
   const env = mergedBuildEnv(config) ?? stringProcessEnv();
 
@@ -264,10 +317,11 @@ export function buildExerciser(config: SparraConfig, artifactDir: string, opts: 
     custom: `Use this project-specific exercise recipe with run_command:\n${config.exercise.customRecipe || "(no customRecipe configured)"}`,
   };
 
+  const inProcessMcp = opts.inProcessMcp ?? true;
   return {
     mcpServers: { exercise: server },
     allowedTools: ["mcp__exercise__run_command", ...(mech === "web" ? ["mcp__exercise__http_request"] : [])],
-    guidance: guidanceByMech[mech],
+    guidance: inProcessMcp ? guidanceByMech[mech] : nativeRunnerGuidance(guidanceByMech[mech]),
     exerciseStatus: () => exerciseStatusFromObservations(observations),
   };
 }

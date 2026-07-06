@@ -22,6 +22,15 @@ describe("agent backend registry (the AgentBackend seam)", () => {
     expect(getBackend().id).toBe("claude");
   });
 
+  it("distinguishes inProcessMcp per backend: claude hosts an in-process MCP server, codex does not", () => {
+    // `mcp` (can call externally-configured MCP tools) is true for BOTH; only `inProcessMcp`
+    // (can HOST an in-process createSdkMcpServer via req.mcpServers) discriminates them.
+    expect(getBackend("claude").capabilities.mcp).toBe(true);
+    expect(getBackend("codex").capabilities.mcp).toBe(true);
+    expect(getBackend("claude").capabilities.inProcessMcp).toBe(true);
+    expect(getBackend("codex").capabilities.inProcessMcp).toBe(false);
+  });
+
   it("throws on an unknown backend", () => {
     expect(() => getBackend("nope")).toThrow(/Unknown agent backend/);
   });
@@ -29,7 +38,7 @@ describe("agent backend registry (the AgentBackend seam)", () => {
   it("lets a new backend slot in behind the same interface (where Codex will land)", async () => {
     const fake: AgentBackend = {
       id: "fake",
-      capabilities: { resume: false, streaming: false, outputSchema: true, mcp: false, hooks: false, sandbox: true, skills: false, cost: "tokens" },
+      capabilities: { resume: false, streaming: false, outputSchema: true, mcp: false, inProcessMcp: false, hooks: false, sandbox: true, skills: false, cost: "tokens" },
       runTask: async (req) => ({
         ok: true,
         subtype: "success",

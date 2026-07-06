@@ -11,6 +11,8 @@ Two backends ship today:
 | Streaming + usage | ✓ | ✓ |
 | Structured output | emulated (instruct + extract) | **native** `outputSchema` |
 | Tool-call hooks | ✓ (Pre/PostToolUse) | — |
+| External MCP tools (`mcp`) | ✓ | ✓ |
+| In-process MCP host (`inProcessMcp`) | ✓ (hosts `createSdkMcpServer` — the exerciser) | — (no `ThreadOptions.mcpServers`) |
 | Sandbox | — (hooks + permission mode) | **native OS sandbox** |
 | Skills | native (scoped local plugin) | `SKILL.md` inlined into input |
 | Env injection | `Options.env` | `CodexOptions.env` |

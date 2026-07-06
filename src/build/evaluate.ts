@@ -1,11 +1,11 @@
 import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
-import { runSession } from "../sdk/session.ts";
+import { getBackend, runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { buildExerciser, type Exerciser } from "../sdk/exercise.ts";
+import { buildExerciser, exerciseRunInstruction, type Exerciser } from "../sdk/exercise.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
@@ -119,12 +119,17 @@ export async function evaluateItem(args: {
   integrityDeps?: IntegrityDeps;
   /** Injectable for tests; defaults to the real `buildExerciser`. Lets a test assert the
    *  harness-status override without driving a live model through run_command. */
-  buildExerciserFn?: (config: SparraConfig, workspaceDir: string) => Exerciser;
+  buildExerciserFn?: (config: SparraConfig, workspaceDir: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
   const role = args.role ?? ctx.config.roles.evaluator;
   const run = args.runSessionFn ?? runSession;
-  const exerciser = (args.buildExerciserFn ?? buildExerciser)(ctx.config, workspaceDir);
+  // Capability-driven exercise wiring: only a backend that can HOST the in-process exercise MCP
+  // server (createSdkMcpServer via req.mcpServers) gets it attached — on a backend without
+  // inProcessMcp (Codex) the server is silently dropped, so we degrade to native-runner guidance and
+  // never attach the phantom tool. Resolve via the SAME registry `runSession` uses (no hardcoded id).
+  const inProcessMcp = getBackend(role.backend).capabilities.inProcessMcp;
+  const exerciser = (args.buildExerciserFn ?? buildExerciser)(ctx.config, workspaceDir, { inProcessMcp });
   // Only relax the Codex exercise sandbox to workspace-write on an isolated-checkout boundary — a
   // Sparra build branch OR a linked git worktree (the integrity guard needs git to revert). Carries
   // `exerciseScratch` + arms the source-integrity guard. `isLinkedWorktree` is computed lazily.
@@ -138,6 +143,9 @@ export async function evaluateItem(args: {
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
     EXERCISE_GUIDANCE: exerciser.guidance,
+    // Backend-aware PROCESS-step run-instruction: a no-inProcessMcp evaluator's STATIC template must
+    // carry NO `mcp__exercise__` mandate (it has no such tool) — same `inProcessMcp` flag threaded above.
+    EXERCISE_RUN_INSTRUCTION: exerciseRunInstruction(inProcessMcp),
     EXISTING_TESTS: existingTestsText(ctx),
     RUBRIC: rubricText(ctx),
     CALIBRATION: calibrationText(ctx),
@@ -172,8 +180,9 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     tools: ["Read", "Glob", "Grep", "Bash"],
     env: mergedBuildEnv(ctx.config),
     skills: skillsForRole(ctx, "evaluator"),
-    allowedTools: exerciser.allowedTools,
-    mcpServers: exerciser.mcpServers,
+    // Attach the in-process exercise server ONLY to a backend that can host it; a Codex evaluator
+    // would silently drop it, so it exercises via its native runner (see guidance) instead.
+    ...(inProcessMcp ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     readOnly: true,
     ...(exerciseScratch ? { exerciseScratch: true } : {}),
     ...evaluatorGuard(ctx),
@@ -313,8 +322,12 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
   // path (cli|web) and `exercise.requireObservedRun` is on, demote the pass to fail with a blocking
   // note. ios/computer-use/custom are exempt (exercising legitimately flows through tools the
   // classifier can't see); failing verdicts and the no-parseable-verdict path are untouched.
+  // Backend-aware: the gate can only fire when an observed run was actually POSSIBLE — i.e. the
+  // eval backend hosts the in-process MCP server. On a no-inProcessMcp backend (Codex) the server
+  // was never attached, so `harnessStatus === "none"` is EXPECTED and must NOT falsely-fail an
+  // otherwise-honest pass.
   const mech = ctx.config.exercise.mechanism;
-  const observedRunGateApplies = ctx.config.exercise.requireObservedRun && (mech === "cli" || mech === "web");
+  const observedRunGateApplies = inProcessMcp && ctx.config.exercise.requireObservedRun && (mech === "cli" || mech === "web");
   if (verdict.verdict === "pass" && harnessStatus === "none" && observedRunGateApplies) {
     verdict.verdict = "fail";
     verdict.blocking.push(

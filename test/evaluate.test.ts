@@ -448,6 +448,85 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // — Backend-aware exercise-tool wiring (U1) —
+  it("attaches the exercise mcpServers/allowedTools for a Claude eval backend, NOT for a Codex one (U1)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const claude = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: claude.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "claude", model: "opus" },
+    });
+    expect(claude.calls[0]!.mcpServers).toBeDefined();
+    expect(claude.calls[0]!.allowedTools).toContain("mcp__exercise__run_command");
+
+    const codex = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: codex.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "codex", model: "gpt" },
+    });
+    expect(codex.calls[0]!.mcpServers).toBeUndefined();
+    expect(codex.calls[0]!.allowedTools ?? []).not.toContain("mcp__exercise__run_command");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a Codex eval backend gets native-runner guidance (no mcp__exercise__ token); Claude keeps the mcp mandate (U1)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const codex = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: codex.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "codex", model: "gpt" },
+    });
+    // Non-degenerate: assert the FULLY-ASSEMBLED no-inProcessMcp evaluator system prompt (template +
+    // injected guidance + PROCESS-step run-instruction) contains ZERO `mcp__exercise__` token — not
+    // just the injected guidance phrase (the prompts.ts PROCESS-step run-instruction must also be
+    // backend-aware, else this fails). Contract assertion 5.
+    const sys = codex.calls[0]!.systemPrompt ?? "";
+    expect(sys).not.toContain("mcp__exercise__"); // NO phantom mandate anywhere in the assembled prompt
+    expect(sys).toContain("Exercise it with your shell/Bash");
+    expect(sys).toMatch(/cannot observe or classify exit codes/i);
+
+    const claude = recorder();
+    await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: claude.fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "claude", model: "opus" },
+    });
+    // The Claude (inProcessMcp) prompt still names the tool in BOTH the guidance AND the PROCESS step.
+    const claudeSys = claude.calls[0]!.systemPrompt ?? "";
+    expect(claudeSys).toContain("Exercise it with mcp__exercise__run_command"); // injected guidance
+    expect(claudeSys).toContain("Run via `mcp__exercise__run_command`"); // PROCESS-step run-instruction
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("observed-run demotion fires for a Claude backend but NOT a Codex one (harness 'none' is expected on Codex) (U1)", async () => {
+    // Harness 'none' + cli + model pass: on Claude (inProcessMcp) an observed run was possible, so
+    // the unobserved pass is demoted; on Codex (no inProcessMcp) 'none' is EXPECTED (the server was
+    // never attachable), so the honest pass must stand.
+    const stub = (): Exerciser => ({ mcpServers: {}, allowedTools: ["mcp__exercise__run_command"], guidance: "", exerciseStatus: () => "none" });
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.mechanism = "cli";
+
+    const claude = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: recorder(PASS_JSON).fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "claude", model: "opus" }, buildExerciserFn: stub,
+    });
+    expect(claude.verdict.verdict).toBe("fail");
+    expect(claude.verdict.blocking.join(" ")).toContain(UNOBSERVED_NOTE);
+
+    const codex = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: recorder(PASS_JSON).fn,
+      integrityDeps: cleanIntegrityDeps, role: { backend: "codex", model: "gpt" }, buildExerciserFn: stub,
+    });
+    expect(codex.verdict.verdict).toBe("pass");
+    expect(codex.verdict.blocking.join(" ")).not.toContain(UNOBSERVED_NOTE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("the demoted verdict's markdown carries the unobserved-exercise note in its Blocking section (Q2)", async () => {
     const { ctx, dir } = await makeCtx();
     ctx.config.exercise.mechanism = "cli";

@@ -1,6 +1,45 @@
 import { describe, it, expect } from "vitest";
-import { buildExerciser, iosGuidance } from "../src/sdk/exercise.ts";
+import { buildExerciser, iosGuidance, nativeRunnerGuidance } from "../src/sdk/exercise.ts";
 import { defaultConfig } from "../src/config.ts";
+
+describe("buildExerciser — backend-aware exercise guidance (inProcessMcp)", () => {
+  it("inProcessMcp:true (default) keeps the mcp__exercise__run_command mandate (byte-for-byte)", () => {
+    const cfg = defaultConfig();
+    cfg.exercise.mechanism = "cli";
+    const observed = buildExerciser(cfg, "/tmp/work"); // default
+    const explicit = buildExerciser(cfg, "/tmp/work", { inProcessMcp: true });
+    expect(observed.guidance).toContain("mcp__exercise__run_command");
+    expect(explicit.guidance).toBe(observed.guidance); // explicit true === default
+  });
+
+  it("inProcessMcp:false drops EVERY mcp__exercise__ token and directs the native runner + honest self-report", () => {
+    const cfg = defaultConfig();
+    cfg.exercise.mechanism = "cli";
+    const native = buildExerciser(cfg, "/tmp/work", { inProcessMcp: false });
+    expect(native.guidance).not.toContain("mcp__exercise__"); // NO phantom tool mandate
+    expect(native.guidance).toMatch(/native command runner|shell\/Bash/i);
+    expect(native.guidance).toMatch(/cannot observe or classify exit codes/i);
+    expect(native.guidance).toMatch(/exerciseStatus.*HONESTLY|HONESTLY.*exerciseStatus/is);
+    // Substance preserved: it still tells the evaluator to exercise real behavior (swift build hint survives).
+    expect(native.guidance).toMatch(/swift build|swift test|exit code/i);
+  });
+
+  it("web: the native path strips mcp__exercise__http_request too (no exercise-MCP token survives)", () => {
+    const cfg = defaultConfig();
+    cfg.exercise.mechanism = "web";
+    const observed = buildExerciser(cfg, "/tmp/work", { inProcessMcp: true });
+    expect(observed.guidance).toContain("mcp__exercise__http_request");
+    const native = buildExerciser(cfg, "/tmp/work", { inProcessMcp: false });
+    expect(native.guidance).not.toContain("mcp__exercise__");
+  });
+
+  it("nativeRunnerGuidance is a pure transform: prepends the honest preamble and rewrites tool refs", () => {
+    const out = nativeRunnerGuidance("Exercise it with mcp__exercise__run_command and probe via mcp__exercise__http_request.");
+    expect(out).not.toContain("mcp__exercise__");
+    expect(out).toMatch(/cannot observe or classify exit codes/i);
+    expect(out).toMatch(/shell\/Bash/);
+  });
+});
 
 describe("iosGuidance", () => {
   it("drives the configured CLI help-first and uses screenshots + the UI hierarchy", () => {

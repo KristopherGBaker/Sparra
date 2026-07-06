@@ -27,6 +27,7 @@ class CodexBackend implements AgentBackend {
     streaming: true,
     outputSchema: true,
     mcp: true,
+    inProcessMcp: false, // @openai/codex-sdk ThreadOptions has no mcpServers field — an in-process server is silently dropped
     hooks: false, // no tool-call interception; safety is the sandbox
     sandbox: true,
     skills: false, // no native skill loading; SKILL.md is inlined into the input instead

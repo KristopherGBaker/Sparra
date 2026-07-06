@@ -233,7 +233,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // (not just terseness); contract-generator gained the mandated-side-effects, monotonic-floor,
     // and reset/clear degenerate-test clauses; the generator gained the monotonic-floor + reset/clear
     // probe clauses (folded reflect lessons from the capability-gap cycle).
-    expect(h.digest("hex")).toBe("0bf52740cdac2602d38d27335c4ff548da692613d43c4d20c64e3c3825253e2a");
+    // Regenerated 2026-07-06 (U1 backend-aware exercise wiring): the evaluator PROCESS-step run-
+    // instruction is now a {{EXERCISE_RUN_INSTRUCTION}} placeholder (backend-aware), replacing the
+    // hard-coded `mcp__exercise__run_command` sentence — so a no-inProcessMcp evaluator carries no
+    // phantom mandate in its STATIC template.
+    expect(h.digest("hex")).toBe("c7fb046075bc595e14c5dfdc34d7773a4b656d4f2bfa76cd60a4fd39c78095f1");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

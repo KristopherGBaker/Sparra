@@ -749,6 +749,71 @@ describe("runRole — verdict", () => {
   });
 });
 
+describe("runRole — backend-aware exercise-tool wiring (U1)", () => {
+  // The default (cli) exercise GUIDANCE names this tool on the in-process-MCP path; the native path
+  // rewrites it away. Asserting on this guidance-specific phrase isolates the injected EXERCISE_GUIDANCE
+  // from the evaluator prompt template's own (out-of-scope) mcp reference.
+  const MCP_GUIDANCE = "Exercise it with mcp__exercise__run_command";
+  const NATIVE_GUIDANCE = "Exercise it with your shell/Bash";
+
+  it("Claude (inProcessMcp) evaluator: attaches the exercise server + tools + mcp guidance", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder(EVAL_JSON);
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "claude", runSessionFn: rec.fn });
+    expect(rec.calls[0]!.mcpServers).toBeDefined();
+    expect(rec.calls[0]!.allowedTools).toContain("mcp__exercise__run_command");
+    expect(rec.calls[0]!.systemPrompt).toContain(MCP_GUIDANCE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("Codex (no-inProcessMcp) evaluator: attaches NEITHER server nor tools, and swaps in native-runner guidance", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder(EVAL_JSON);
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "codex", runSessionFn: rec.fn });
+    expect(rec.calls[0]!.mcpServers).toBeUndefined();
+    expect(rec.calls[0]!.allowedTools ?? []).not.toContain("mcp__exercise__run_command");
+    expect(rec.calls[0]!.systemPrompt).not.toContain(MCP_GUIDANCE); // guidance's mcp token stripped
+    expect(rec.calls[0]!.systemPrompt).toContain(NATIVE_GUIDANCE);
+    expect(rec.calls[0]!.systemPrompt).toMatch(/cannot observe or classify exit codes/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fallback Claude→Codex: the Codex attempt DROPS the tools + mcp guidance (reflects the backend actually used)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.roles.evaluator = { backend: "claude", model: "opus", fallback: { backend: "codex", model: "gpt" } };
+    const rec = fixed(
+      { ok: true, resultText: EVAL_JSON, tokens: 7, sessionId: "s" }, // the codex fallback succeeds
+      { claude: { ok: false, resultText: "", limitHit: { kind: "usage", raw: "limited" }, errors: ["limited"] } }
+    );
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.map((c) => c.backend)).toEqual(["claude", "codex"]);
+    expect(rec.calls[0]!.mcpServers).toBeDefined(); // claude: attached
+    expect(rec.calls[0]!.systemPrompt).toContain(MCP_GUIDANCE);
+    expect(rec.calls[1]!.mcpServers).toBeUndefined(); // codex: NOT attached
+    expect(rec.calls[1]!.systemPrompt).not.toContain(MCP_GUIDANCE);
+    expect(rec.calls[1]!.systemPrompt).toContain(NATIVE_GUIDANCE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fallback Codex→Claude: the Claude attempt ADDS the tools + mcp guidance", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.roles.evaluator = { backend: "codex", model: "gpt", fallback: { backend: "claude", model: "opus" } };
+    const rec = fixed(
+      { ok: true, resultText: EVAL_JSON, tokens: 7, sessionId: "s" }, // the claude fallback succeeds
+      { codex: { ok: false, resultText: "", limitHit: { kind: "usage", raw: "limited" }, errors: ["limited"] } }
+    );
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls.map((c) => c.backend)).toEqual(["codex", "claude"]);
+    expect(rec.calls[0]!.mcpServers).toBeUndefined(); // codex: NOT attached
+    expect(rec.calls[0]!.systemPrompt).not.toContain(MCP_GUIDANCE);
+    expect(rec.calls[0]!.systemPrompt).toContain(NATIVE_GUIDANCE);
+    expect(rec.calls[1]!.mcpServers).toBeDefined(); // claude: attached
+    expect(rec.calls[1]!.allowedTools).toContain("mcp__exercise__run_command");
+    expect(rec.calls[1]!.systemPrompt).toContain(MCP_GUIDANCE);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("runRole — harness exerciseStatus override (Item F)", () => {
   const stubExerciser = (status: "blocked" | "ran" | "none"): Exerciser => ({
     mcpServers: {},

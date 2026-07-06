@@ -28,6 +28,7 @@ class ClaudeBackend implements AgentBackend {
     streaming: true,
     outputSchema: false, // emulated via instruct-and-extract below
     mcp: true,
+    inProcessMcp: true, // hosts in-process createSdkMcpServer via Options.mcpServers (the exerciser)
     hooks: true,
     sandbox: false,
     skills: true, // native: declared skills load via plugins + skills, settingSources stays []

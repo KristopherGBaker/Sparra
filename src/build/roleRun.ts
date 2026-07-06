@@ -2,12 +2,12 @@ import path from "node:path";
 import type { Ctx } from "../context.ts";
 import type { RoleConfig } from "../config.ts";
 import { fill, loadPrompt } from "../prompts.ts";
-import { runSession } from "../sdk/session.ts";
+import { getBackend, runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
 import { evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
-import { buildExerciser, type Exerciser } from "../sdk/exercise.ts";
+import { buildExerciser, exerciseRunInstruction, nativeRunnerGuidance, type Exerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
@@ -153,7 +153,7 @@ export interface RoleRunRequest {
   changedFilesFn?: (workspace: string) => string[];
   /** Injectable for tests; defaults to the real `buildExerciser` (evaluator role only). Lets a test
    *  assert the harness-status override without driving a live model through run_command. */
-  buildExerciserFn?: (config: Ctx["config"], workspace: string) => Exerciser;
+  buildExerciserFn?: (config: Ctx["config"], workspace: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
   traceDir?: string;
   traceSeq?: number;
 }
@@ -242,13 +242,23 @@ function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[
 
 /** Fill the union of placeholders the standard role prompts use. Unknown placeholders are
  *  left visible (a misconfigured custom prompt should be obvious, not silently blanked). */
-async function roleSystemPrompt(ctx: Ctx, kind: RoleKind, exerciseGuidance: string, allowVerify = false): Promise<string> {
+async function roleSystemPrompt(
+  ctx: Ctx,
+  kind: RoleKind,
+  exerciseGuidance: string,
+  allowVerify = false,
+  inProcessMcp = true
+): Promise<string> {
   const template = await loadPrompt(ctx.paths, SPECS[kind].promptName);
   return fill(template, {
     MODE: ctx.store.data.mode,
     DEVIATION: ctx.config.deviation.strictness,
     DEVIATION_POLICY: deviationPolicy(ctx),
     EXERCISE_GUIDANCE: exerciseGuidance,
+    // Backend-aware PROCESS-step run-instruction (evaluator template only): threaded per attempt so a
+    // Codex evaluator's STATIC prompt carries no phantom `mcp__exercise__` mandate. Default true keeps
+    // the base (non-attempt) assembly and every non-evaluator role byte-identical.
+    EXERCISE_RUN_INSTRUCTION: exerciseRunInstruction(inProcessMcp),
     EXISTING_TESTS: existingTestsText(ctx),
     RUBRIC: rubricText(ctx),
     CALIBRATION: calibrationText(ctx),
@@ -659,7 +669,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           }),
         }
       : { readOnly: true, ...(exerciseScratch ? { exerciseScratch: true } : {}) }),
-    ...(exerciser ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
+    // NB: the exercise `mcpServers`/`allowedTools` are NOT attached here — they're gated per attempt
+    // on the attempt backend's `inProcessMcp` capability (a fallback may switch backends), so a
+    // no-in-process-MCP backend (Codex) never gets a server that would be silently dropped.
     ...guard,
     maxTurns: ctx.config.build.maxTurnsPerSession,
     // Per-call override (nullish-coalesce so a supplied `0` = unlimited survives); else the per-item cap.
@@ -684,8 +696,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     const be = attempt.backend ?? "claude";
     if (i > 0 && limitedBackends.has(be)) continue; // a fallback on an already-limited backend can't help
     ranRole = attempt;
+    // Backend-aware exercise wiring for THIS attempt (a fallback may switch backends): attach the
+    // in-process exercise server + tools ONLY when the attempt backend can HOST it; on a backend
+    // without inProcessMcp (Codex) the server would be silently dropped, so we attach nothing and
+    // hand the evaluator native-runner guidance instead. Recomputed per attempt so a Claude→Codex
+    // (or Codex→Claude) fallback gets the right tools + guidance, never a statically-chosen one.
+    const attemptInProcessMcp = getBackend(be).capabilities.inProcessMcp;
+    const attemptSystem = exerciser
+      ? await roleSystemPrompt(
+          ctx,
+          roleKind,
+          attemptInProcessMcp ? exerciser.guidance : nativeRunnerGuidance(exerciser.guidance),
+          req.allowVerify,
+          attemptInProcessMcp
+        )
+      : system;
     res = await run({
       ...commonReq,
+      systemPrompt: attemptSystem,
+      ...(exerciser && attemptInProcessMcp ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
       backend: attempt.backend,
       model: attempt.model,
       effort: attempt.effort,

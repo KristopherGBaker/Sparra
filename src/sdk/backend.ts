@@ -32,6 +32,15 @@ export interface BackendCapabilities {
   outputSchema: boolean;
   /** Can mount MCP servers as tools for the agent. */
   mcp: boolean;
+  /**
+   * Can host an IN-PROCESS `createSdkMcpServer` passed via `req.mcpServers` (an Agent-SDK
+   * construct the harness builds live, e.g. the exercise server). DISTINCT from `mcp`, which is
+   * "can call EXTERNALLY-configured MCP tools": a backend may be able to call external MCP servers
+   * yet be unable to host an in-process one (Codex's `ThreadOptions` has no `mcpServers` field, so
+   * an in-process server handed to it is silently dropped). Callers that attach an in-process MCP
+   * server MUST gate on this flag and degrade (native command runner + honest self-report) when false.
+   */
+  inProcessMcp: boolean;
   /** Tool-call interception hooks (pre/post). */
   hooks: boolean;
   /** Native OS-level sandbox for write/exec scoping. */
