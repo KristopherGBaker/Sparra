@@ -31,10 +31,14 @@ there is no prior behavior to preserve.`;
  *  `allowVerify` opt-in), so the generator isn't told to run checks it can't. Keeps it from
  *  "writing blind". `allowVerify` mirrors the guard's `verifyInPlace` opt: an in-place `run_role`
  *  (no `build.branch`) that opted into the allow-hook must ALSO be told which commands it may run,
- *  else the hook permits the Bash but the model never attempts it (friction not actually removed). */
-export function selfVerifyGuidance(ctx: Ctx, allowVerify = false): string {
+ *  else the hook permits the Bash but the model never attempts it (friction not actually removed).
+ *  `onWorktreeBoundary` mirrors the guard's `onWorktreeBoundary` opt: when the runner detects that
+ *  the workspace is a linked git worktree (e.g. a `unitWorktree` persistent generator tree) the
+ *  guidance is enabled deterministically — the SAME enabling condition as the guard, so the guard
+ *  and the warning cannot diverge. Pass the runner's `onLinkedWorktree` signal here (Assertion 2). */
+export function selfVerifyGuidance(ctx: Ctx, allowVerify = false, onWorktreeBoundary = false): string {
   const cmds = ctx.config.build.verifyCommands;
-  if (!cmds.length || !(ctx.store.data.build.branch || allowVerify)) return "";
+  if (!cmds.length || !(ctx.store.data.build.branch || allowVerify || onWorktreeBoundary)) return "";
   return `SELF-VERIFY before you finish: you CAN run this project's checks via Bash. Use these commands AS WRITTEN: ${cmds
     .slice(0, 6)
     .join(", ")} — run them, READ the output, and FIX anything you broke. Tool output is TRUNCATED, so run each AS WRITTEN and read the tail/summary rather than piping/grepping/redirecting to inspect it (those forms are blocked and only burn turns). Do not report success on code you have not compiled/tested. ONLY the exact commands listed above are auto-approved (a \`<cmd> -- <args>\` suffix like \`${cmds[0] ?? "npm test"} -- <file>\` is fine — it still starts with the allowed command); do NOT substitute a \`npx\`/\`./node_modules/.bin\` variant or wrap it in \`cd X &&\`/\`git -C <abs>\`/chaining/redirects/installs/commits — those are NOT approved, stall on the guard, and only burn turns. Writes stay inside your work tree.`;
