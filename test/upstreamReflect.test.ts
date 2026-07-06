@@ -254,7 +254,12 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // an ARTIFACT defect, not environmental), mirroring the generator's existing clause. To regenerate
     // this literal after the edit: run the suite (or `npx tsx -e`) to print the SHA-256 over every
     // sorted non-reflector role's `role + " " + prompt + " "` and paste it below.
-    expect(h.digest("hex")).toBe("a4df4f2d44deed9eff4716055a1cdff2fcd48d8e5d61d68e4f85a72db72e9c96");
+    // Regenerated 2026-07-06 (loop-0706e prompt-fold): folded 5 reflect-earned lessons into
+    // DEFAULT_PROMPTS — generator (grep EVERY call site when threading a shared signal; re-ask
+    // report is tool-free plain text), evaluator (verify pre-existing-failure carveouts against the
+    // baseline; exactly one assertions entry per contract id), contract-evaluator (a shared-signal
+    // fix must enumerate ALL call sites + require an observable per consumer).
+    expect(h.digest("hex")).toBe("ca1c1a7304f84c60539536c01e9424c30cd82638f93f0b63fb733ec121eb62a4");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
