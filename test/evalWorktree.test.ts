@@ -200,6 +200,17 @@ describe("runRoleInTempWorktree — WIP-faithful temp worktree (Item D)", () => 
     expect(seen.linked).toBe(true);
     expect(fs.existsSync(seen.workspace!)).toBe(false);
   });
+
+  it("the contract-evaluator is ACCEPTED on the worktree path (U-A #4) — not rejected", GIT_IT, async () => {
+    const seen: Seen = {};
+    const res = await runRoleInTempWorktree(
+      { ctx: ctxRepo, roleKind: "contract-evaluator", contract: "- the thing works", brief: "critique" },
+      { runRoleFn: observer(seen) }
+    );
+    expect(res.ok).toBe(true);
+    expect(seen.linked).toBe(true); // ran inside the linked temp worktree
+    expect(fs.existsSync(seen.workspace!)).toBe(false); // torn down
+  });
 });
 
 describe("runRole — --worktree dispatch + writer rejection (Item D)", () => {
@@ -294,6 +305,25 @@ describe("runRole — --worktree dispatch + writer rejection (Item D)", () => {
     expect(dst).toBe(call.cwd); // …into the temp worktree the evaluator runs in
     expect(cfg).toBe(ctx.config.git.provisionDeps);
     fs.rmSync(otherRoot, { recursive: true, force: true });
+  });
+
+  it("routes a contract-evaluator through the worktree with workspace-write scratch (U-A #4)", GIT_IT, async () => {
+    const rec = recorder();
+    const provisionFn = fakeProvision();
+    const res = await runRole({
+      ctx: ctxRepo,
+      roleKind: "contract-evaluator",
+      contract: "- the thing works",
+      useWorktree: true,
+      runSessionFn: rec.fn,
+      provisionFn,
+    });
+    expect(res.ok).toBe(true);
+    const call = rec.calls[0]!;
+    expect(path.resolve(call.cwd!)).not.toBe(path.resolve(repo)); // ran in the temp worktree
+    expect(call.readOnly).toBe(true);
+    expect(call.exerciseScratch).toBe(true); // isolated checkout ⇒ workspace-write scratch
+    expect(fs.existsSync(call.cwd!)).toBe(false); // torn down
   });
 
   it("in-place runRole WITHOUT useWorktree is unchanged: cwd = workspace, no scratch, no provisioning", GIT_IT, async () => {

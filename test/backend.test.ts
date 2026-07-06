@@ -1,8 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { getBackend, listBackends, registerBackend, type AgentBackend, type AgentRequest, type AgentResult } from "../src/sdk/backend.ts";
-import { codexSandboxMode, isEmptyCompletion, markEmptyCompletion, limitFromErrors as codexLimit } from "../src/sdk/backends/codex.ts";
+import { codexBackend, codexSandboxMode, isEmptyCompletion, markEmptyCompletion, limitFromErrors as codexLimit } from "../src/sdk/backends/codex.ts";
+
+// Capture the ThreadOptions the codex backend builds, without spawning the codex CLI.
+const codexCapture = vi.hoisted(() => ({ threadOptions: undefined as any }));
+vi.mock("@openai/codex-sdk", () => ({
+  Codex: class {
+    id = "codex-thread";
+    startThread(opts: any) {
+      codexCapture.threadOptions = opts;
+      return { id: "codex-thread", run: async () => ({ usage: { total_tokens: 1 }, finalResponse: "ok" }) };
+    }
+    resumeThread(_id: string, opts: any) {
+      return this.startThread(opts);
+    }
+  },
+}));
 import { consumeQuery, limitFromErrors as claudeLimit } from "../src/sdk/backends/claude.ts";
 import { TraceWriter } from "../src/sdk/trace.ts";
 import "../src/sdk/session.ts"; // side-effect: registers the claude + codex backends
@@ -117,6 +132,44 @@ describe("codex backend", () => {
       // The carve-out only applies to read-only roles (write roles are unaffected).
       expect(codexSandboxMode({ exerciseScratch: true })).toBe("workspace-write");
       expect(codexSandboxMode({ sandbox: "danger-full-access", exerciseScratch: true })).toBe("danger-full-access");
+    });
+  });
+
+  // U-A #6: when scratch flips a read-only judge (evaluator OR contract-evaluator) to
+  // workspace-write, `networkAccessEnabled:false` must reach the Codex ThreadOptions for BOTH roles —
+  // the write scope widens for test/build scratch, but the network stays sealed.
+  describe("network stays OFF when scratch relaxes a judge to workspace-write", () => {
+    function judgeReq(role: string, over: Partial<AgentRequest> = {}): AgentRequest {
+      return {
+        role,
+        prompt: "p",
+        systemPrompt: "s",
+        model: "m",
+        cwd: os.tmpdir(),
+        readOnly: true,
+        exerciseScratch: true,
+        traceDir: os.tmpdir(),
+        traceSeq: 1,
+        echoActivity: false,
+        ...over,
+      } as AgentRequest;
+    }
+
+    it.each(["evaluator", "contract-evaluator"])(
+      "%s: readOnly + exerciseScratch ⇒ sandbox workspace-write with networkAccessEnabled:false",
+      async (role) => {
+        codexCapture.threadOptions = undefined;
+        await codexBackend.runTask(judgeReq(role));
+        expect(codexCapture.threadOptions.sandboxMode).toBe("workspace-write");
+        expect(codexCapture.threadOptions.networkAccessEnabled).toBe(false);
+      }
+    );
+
+    it("a plain read-only judge (no scratch) stays read-only, no network relaxation flag", async () => {
+      codexCapture.threadOptions = undefined;
+      await codexBackend.runTask(judgeReq("evaluator", { exerciseScratch: false }));
+      expect(codexCapture.threadOptions.sandboxMode).toBe("read-only");
+      expect(codexCapture.threadOptions.networkAccessEnabled).toBeUndefined();
     });
   });
 

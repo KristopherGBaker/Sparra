@@ -20,7 +20,7 @@ import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./hold
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
-import { mergedBuildEnv } from "./env.ts";
+import { createJudgeScratch, judgeSandboxEnv } from "./judgeScratch.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -138,12 +138,16 @@ export async function evaluateItem(args: {
   // Sparra build branch OR a linked git worktree (the integrity guard needs git to revert). Carries
   // `exerciseScratch` + arms the source-integrity guard. `isLinkedWorktree` is computed lazily.
   const exerciseScratch = exerciseScratchEnabled({
-    evaluator: true,
+    judge: true,
     sandbox: ctx.config.exercise.sandbox,
     hasBranch: !!ctx.store.data.build.branch,
     isWorktree: () => isLinkedWorktree(workspaceDir),
   });
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
+  // Default writable-scratch env layer for the sandboxed judge: redirect TMPDIR / clang+SwiftPM
+  // caches into a per-run scratch dir so a read-only Codex sandbox / unwritable $HOME doesn't EPERM
+  // Vitest's temp writes, tsx's IPC socket, or clang's ModuleCache before the exercise even runs.
+  const judgeScratchDir = createJudgeScratch();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
     EXERCISE_GUIDANCE: exerciser.guidance,
@@ -182,7 +186,7 @@ ${holdout}${memory}Exercise the artifact for real, check every assertion with ev
     cwd: workspaceDir,
     additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Bash"],
-    env: mergedBuildEnv(ctx.config),
+    env: judgeSandboxEnv(ctx.config, judgeScratchDir),
     skills: skillsForRole(ctx, "evaluator"),
     // Attach the in-process exercise server ONLY to a backend that can host it; a Codex evaluator
     // would silently drop it, so it exercises via its native runner (see guidance) instead.

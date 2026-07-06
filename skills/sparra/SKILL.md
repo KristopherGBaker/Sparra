@@ -158,6 +158,16 @@ The few that matter most:
   write the scratch they need (network off; a source-integrity guard reverts+fails any
   artifact-source write). `read-only` is the strict pre-fix behavior. The Claude evaluator
   exercises via the in-process runner regardless.
+- **default writable-scratch env layer (judge roles)** — the **evaluator** and **contract-evaluator**
+  role-runs get a default env layer (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
+  `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh per-run writable **scratch** dir,
+  so a read-only sandbox / unwritable `$HOME` no longer EPERMs *before any Sparra code runs*: Vitest's
+  `node_modules/.vite-temp`/`/var/folders` temp writes, the **tsx** IPC socket under `tmpdir/tsx-*`
+  (which killed `node bin/sparra.mjs` smokes), and clang's `~/.cache/clang/ModuleCache`. Precedence:
+  `process.env` → scratch defaults → `build.env` (override wins). The contract-evaluator additionally
+  relaxes to `workspace-write` (network off, integrity-guarded) on an isolated checkout so it can
+  prove the contract's verify commands run; `--worktree` now accepts it. See
+  [diagnose](subskills/diagnose.md) for the three EPERM failure signatures.
 - **`contract` / `pivot` / `rubric`** — assertion range (scaled per item), GAN restart
   threshold, scoring weights + pass threshold. `pivot.resetWorkspace` (default true) resets
   the workspace to the item-start state on a pivot (revert tracked + clean non-ignored

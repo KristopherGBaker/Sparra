@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runRole, makeHoldoutReadDecider, parseVerdict, type RoleKind } from "../src/build/roleRun.ts";
+import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
+import { mergedBuildEnv } from "../src/build/env.ts";
 import { RE_CRITIQUE_INSTRUCTION } from "../src/build/contract.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
@@ -452,6 +454,97 @@ describe("runRole — exercising evaluator scratch + integrity guard", () => {
   });
 });
 
+describe("runRole — default writable-scratch env layer for sandboxed judge roles (U-A #1/#3)", () => {
+  const JUDGE: RoleKind[] = ["evaluator", "contract-evaluator"];
+
+  it.each(JUDGE)("%s: (a) empty build.env ⇒ default scratch keys reach the request env", async (kind) => {
+    const { ctx, dir } = await makeCtx();
+    expect(ctx.config.build.env).toEqual({}); // default
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: kind,
+      brief: "grade",
+      contract: "- the thing works", // needed by contract-evaluator; harmless for evaluator
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    const env = rec.calls[0]!.env!;
+    expect(env).toBeDefined();
+    for (const key of JUDGE_SCRATCH_ENV_KEYS) expect(typeof env[key]).toBe("string");
+    // TMPDIR points into a fresh per-run scratch dir.
+    expect(env.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
+    // (c) unrelated process.env survives the merge.
+    expect(env.PATH).toBe(process.env.PATH);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(JUDGE)("%s: (b) a colliding build.env key WINS over the default scratch value", async (kind) => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.env = { TMPDIR: "/user/chosen/tmp" };
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: kind,
+      brief: "grade",
+      contract: "- the thing works",
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    const env = rec.calls[0]!.env!;
+    expect(env.TMPDIR).toBe("/user/chosen/tmp"); // user override beats the scratch default
+    // The non-colliding defaults still land under scratch.
+    expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a fresh scratch dir per run — two evaluator runs get DIFFERENT TMPDIR roots", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps });
+    await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps });
+    expect(rec.calls[0]!.env!.TMPDIR).not.toBe(rec.calls[1]!.env!.TMPDIR);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#3) the WRITER (generator) gets NO default-layer keys: env undefined with empty build.env", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "build it",
+      runSessionFn: rec.fn,
+      changedFilesFn: () => [path.join(dir, "x.ts")],
+    });
+    expect(rec.calls[0]!.env).toBeUndefined(); // scrubbed — no scratch keys smuggled in
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#3) with user build.env set, the writer env EQUALS mergedBuildEnv (no scratch keys added)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.env = { FOO: "bar" };
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "build it",
+      runSessionFn: rec.fn,
+      changedFilesFn: () => [path.join(dir, "x.ts")],
+    });
+    const env = rec.calls[0]!.env!;
+    expect(env).toEqual(mergedBuildEnv(ctx.config)); // byte-for-byte the plain merged env
+    expect(env.FOO).toBe("bar");
+    // No scratch REDIRECT was added: any TMPDIR present is the inherited process.env one (not sprj-*).
+    if (env.TMPDIR !== undefined) {
+      expect(env.TMPDIR).toBe(process.env.TMPDIR);
+      expect(env.TMPDIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+    }
+    expect(env.CLANG_MODULE_CACHE_PATH).toBe(process.env.CLANG_MODULE_CACHE_PATH);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 /** A REAL offline git repo (main worktree) plus a linked worktree of it. Local `git` only — no
  *  network/model. Returns both dirs so a test can target either as the eval workspace. */
 function makeRepoWithWorktree(): { repo: string; worktree: string } {
@@ -512,6 +605,90 @@ describe("runRole — exerciseScratch on a REAL linked worktree (Item E)", () =>
     expect(r.verdict?.verdict).toBe("fail");
     expect(r.verdict?.blocking[0]).toMatch(/Integrity violation/);
     expect(r.verdict?.blocking[0]).toContain("src/App.ts");
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — contract-evaluator scratch + integrity (U-A #4/#5)", () => {
+  it("(#4) a contract-evaluator on a linked worktree requests workspace-write scratch (readOnly + exerciseScratch)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    expect(ctx.store.data.build.branch).toBeFalsy(); // the linked-worktree branch is the only reason
+    const ce = recorder();
+    await runRole({
+      ctx,
+      roleKind: "contract-evaluator",
+      contract: "- the thing works",
+      workspace: worktree,
+      runSessionFn: ce.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(ce.calls[0]!.exerciseScratch).toBe(true); // → codexSandboxMode workspace-write + network off
+    expect(ce.calls[0]!.readOnly).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("(#4) an IN-PLACE (non-isolated) contract-evaluator stays read-only — NO scratch", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ce = recorder();
+    await runRole({
+      ctx,
+      roleKind: "contract-evaluator",
+      contract: "- the thing works",
+      workspace: repo, // main worktree ⇒ isLinkedWorktree false ⇒ no scratch
+      runSessionFn: ce.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(ce.calls[0]!.exerciseScratch).toBeUndefined();
+    expect(ce.calls[0]!.readOnly).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("(#5) a scratch-enabled contract-evaluator that wrote a tracked file has it reverted + FAILS the run", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const mutating = mutatingIntegrityDeps("src/App.ts");
+    const ce = recorder();
+    const r = await runRole({
+      ctx,
+      roleKind: "contract-evaluator",
+      contract: "- the thing works",
+      workspace: worktree, // linked worktree ⇒ scratch armed ⇒ snapshot taken
+      runSessionFn: ce.fn,
+      integrityDeps: mutating,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /Integrity violation/.test(e) && e.includes("src/App.ts"))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("(#5 anti-no-op) a CLEAN scratch-enabled contract-evaluator run stays ok (guard armed, no mutation)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const { repo, worktree } = makeRepoWithWorktree();
+    ctx.config.exercise.sandbox = "workspace-write";
+    const ce = recorder();
+    const r = await runRole({
+      ctx,
+      roleKind: "contract-evaluator",
+      contract: "- the thing works",
+      workspace: worktree,
+      runSessionFn: ce.fn,
+      integrityDeps: cleanIntegrityDeps, // no mutation seen
+    });
+    expect(r.ok).toBe(true);
+    expect(r.errors.some((e) => /Integrity violation/.test(e))).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(worktree, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });

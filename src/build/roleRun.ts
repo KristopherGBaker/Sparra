@@ -31,6 +31,7 @@ import { costUsdOrZero } from "./budget.ts";
 import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
+import { createJudgeScratch, judgeSandboxEnv } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -55,6 +56,13 @@ export type RoleKind = "generator" | "contract-generator" | "contract-evaluator"
 /** Only the build evaluator is allowed to see holdout; everyone else is forbidden. */
 function isEvaluator(kind: RoleKind): boolean {
   return kind === "evaluator";
+}
+
+/** The SANDBOXED JUDGE roles: the evaluator and the contract-evaluator. Both run under a native
+ *  sandbox and exercise/probe the artifact (`npm test`, `swift build`), so both get the default
+ *  writable-scratch env layer AND the isolated-checkout workspace-scratch carve-out. */
+function isSandboxedJudge(kind: RoleKind): boolean {
+  return kind === "evaluator" || kind === "contract-evaluator";
 }
 
 interface RoleSpec {
@@ -480,9 +488,9 @@ export interface TempWorktreeDeps {
  */
 export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorktreeDeps = {}): Promise<RoleRunResult> {
   const { ctx, roleKind } = req;
-  if (roleKind !== "evaluator" && roleKind !== "reviewer") {
+  if (roleKind !== "evaluator" && roleKind !== "reviewer" && roleKind !== "contract-evaluator") {
     throw new Error(
-      `--worktree is supported only for the read-only judge roles (evaluator, reviewer); rejected for "${roleKind}" — ` +
+      `--worktree is supported only for the read-only judge roles (evaluator, reviewer, contract-evaluator); rejected for "${roleKind}" — ` +
         `a generator gets its build worktree via the full loop (\`sparra build\`). Drop --worktree, or use --workspace to point at an existing checkout.`
     );
   }
@@ -587,12 +595,20 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // the source-integrity guard reverts any artifact write it makes. Other read-only roles (reviewer,
   // contract-*) never get it. `onLinkedWorktree` was probed once above (git-free for in-place runs).
   const exerciseScratch = exerciseScratchEnabled({
-    evaluator,
+    judge: isSandboxedJudge(roleKind),
     sandbox: ctx.config.exercise.sandbox,
     hasBranch: !!ctx.store.data.build.branch,
     isWorktree: onLinkedWorktree,
   });
   const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
+
+  // Default writable-scratch env layer for the sandboxed judge roles (evaluator + contract-evaluator):
+  // redirect TMPDIR / clang+SwiftPM caches into a per-run scratch dir so a read-only Codex sandbox /
+  // unwritable $HOME doesn't EPERM Vitest temp writes, the tsx IPC socket, or clang's ModuleCache
+  // before the exercise/verify probe even runs. Other roles keep the plain merged build env.
+  const sessionEnv = isSandboxedJudge(roleKind)
+    ? judgeSandboxEnv(ctx.config, createJudgeScratch())
+    : mergedBuildEnv(ctx.config);
 
   // Parity context the real roles inject (cheap reads; improves single-shot fidelity).
   const memory = memorySection(await readMemory(ctx.paths));
@@ -688,7 +704,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     cwd: workspace,
     additionalDirectories: readDirs,
     tools: spec.tools,
-    env: mergedBuildEnv(ctx.config),
+    env: sessionEnv,
     skills: skillsForRole(ctx, spec.skillsName),
     // Backend-agnostic safety intent so Codex sandboxes correctly (it ignores Claude hooks):
     // only the generator may write; every other role is read-only. A write role's native-sandbox
@@ -921,6 +937,12 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     }
   }
 
+  // Source-integrity guard for ANY scratch-enabled judge (evaluator OR contract-evaluator running
+  // under workspace-write): detect + REVERT any write to the tracked artifact surface the judge made
+  // during its exercise/verify probe, and report the mutated paths. Computed ONCE here so both the
+  // evaluator (verdict-forcing) and the contract-evaluator (error-reporting) branches share it.
+  const mutatedArtifacts = snap ? enforceArtifactIntegrity(workspace, snap, integrityDeps) : [];
+
   if (evaluator) {
     // Redact any holdout the evaluator quoted, so it can't reach the conductor via
     // the returned verdict or the `--out` file (the evaluator may cite holdout in
@@ -928,18 +950,14 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // The harness — not the model's self-report — decides whether run_command/http_request
     // verifications actually ran; override feeds the pass gate above and the pivot/build branches.
     const verdict = redactVerdict(parseVerdict(ctx, res.resultText, exerciser?.exerciseStatus()), holdoutText);
-    // Source-integrity guard: revert any artifact write the evaluator made during the exercise; if
-    // it mutated the surface, FORCE the verdict to fail (a verdict from an evaluator that edited the
-    // code it grades cannot be trusted).
-    if (snap) {
-      const mutated = enforceArtifactIntegrity(workspace, snap, integrityDeps);
-      if (mutated.length) {
-        verdict.verdict = "fail";
-        verdict.blocking.unshift(
-          `Integrity violation: the evaluator wrote ${mutated.length} artifact file(s) during exercise (reverted): ${mutated.join(", ")}. Verdict cannot be trusted.`
-        );
-        warn(`Integrity violation for role-run-${roleKind}: evaluator wrote ${mutated.length} artifact file(s) (reverted): ${mutated.join(", ")}.`);
-      }
+    // If the evaluator mutated the artifact surface, FORCE the verdict to fail (a verdict from an
+    // evaluator that edited the code it grades cannot be trusted). The write was already reverted.
+    if (mutatedArtifacts.length) {
+      verdict.verdict = "fail";
+      verdict.blocking.unshift(
+        `Integrity violation: the evaluator wrote ${mutatedArtifacts.length} artifact file(s) during exercise (reverted): ${mutatedArtifacts.join(", ")}. Verdict cannot be trusted.`
+      );
+      warn(`Integrity violation for role-run-${roleKind}: evaluator wrote ${mutatedArtifacts.length} artifact file(s) (reverted): ${mutatedArtifacts.join(", ")}.`);
     }
     result.verdict = verdict;
     result.ok = res.ok && verdict.verdict === "pass";
@@ -962,11 +980,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       await writeText(req.out, header);
       result.outPath = req.out;
     }
-  } else if (req.out) {
-    // `result.resultText` (not the raw `res.resultText`) so a report recovered by the cap-death
-    // re-ask above is what lands in the --out file; identical to `res.resultText` otherwise.
-    await writeText(req.out, normalizeOutCapture(result.resultText).text);
-    result.outPath = req.out;
+  } else {
+    // A non-evaluator scratch-enabled judge (the contract-evaluator on an isolated checkout) has no
+    // verdict, but the same integrity boundary applies: if it wrote the artifact surface during a
+    // verify probe under workspace-write, the write is already reverted — report it and FAIL the run
+    // (a critique from a role that edited the code it critiques cannot be trusted).
+    if (mutatedArtifacts.length) {
+      result.ok = false;
+      const msg =
+        `Integrity violation: role-run-${roleKind} wrote ${mutatedArtifacts.length} artifact file(s) during its verify probe (reverted): ${mutatedArtifacts.join(", ")}. ` +
+        `A scratch-enabled judge may write ONLY gitignored build/test scratch, never the tracked source.`;
+      if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+      warn(msg);
+    }
+    if (req.out) {
+      // `result.resultText` (not the raw `res.resultText`) so a report recovered by the cap-death
+      // re-ask above is what lands in the --out file; identical to `res.resultText` otherwise.
+      await writeText(req.out, normalizeOutCapture(result.resultText).text);
+      result.outPath = req.out;
+    }
   }
 
   return result;

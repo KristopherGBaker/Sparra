@@ -122,6 +122,24 @@ git worktree** (`isLinkedWorktree`) — not specifically `build.branch`. So a st
 eval`/`run_role` on a git worktree gets writable scratch **without editing `state.json`**. A plain
 in-place run (the main worktree, no `build.branch`) still gets **no** scratch.
 
+The **contract-evaluator** is a sandboxed judge too: it runs the contract's *"I will verify by"*
+commands (e.g. `npm test`) to prove they're runnable. On an **isolated checkout** (temp worktree via
+`--worktree` / a build branch) it also relaxes to **`workspace-write`** with **network off** and the
+same source-integrity guard (any write to the tracked surface is reverted and the run **fails**); an
+**in-place** contract-evaluator stays strictly **read-only**. `sparra eval`/`role run --worktree`
+therefore now **accepts the contract-evaluator** (alongside the evaluator and reviewer).
+
+### Default writable-scratch env layer (both judge roles)
+Independently of `exercise.sandbox`, both judge roles (evaluator + contract-evaluator) receive a
+**default env layer** (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
+`CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh **per-run writable scratch dir**. A
+read-only sandbox / unwritable `$HOME` otherwise EPERMs *before any Sparra code runs*: Vitest's
+`/var/folders` temp writes, the **tsx** IPC socket (derived from `os.tmpdir()` — `tsx-<uid>` then
+`<pid>.pipe`, so `node bin/sparra.mjs` dies creating it), and clang's
+`~/.cache/clang/ModuleCache`. Precedence is `process.env` → scratch defaults → your `build.env`
+(user override wins). This only moves temp/cache roots — it never widens the sandbox's write scope
+over the tracked source (the integrity guard still governs that).
+
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when
 the build is on a worktree/branch** (`build.branch` set). On an in-place / greenfield-no-git run
