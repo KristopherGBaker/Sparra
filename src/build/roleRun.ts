@@ -26,13 +26,13 @@ import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
 import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
-import { provisionWorkspaceDeps } from "../util/provision.ts";
+import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
 import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
-import { createJudgeScratch, judgeSandboxEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -281,6 +281,9 @@ export interface RoleRunRequest {
   /** Injectable for tests; defaults to the real COW dep provisioner. Lets a test assert the
    *  worktree-workspace gets node_modules provisioned without a real `cp`. */
   provisionFn?: typeof provisionWorkspaceDeps;
+  /** Injectable for tests; defaults to the real SwiftPM dep-prewarm. Lets a test assert a Swift
+   *  worktree gets `swift package resolve` prewarmed into its durable cache without a real toolchain. */
+  prewarmSwiftFn?: typeof prewarmSwiftPackages;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
   integrityDeps?: IntegrityDeps;
   /** Injectable for tests; lists the workspace's changed/untracked files (abs paths) — used to
@@ -754,10 +757,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // did, so a `sparra eval <worktree>` paid a full install. COW-cheap + idempotent (skips dirs
   // already present); worktree-gated so an arbitrary --workspace dir is never clobbered.
   const provision = req.provisionFn ?? provisionWorkspaceDeps;
+  const prewarmSwift = req.prewarmSwiftFn ?? prewarmSwiftPackages;
   if (onLinkedWorktree && ctx.config.git.provisionDeps.enabled) {
     // Source = the dir the worktree came from: `depSourceDir` when the temp-worktree wrapper cut
     // it from a non-default workspace, else ctx.root (the build loop's own worktrees).
-    provision(req.depSourceDir ?? ctx.root, workspace, ctx.config.git.provisionDeps);
+    const depSource = req.depSourceDir ?? ctx.root;
+    provision(depSource, workspace, ctx.config.git.provisionDeps);
+    // SwiftPM dep-prewarm: while the network is available at provisioning time, resolve the
+    // package's deps into the durable worktree-local SwiftPM cache the session env below points at,
+    // so an OFFLINE `swift build` in this throwaway worktree reuses them. No-op off-knob / non-Swift.
+    prewarmSwift(depSource, workspace, ctx.config.git.provisionDeps);
   }
 
   // Optional session resume (e.g. iterating the generator) — only honored when the attempt's
@@ -809,14 +818,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   });
   const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
 
-  // Default writable-scratch env layer for the sandboxed judge roles (evaluator + contract-evaluator):
-  // redirect TMPDIR / clang+SwiftPM caches into a per-run scratch dir so a read-only Codex sandbox /
-  // unwritable $HOME doesn't EPERM Vitest temp writes, the tsx IPC socket PATH, or clang's ModuleCache
-  // before the exercise/verify probe even runs. NB: PATH writability only — the sandbox still denies
-  // unix-socket LISTEN as policy (see the per-attempt capability notes below), so a tsx-launched
-  // socket smoke still UN-RUNs. Other roles keep the plain merged build env.
-  const sessionEnv = isSandboxedJudge(roleKind)
-    ? judgeSandboxEnv(ctx.config, createJudgeScratch())
+  // Writable-scratch env layer for the sandboxed BUILD sessions — the two judge roles (evaluator +
+  // contract-evaluator) AND the GENERATOR/writer: redirect TMPDIR / clang cache into a per-run
+  // scratch dir (so a read-only Codex sandbox / unwritable $HOME doesn't EPERM Vitest temp writes,
+  // the tsx IPC socket PATH, or clang's ModuleCache before an exercise/verify/build runs) and point
+  // SWIFTPM_CACHE_DIR at the DURABLE worktree-local cache the prewarm filled (so an offline
+  // `swift build` reuses it). NB: PATH writability only — the sandbox still denies unix-socket LISTEN
+  // as policy (see the per-attempt capability notes below), so a tsx-launched socket smoke still
+  // UN-RUNs. The read-only proposer roles (reviewer, contract-generator) keep the plain merged env.
+  const sessionEnv = isSandboxedJudge(roleKind) || roleKind === "generator"
+    ? createSandboxSessionEnv(ctx.config, workspace)
     : mergedBuildEnv(ctx.config);
 
   // Parity context the real roles inject (cheap reads; improves single-shot fidelity).

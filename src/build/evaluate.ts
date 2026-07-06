@@ -20,7 +20,7 @@ import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./hold
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
-import { createJudgeScratch, judgeSandboxEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -144,12 +144,6 @@ export async function evaluateItem(args: {
     isWorktree: () => isLinkedWorktree(workspaceDir),
   });
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
-  // Default writable-scratch env layer for the sandboxed judge: redirect TMPDIR / clang+SwiftPM
-  // caches into a per-run scratch dir so a read-only Codex sandbox / unwritable $HOME doesn't EPERM
-  // Vitest's temp writes, the tsx IPC socket PATH, or clang's ModuleCache before the exercise even
-  // runs. NB: this fixes PATH writability only — the sandbox still denies unix-socket LISTEN as
-  // policy (surfaced via the capability notes below), so tsx-launched socket smokes still UN-RUN.
-  const judgeScratchDir = createJudgeScratch();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
     EXERCISE_GUIDANCE: exerciser.guidance,
@@ -198,7 +192,13 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
     cwd: workspaceDir,
     additionalDirectories: buildReadDirs(ctx, workspaceDir),
     tools: ["Read", "Glob", "Grep", "Bash"],
-    env: judgeSandboxEnv(ctx.config, judgeScratchDir),
+    // Writable-scratch session env: redirect TMPDIR / clang cache into a per-run scratch dir so a
+    // read-only Codex sandbox / unwritable $HOME doesn't EPERM Vitest's temp writes, the tsx IPC
+    // socket PATH, or clang's ModuleCache before the exercise runs; SWIFTPM_CACHE_DIR points at the
+    // DURABLE worktree-local cache the provisioning prewarm filled, so an offline `swift build`
+    // reuses it. NB: PATH writability only — the sandbox still denies unix-socket LISTEN as policy
+    // (surfaced via the capability notes above), so a tsx-launched socket smoke still UN-RUNs.
+    env: createSandboxSessionEnv(ctx.config, workspaceDir),
     skills: skillsForRole(ctx, "evaluator"),
     // Attach the in-process exercise server ONLY to a backend that can host it; a Codex evaluator
     // would silently drop it, so it exercises via its native runner (see guidance) instead.

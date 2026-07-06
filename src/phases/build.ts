@@ -6,7 +6,7 @@ import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
 import { appendText, exists, readText } from "../util/io.ts";
 import { prepareWorkspace, changedFiles } from "../util/git.ts";
-import { provisionWorkspaceDeps } from "../util/provision.ts";
+import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { commitItem } from "../build/commit.ts";
 import { writeScopeViolations } from "../sdk/scoping.ts";
 import { ensureAutoProbed } from "../sdk/guard.ts";
@@ -63,6 +63,7 @@ export interface BuildDeps {
   commitItem: typeof commitItem;
   waitForLimit: typeof waitForLimit;
   provisionWorkspaceDeps: typeof provisionWorkspaceDeps;
+  prewarmSwiftPackages: typeof prewarmSwiftPackages;
   /** Gate-checked workspace reset on a pivot (destructive; see build/reset.ts). */
   maybeResetWorkspace: typeof maybeResetWorkspace;
   /** No-model safe executor for the contract verify-probe + flakiness rerun gate. */
@@ -86,6 +87,7 @@ const defaultDeps: BuildDeps = {
   commitItem,
   waitForLimit,
   provisionWorkspaceDeps,
+  prewarmSwiftPackages,
   maybeResetWorkspace,
   execVerifyCommand: runVerifyCommand,
   measureAccepted: measureAcceptedItem,
@@ -185,6 +187,10 @@ export async function cmdBuild(
     // which a workspace override never sets) — an in-place run already has the deps. Non-fatal.
     if (b.build.workspaceDir !== ctx.root) {
       d.provisionWorkspaceDeps(ctx.root, b.build.workspaceDir!, ctx.config.git.provisionDeps);
+      // SwiftPM dep-prewarm (network available NOW): resolve a Swift package's deps into the durable
+      // worktree-local SwiftPM cache the generator/evaluator/contract sessions consume, so a later
+      // OFFLINE `swift build`/`swift test` in the worktree runs as-shipped. No-op off-knob / non-Swift.
+      d.prewarmSwiftPackages(ctx.root, b.build.workspaceDir!, ctx.config.git.provisionDeps);
     }
     await ctx.store.save();
   }

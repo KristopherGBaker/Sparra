@@ -130,7 +130,19 @@ export interface SparraConfig {
      *   enabled → default true; set false to skip provisioning (e.g. you provision deps yourself).
      *   dirs    → which top-level dirs to copy; default ["node_modules"].
      */
-    provisionDeps: { enabled: boolean; dirs: string[] };
+    provisionDeps: {
+      enabled: boolean;
+      dirs: string[];
+      /**
+       * Prewarm a SwiftPM package's dependencies (`swift package resolve`) into a durable
+       * worktree-local cache DURING provisioning, while the network is available — so a later
+       * OFFLINE `swift build`/`swift test` in the throwaway worktree runs as-shipped instead of
+       * failing to resolve. Default TRUE: it acts ONLY on a tree with a `Package.swift` (a non-fatal
+       * no-op otherwise), so non-Swift projects see no change; default-off would leave the offline
+       * build broken for normal Swift runs.
+       */
+      swiftPackages: boolean;
+    };
   };
 
   rubric: {
@@ -490,7 +502,7 @@ export function defaultConfig(): SparraConfig {
       branchPrefix: "sparra/",
       autoCommit: false,
       agentCommits: "agent",
-      provisionDeps: { enabled: true, dirs: ["node_modules"] },
+      provisionDeps: { enabled: true, dirs: ["node_modules"], swiftPackages: true },
     },
     rubric: {
       weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 },

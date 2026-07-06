@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { exists, isSymlink } from "./io.ts";
@@ -122,4 +124,98 @@ export function provisionWorkspaceDeps(
     }
   }
   return summary;
+}
+
+// ── Durable, WORKTREE-LOCAL SwiftPM dependency cache ─────────────────────────────────────────────
+//
+// The clang ModuleCache / TMPDIR scratch a build session redirects is REGENERABLE (a fresh
+// per-session temp is fine). The SwiftPM DEPENDENCY cache is NOT: it holds the resolved+fetched
+// package state a `swift package resolve` produced while the network was still available (at
+// provisioning time). So it must PERSIST across the worktree's sessions — the prewarm writes it and
+// a later OFFLINE `swift build` in the same worktree reuses it. This derives a STABLE path keyed on
+// the worktree location (NOT a fresh per-run temp), placed under `baseDir` (os.tmpdir() default) —
+// never under the workspace, which would put it on the graded-artifact surface and risk the UDS
+// sun_path length limit the judge scratch guards.
+
+/** The durable SwiftPM cache path for a worktree — deterministic from the workspace path, so the
+ *  provisioning-time prewarm and every later build session of the SAME worktree share ONE cache. */
+export function swiftpmCacheDir(workspaceDir: string, baseDir: string = os.tmpdir()): string {
+  const key = createHash("sha1").update(path.resolve(workspaceDir)).digest("hex").slice(0, 16);
+  return path.join(baseDir, "sparra-swiftpm", key);
+}
+
+/** Ensure the durable SwiftPM cache dir exists on disk and return it (idempotent). */
+export function ensureSwiftpmCacheDir(workspaceDir: string, baseDir: string = os.tmpdir()): string {
+  const dir = swiftpmCacheDir(workspaceDir, baseDir);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Injectable seams for the SwiftPM dep-prewarm (fs probe + exec), mirroring `ProvisionDeps`. */
+export interface SwiftPrewarmDeps {
+  exists?: (p: string) => boolean;
+  run?: (argv: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => { ok: boolean; out: string };
+  /** Override the durable cache location (tests point it at a temp base). */
+  cacheDirFn?: (workspaceDir: string) => string;
+}
+
+export interface SwiftPrewarmResult {
+  /** True when the prewarm command was actually invoked. */
+  ran: boolean;
+  /** True when the invoked command exited 0. */
+  ok: boolean;
+  /** Why the prewarm was a no-op (when `ran` is false). */
+  skipped?: "disabled" | "in-place" | "not-a-swift-package";
+  /** The durable cache the prewarm targeted (present whenever it ran). */
+  cacheDir?: string;
+  out?: string;
+}
+
+/** Default prewarm runner: spawn the argv (no shell) in `cwd` with `env`, reporting ok/out. */
+function swiftResolveRun(
+  argv: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv }
+): { ok: boolean; out: string } {
+  const [cmd, ...args] = argv;
+  const r = spawnSync(cmd!, args, { cwd: opts.cwd, env: opts.env, encoding: "utf8" });
+  return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
+}
+
+/**
+ * Prewarm a SwiftPM package's dependencies into the durable worktree-local cache DURING worktree
+ * provisioning, while the network is still available — so a later OFFLINE `swift build` in the
+ * throwaway worktree reuses the resolved state instead of failing to resolve GRDB & friends.
+ *
+ * A NO-OP (never spawns `swift`) when: the `swiftPackages` knob is off; the run is in-place
+ * (`workspaceDir === root` already has resolved deps); or the source tree is NOT a SwiftPM package
+ * (`root/Package.swift` absent). Otherwise it runs a `swift package resolve` against the durable
+ * cache from `swiftpmCacheDir`, in the worktree cwd, with `SWIFTPM_CACHE_DIR` pointed there too.
+ *
+ * Failures are NON-FATAL and logged (mirrors `provisionWorkspaceDeps`): a prewarm hiccup — a broken
+ * toolchain, a network blip, a resolve error — must never abort provisioning, so this never throws.
+ */
+export function prewarmSwiftPackages(
+  root: string,
+  workspaceDir: string,
+  cfg: { swiftPackages: boolean },
+  deps: SwiftPrewarmDeps = {}
+): SwiftPrewarmResult {
+  if (!cfg.swiftPackages) return { ran: false, ok: false, skipped: "disabled" };
+  if (workspaceDir === root) return { ran: false, ok: false, skipped: "in-place" };
+  const fsExists = deps.exists ?? exists;
+  if (!fsExists(path.join(root, "Package.swift"))) return { ran: false, ok: false, skipped: "not-a-swift-package" };
+
+  const cacheDir = (deps.cacheDirFn ?? ensureSwiftpmCacheDir)(workspaceDir);
+  const run = deps.run ?? swiftResolveRun;
+  const argv = ["swift", "package", "resolve", "--cache-path", cacheDir];
+  try {
+    const r = run(argv, { cwd: workspaceDir, env: { ...process.env, SWIFTPM_CACHE_DIR: cacheDir } });
+    if (r.ok) detail(`prewarm: resolved SwiftPM dependencies into the durable cache (${cacheDir}).`);
+    else warn(`prewarm: swift package resolve failed (non-fatal): ${r.out.trim()}`);
+    return { ran: true, ok: r.ok, cacheDir, out: r.out };
+  } catch (e) {
+    // Non-fatal: a prewarm hiccup must never abort provisioning — the eval step will just warn.
+    warn(`prewarm: swift package resolve threw (non-fatal): ${(e as Error).message}`);
+    return { ran: true, ok: false, cacheDir, out: (e as Error).message };
+  }
 }

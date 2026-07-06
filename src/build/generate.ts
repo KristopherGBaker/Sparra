@@ -21,7 +21,7 @@ import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
-import { mergedBuildEnv } from "./env.ts";
+import { createSandboxSessionEnv } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 
 export interface Deviation {
@@ -120,7 +120,11 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     cwd: workspaceDir,
     additionalDirectories: genReadDirs,
     tools: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
-    env: mergedBuildEnv(ctx.config),
+    // Writable-scratch session env: redirect TMPDIR / clang cache into a fresh per-run scratch and
+    // SWIFTPM_CACHE_DIR at the DURABLE worktree-local cache the provisioning prewarm filled — so the
+    // generator's own `swift build`/`swift test` verify gates run AS SHIPPED (offline, unwritable
+    // $HOME) instead of forcing a `--disable-sandbox` workaround. User `build.env` still overrides.
+    env: createSandboxSessionEnv(ctx.config, workspaceDir),
     skills: skillsForRole(ctx, "generator"),
     // Native-sandbox intent (Codex honors it; Claude ignores it). danger-full-access is
     // gated to a git worktree/branch boundary — the only safety wall on an autonomous run.

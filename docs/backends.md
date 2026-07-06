@@ -131,15 +131,21 @@ same source-integrity guard (any write to the tracked surface is reverted and th
 **in-place** contract-evaluator stays strictly **read-only**. `sparra eval`/`role run --worktree`
 therefore now **accepts the contract-evaluator** (alongside the evaluator and reviewer).
 
-### Default writable-scratch env layer (both judge roles)
-Independently of `exercise.sandbox`, both judge roles (evaluator + contract-evaluator) receive a
-**default env layer** (`src/build/judgeScratch.ts`) that redirects `TMPDIR`,
-`CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into a fresh **per-run writable scratch dir**. A
+### Default writable-scratch env layer (all sandboxed build sessions)
+Independently of `exercise.sandbox`, **every sandboxed build session** — the two judge roles
+(evaluator + contract-evaluator), the **generator/writer**, and the **contract-negotiation**
+sessions — receives a **default env layer** (`src/build/judgeScratch.ts`, `createSandboxSessionEnv`)
+that redirects `TMPDIR`, `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR` into writable scratch. A
 read-only sandbox / unwritable `$HOME` otherwise EPERMs *before any Sparra code runs*: Vitest's
 `/var/folders` temp writes, the **tsx** IPC socket **PATH** (derived from `os.tmpdir()` — `tsx-<uid>`
-then `<pid>.pipe`), and clang's `~/.cache/clang/ModuleCache`. Precedence is `process.env` → scratch
-defaults → your `build.env` (user override wins). This only moves temp/cache roots — it never widens
-the sandbox's write scope over the tracked source (the integrity guard still governs that).
+then `<pid>.pipe`), and clang's `~/.cache/clang/ModuleCache`. `TMPDIR` + `CLANG_MODULE_CACHE_PATH`
+point at a **fresh per-run scratch dir** (regenerable caches), while **`SWIFTPM_CACHE_DIR`** points at
+a **durable, worktree-local** cache (keyed on the workspace path) so an **offline** `swift build`
+reuses the dependencies the provisioning-time **SwiftPM prewarm** resolved (see
+[SwiftPM prewarm](ios.md#swiftpm-dependency-prewarm)). Precedence is `process.env` → scratch defaults
+→ your `build.env` (user override wins). This only moves temp/cache roots — it never widens the
+sandbox's write scope over the tracked source (the integrity guard still governs that). The read-only
+proposer roles (reviewer, contract-generator) keep the plain merged `build.env`.
 
 ### Known sandbox-capability matrix (surfaced to the judge)
 The scratch layer fixes **path writability**, but it does **not** lift the sandbox's seatbelt

@@ -493,12 +493,18 @@ describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
     const wt = dir + "-wt"; // a worktree path distinct from the repo root
     const calls: Array<{ root: string; ws: string; cfg: unknown }> = [];
+    const prewarmCalls: Array<{ root: string; ws: string; cfg: unknown }> = [];
     const deps: Partial<BuildDeps> = {
       ...baseDeps(),
       prepareWorkspace: () => ({ dir: wt, branch: "sparra/test", note: "t" }),
       provisionWorkspaceDeps: (root, ws, cfg) => {
         calls.push({ root, ws, cfg });
         return { copied: [], skipped: [], failed: [] };
+      },
+      // U-X: the SwiftPM prewarm runs at PROVISIONING time (before any generate/evaluate).
+      prewarmSwiftPackages: (root, ws, cfg) => {
+        prewarmCalls.push({ root, ws, cfg });
+        return { ran: false, ok: false, skipped: "not-a-swift-package" };
       },
       decompose: async () => [items[0]!],
       generateItem: async () => genOut(),
@@ -509,6 +515,11 @@ describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
     expect(calls[0]!.root).toBe(ctx.root);
     expect(calls[0]!.ws).toBe(wt);
     expect(calls[0]!.cfg).toEqual(ctx.config.git.provisionDeps); // exact config threaded through
+    // U-X: prewarm invoked once at provisioning with the SAME (root, worktree, cfg).
+    expect(prewarmCalls.length).toBe(1);
+    expect(prewarmCalls[0]!.root).toBe(ctx.root);
+    expect(prewarmCalls[0]!.ws).toBe(wt);
+    expect(prewarmCalls[0]!.cfg).toEqual(ctx.config.git.provisionDeps);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

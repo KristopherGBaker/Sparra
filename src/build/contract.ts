@@ -15,9 +15,8 @@ import { contractModeClauses } from "./modeText.ts";
 import { selectMapContext } from "./mapContext.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
-import { mergedBuildEnv } from "./env.ts";
 import { getBackend } from "../sdk/session.ts";
-import { judgeCapabilityNotesText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
 
 const AGREED = "CONTRACT: AGREED";
 const SECTION = "## AGREED CONTRACT";
@@ -61,7 +60,13 @@ export async function negotiateContract(
   const file = ctx.paths.contractFile(item.id);
   const run = runSessionFn ?? runSession;
   const exec = executor ?? runVerifyCommand;
-  const cwd = holdoutFreeCwd(ctx, workspaceDir ?? ctx.root);
+  const wtDir = workspaceDir ?? ctx.root;
+  const cwd = holdoutFreeCwd(ctx, wtDir);
+  // Writable-scratch session env for the contract-negotiation sessions (redirect TMPDIR / clang
+  // cache into a fresh per-run scratch, SWIFTPM_CACHE_DIR at the DURABLE worktree-local cache keyed
+  // on the build worktree) — so a verify command the negotiation dry-checks against a Swift package
+  // runs AS SHIPPED, matching the generator/evaluator of the same worktree. `build.env` still wins.
+  const sessionEnv = () => createSandboxSessionEnv(ctx.config, wtDir);
 
   // Resume: if a contract was already agreed, reuse it. A human may have edited it
   // (interactive contract steering), so leak-check the reused text here — fail clearly
@@ -135,7 +140,7 @@ export async function negotiateContract(
       effort: genRole.effort,
       cwd,
       tools: ["Read", "Glob", "Grep"],
-      env: mergedBuildEnv(ctx.config),
+      env: sessionEnv(),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
       ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
@@ -178,7 +183,7 @@ export async function negotiateContract(
       effort: evalRole.effort,
       cwd,
       tools: ["Read", "Glob", "Grep"],
-      env: mergedBuildEnv(ctx.config),
+      env: sessionEnv(),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
       ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
@@ -201,7 +206,7 @@ export async function negotiateContract(
           // build.verifyCommands = the explicit opt-in past the executor's argv[0] allowlist.
           const o = await exec(workspaceDir ?? ctx.root, cmd, {
             allowPrefixes: ctx.config.build.verifyCommands,
-            env: mergedBuildEnv(ctx.config),
+            env: sessionEnv(),
           });
           if (!o.ran || classifyExec(o) === "usage") brokenCommands.push(renderExecOutcome(o));
         }
