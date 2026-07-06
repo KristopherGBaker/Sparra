@@ -296,6 +296,16 @@ export interface RoleRunRequest {
    *  of the before/after changed-file sets (bounded cost; clean untouched files are never read).
    *  Defaults to `fileContentHash` (sha-256 of the bytes, or `ABSENT_CONTENT` if unreadable). */
   hashFileFn?: (file: string) => string;
+  /** Evaluator-path only: the identity of whoever produced the artifact under grade (the generator).
+   *  When supplied, the runner compares the evaluator's ACTUAL post-fallback `{ backend, model }`
+   *  against this baseline using the same equality rule as the U-6 independence guard
+   *  (`backendKey(a) === backendKey(b) && a.model === b.model`, where `backendKey = r => r.backend
+   *  ?? "claude"`). Sets `sameModelGrade: true` on the result/payload when they match (the cross-model
+   *  gate has collapsed to a same-model grade), `false` when they differ, and leaves `sameModelGrade`
+   *  `undefined` when this field is absent. When `true`, the verdict notes carry a short "same-model
+   *  grade — not cross-model" note. Fully backwards-compatible: callers that omit this field see
+   *  identical behavior to before. */
+  crossModelBaseline?: { backend?: string; model?: string };
   /** Injectable for tests; defaults to the real `buildExerciser` (evaluator role only). Lets a test
    *  assert the harness-status override without driving a live model through run_command. */
   buildExerciserFn?: (config: Ctx["config"], workspace: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
@@ -368,6 +378,19 @@ export interface RoleRunResult {
    *  in — its name, dir, branch, and whether THIS call created it. Surfaced over MCP + CLI so the
    *  conductor knows WHERE the WIP lives (to reuse next round, or tear down on accept/abandon). */
   unitWorktree?: { name: string; dir: string; branch: string; created: boolean };
+  /** Populated when the run fell back from a primary backend/model to an alternate one in the
+   *  `roles.<role>.fallback` chain. Carries the REQUESTED role's identity — the backend/model that
+   *  WAS CONFIGURED but hit a limit and was replaced. When absent, no fallback occurred and
+   *  `backend`/`model` equal the requested config. The actual post-fallback identity is always in
+   *  the top-level `backend`/`model` fields (unchanged). */
+  fallbackFrom?: { backend: string; model?: string };
+  /** `true` when `crossModelBaseline` was supplied AND the evaluator's ACTUAL post-fallback
+   *  backend+model matches the baseline producer (using the same equality rule as the U-6
+   *  second-opinion independence guard: `backendKey === backendKey && model === model`). Signals
+   *  that the cross-model adversarial gate has collapsed to a same-model grade — the evaluator
+   *  is the same model family as the generator it is grading. `false` when a baseline is supplied
+   *  but differs; `undefined` when no baseline was supplied (fully backwards-compatible). */
+  sameModelGrade?: boolean;
   /** Set for a WRITER (generator) run where the contract references a configured verify command
    *  (`build.verifyCommands`) but self-verify is NOT enabled (no `allowVerify`, no `build.branch` /
    *  worktree boundary) — a structurally-guaranteed "unverified" claim signature.  Names the
@@ -510,11 +533,20 @@ function redactVerdict(v: Verdict, holdoutText: string): Verdict {
 }
 
 /** Render the interactive verdict markdown — the EXACT bytes written to `--out` today (extracted so
- *  the auto-persisted file reuses the identical header, keeping `--out` byte-unchanged). */
-function renderInteractiveVerdict(roleKind: RoleKind, role: RoleConfig, verdict: Verdict, threshold: number): string {
+ *  the auto-persisted file reuses the identical header, keeping `--out` byte-unchanged).
+ *  `actualRole` is the role that ACTUALLY ran (post-fallback); `fallbackFrom` is populated only when
+ *  a fallback occurred so the header can distinguish a genuine cross-model grade from a collapsed one. */
+function renderInteractiveVerdict(
+  roleKind: RoleKind,
+  actualRole: RoleConfig,
+  verdict: Verdict,
+  threshold: number,
+  fallbackFrom?: { backend: string; model?: string }
+): string {
   const unrun = new Set(verdict.unrunAssertionIds ?? []);
   const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
-  return `# Verdict — ${roleKind} (${role.backend ?? "claude"}/${role.model})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`;
+  const fallbackNote = fallbackFrom ? ` — fell back from ${fallbackFrom.backend}/${fallbackFrom.model ?? "?"}` : "";
+  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`;
 }
 
 /** Parse + normalize an evaluator verdict the same way the build loop does.
@@ -1081,6 +1113,24 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     );
   }
 
+  // Fallback-provenance: populate when ranRole differs from the requested `role` in backend or model.
+  const requestedBackend = role.backend ?? "claude";
+  const actualBackend = ranRole.backend ?? "claude";
+  const didFallback = actualBackend !== requestedBackend || ranRole.model !== role.model;
+  const fallbackFrom: RoleRunResult["fallbackFrom"] = didFallback
+    ? { backend: requestedBackend, model: role.model }
+    : undefined;
+
+  // Same-model-grade signal: compare the evaluator's ACTUAL post-fallback identity against the
+  // supplied generator baseline using the same backendKey equality as the U-6 independence guard.
+  const backendKeyFn = (b?: string) => b ?? "claude";
+  let sameModelGrade: boolean | undefined;
+  if (req.crossModelBaseline !== undefined) {
+    const evalBackend = backendKeyFn(ranRole.backend);
+    const baseBackend = backendKeyFn(req.crossModelBaseline.backend);
+    sameModelGrade = evalBackend === baseBackend && ranRole.model === req.crossModelBaseline.model;
+  }
+
   const result: RoleRunResult = {
     ok: res.ok,
     roleKind,
@@ -1096,6 +1146,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // our-own-budget-cap stop (the conductor resumes via `sessionId` on a budget death).
     filesChanged,
     hitBudget: res.hitBudget ? true : undefined,
+    // Fallback provenance: present when the run fell back to a different backend/model than requested.
+    fallbackFrom,
+    // Same-model-grade signal: present (true/false) when crossModelBaseline was supplied.
+    sameModelGrade,
     // Verify-gate advisory: set when the contract gates on commands but self-verify is off.
     // Surfaced here so the MCP payload and the conductor both see it without reading logs.
     verifyGateWarning: gateWarn ?? undefined,
@@ -1215,9 +1269,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       );
       warn(`Integrity violation for role-run-${roleKind}: evaluator wrote ${mutatedArtifacts.length} artifact file(s) (reverted): ${mutatedArtifacts.join(", ")}.`);
     }
+    // Append a same-model-grade note to the verdict notes when the cross-model gate collapsed.
+    if (sameModelGrade === true) {
+      verdict.notes = (verdict.notes ? verdict.notes + "\n\n" : "") +
+        "⚠️ same-model grade — not cross-model: the evaluator's actual post-fallback identity matches the generator's baseline.";
+    }
     result.verdict = verdict;
     result.ok = res.ok && verdict.verdict === "pass";
-    const header = renderInteractiveVerdict(roleKind, role, verdict, ctx.config.rubric.passThreshold);
+    // Pass `ranRole` (the actual grader) — NOT the requested `role` — so the header names who
+    // actually graded. When a fallback occurred, append a note naming the requested identity.
+    const header = renderInteractiveVerdict(roleKind, ranRole, verdict, ctx.config.rubric.passThreshold, fallbackFrom);
     // Auto-persist the redacted verdict to a UNIQUELY-named file under .sparra/verdicts/ — always,
     // without the caller passing `out` — so an interactive/loop cycle leaves evaluator-side evidence
     // for `sparra reflect` (whose bundle excludes the holdout-bearing evaluator traces). The token

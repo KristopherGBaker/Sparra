@@ -248,3 +248,124 @@ describe("buildRunRolePayload — verifyGateWarning field (U-V Assertion 5)", ()
     expect("verifyGateWarning" in p).toBe(false);
   });
 });
+
+// ── U-1: Fallback provenance + same-model-grade warning — MCP payload (assertion 4, 7e) ──
+
+describe("buildRunRolePayload — fallbackFrom + sameModelGrade (U-1 assertion 4)", () => {
+  const evalVerdict = { verdict: "pass", weightedTotal: 88, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"];
+
+  // (4-eval-branch) evaluator payload exposes both fallbackFrom and sameModelGrade
+  it("evaluator branch: exposes fallbackFrom when the run fell back", () => {
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        backend: "claude",
+        model: "opus",
+        fallbackFrom: { backend: "codex", model: "gpt-5.5" },
+        verdict: evalVerdict,
+      }),
+      75
+    );
+    expect(p.fallbackFrom).toEqual({ backend: "codex", model: "gpt-5.5" });
+    // Wall: traceDir still omitted on evaluator branch
+    expect("traceDir" in p).toBe(false);
+  });
+
+  it("evaluator branch: fallbackFrom is absent when no fallback occurred", () => {
+    const p = buildRunRolePayload(
+      baseResult({ roleKind: "evaluator", fallbackFrom: undefined, verdict: evalVerdict }),
+      75
+    );
+    expect(p.fallbackFrom).toBeUndefined();
+  });
+
+  it("evaluator branch: sameModelGrade===true is exposed when the gate collapsed", () => {
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        sameModelGrade: true,
+        fallbackFrom: { backend: "codex", model: "gpt-5.5" },
+        verdict: evalVerdict,
+      }),
+      75
+    );
+    expect(p.sameModelGrade).toBe(true);
+    expect(p.fallbackFrom).toEqual({ backend: "codex", model: "gpt-5.5" });
+    expect("traceDir" in p).toBe(false); // wall intact
+  });
+
+  it("evaluator branch: sameModelGrade===false is exposed when baseline is present but differs", () => {
+    const p = buildRunRolePayload(
+      baseResult({ roleKind: "evaluator", sameModelGrade: false, verdict: evalVerdict }),
+      75
+    );
+    expect(p.sameModelGrade).toBe(false);
+  });
+
+  it("evaluator branch: sameModelGrade is absent when no crossModelBaseline was supplied", () => {
+    const p = buildRunRolePayload(
+      baseResult({ roleKind: "evaluator", sameModelGrade: undefined, verdict: evalVerdict }),
+      75
+    );
+    expect(p.sameModelGrade).toBeUndefined();
+  });
+
+  // (4-non-eval-branch) non-evaluator also gets fallbackFrom (but not sameModelGrade)
+  it("non-evaluator branch: exposes fallbackFrom when the run fell back (generator path)", () => {
+    const p = buildRunRolePayload(
+      baseResult({ roleKind: "generator", fallbackFrom: { backend: "codex", model: "gpt-5.5" } }),
+      75
+    );
+    expect(p.fallbackFrom).toEqual({ backend: "codex", model: "gpt-5.5" });
+    // traceDir PRESENT on non-evaluator (holdout-free)
+    expect(p.traceDir).toBeDefined();
+  });
+
+  it("non-evaluator branch: fallbackFrom is absent when no fallback occurred", () => {
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator", fallbackFrom: undefined }), 75);
+    expect(p.fallbackFrom).toBeUndefined();
+  });
+
+  // MUTATION DISCRIMINATOR for the wall: evaluator branch still omits traceDir even when fallbackFrom is present
+  it("wall: evaluator branch OMITS traceDir even when fallbackFrom and sameModelGrade are set", () => {
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        fallbackFrom: { backend: "codex", model: "gpt-5.5" },
+        sameModelGrade: true,
+        verdict: evalVerdict,
+      }),
+      75
+    );
+    expect("traceDir" in p).toBe(false);
+    expect(p.traceDir).toBeUndefined();
+    expect(p.fallbackFrom).toBeDefined(); // provenance present
+    expect(p.sameModelGrade).toBe(true); // signal present
+  });
+});
+
+describe("toRunRoleRequest — crossModelBaseline forwarding (U-1 assertion 4, 7e)", () => {
+  const ctx = { root: "/proj" } as unknown as Ctx;
+
+  it("forwards crossModelBaseline onto the RoleRunRequest", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "evaluator",
+      crossModelBaseline: { backend: "claude", model: "opus" },
+    });
+    expect(req.crossModelBaseline).toEqual({ backend: "claude", model: "opus" });
+  });
+
+  it("leaves crossModelBaseline undefined when not set (backwards-compatible)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
+    expect(req.crossModelBaseline).toBeUndefined();
+  });
+
+  it("forwards crossModelBaseline with absent backend (model-only baseline)", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "evaluator",
+      crossModelBaseline: { model: "opus" },
+    });
+    expect(req.crossModelBaseline).toEqual({ model: "opus" });
+    expect(req.crossModelBaseline?.backend).toBeUndefined();
+  });
+});

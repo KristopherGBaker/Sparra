@@ -124,7 +124,16 @@ The few that matter most:
   first markdown heading (heading-less output is trimmed + warned); evaluator `out` remains the
   harness verdict template. Every evaluator run ALSO **auto-persists** its redacted verdict to a
   uniquely-named `.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md` (surfaced as `verdictPath`,
-  separate from `out`/`outPath`) with no `out` needed. See `docs/role-runner.md`.
+  separate from `out`/`outPath`) with no `out` needed. The verdict header now names the **ACTUAL
+  post-fallback grader** (e.g. `evaluator (claude/opus — fell back from codex/gpt-5.5)`) — not
+  the configured backend — so a conductor can tell a real cross-model grade from a collapsed one.
+  See `docs/role-runner.md`.
+- **Fallback provenance + same-model-grade signal** — pass the generator's `backend`/`model` as
+  `crossModelBaseline` on the evaluator `run_role` call. The runner then sets `sameModelGrade:
+  true` on the result/payload if the evaluator's actual post-fallback identity matches the
+  generator (the gate collapsed), `false` if it differs, and `undefined` if the field was omitted.
+  `fallbackFrom` is set when a fallback occurred (names the originally-requested evaluator role).
+  See `docs/role-runner.md` → "Fallback provenance + same-model-grade warning".
 - **`build.autoRestart`** + **`roles.*.fallback`** — for **unattended** builds: on a *provider*
   rate/usage limit (not your budget caps), switch to a cross-provider `fallback` model or wait
   the window out, then retry the same round (not charged against `maxRoundsPerItem`). Off by

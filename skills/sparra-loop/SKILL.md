@@ -177,9 +177,17 @@ once they're launched.
    workspace=…)`. Writes are scoped to the workspace.
 3. **Adversarially evaluate — cross-model.** `run_role(roleKind="evaluator",
    backend="codex", contractPath=…, holdoutPath=".sparra/HOLDOUT.md", workspace=…,
-   worktree=true)`. The evaluator exercises the artifact for
-   real and grades it against the contract + holdout. Using a *different* backend than the
-   generator is the point — an independent second opinion. The redacted verdict **auto-persists**
+   worktree=true, crossModelBaseline={backend: <genBackend>, model: <genModel>})`.
+   The evaluator exercises the artifact for real and grades it against the contract + holdout.
+   Using a *different* backend than the generator is the point — an independent second opinion.
+   **Always pass `crossModelBaseline`** (the generator's `backend`/`model` from its `run_role`
+   result) so the runner can detect if a provider-limit fallback collapsed the independence:
+   if the evaluator's ACTUAL post-fallback identity matches the generator, the result carries
+   `sameModelGrade: true` and the verdict header names the actual grader with a `fell back from`
+   note — a collapsed gate you should treat like a re-run (fetch a genuinely cross-model verdict
+   before accepting). The `fallbackFrom` field (when present) names the originally-requested
+   evaluator backend/model. Neither field is present unless a fallback occurred or a baseline was
+   supplied — fully backwards-compatible. The redacted verdict **auto-persists**
    to a uniquely-named `.sparra/verdicts/role-run-evaluator-<stamp>.verdict.md` (returned as
    `verdictPath`) with no `out` needed; pass `out=…` only if you also want a second caller-chosen
    copy at a fixed path. **Pass `worktree=true` whenever the
@@ -201,6 +209,12 @@ once they're launched.
    `#<id>: <evidence>` line (what the evaluator observed — the same shape as the
    autonomous loop's round feedback) back into the generator brief and repeat. Pivot
    to a fresh approach after repeated failures on the same point.
+   **Collapsed cross-model gate (`sameModelGrade: true`):** if the summary carries
+   `sameModelGrade: true`, the evaluator fell back (see `fallbackFrom`) to the SAME
+   backend+model as the generator — the adversarial independence is gone. Do NOT accept
+   a passing verdict as a genuine cross-model grade; re-run the evaluator on a different
+   backend or wait for the limit to clear, then get a truly cross-model verdict before
+   accepting. The verdict header also names the actual grader with a `fell back from` note.
    **Limit ≠ fail:** if the summary carries a `limitHit` (a provider rate/usage/session
    limit, or a Codex empty completion with NO landed work), the role never really ran.
    Do NOT treat it as a behavioral FAIL or feed it back to the generator. `run_role`
@@ -321,7 +335,8 @@ launch a Codex evaluator via `run_role`/`--backend codex`).
 - **Spawn the `sparra-role` subagent** (shipped in this plugin) via the Task tool,
   telling it the role and the exact args (`roleKind`, `brief`/`briefPath`,
   `contractPath`, `workspace`, `holdoutPath`, `backend`, `model`, `effort`, `out`,
-  `maxBudgetUsd`, `worktree`/`keepWorktree`, `unitWorktree`, `expectedHead`/`evalBaseRef`). `worktree=true` (evaluator/reviewer) runs the role
+  `maxBudgetUsd`, `worktree`/`keepWorktree`, `unitWorktree`, `expectedHead`/`evalBaseRef`,
+  `crossModelBaseline` (evaluator: pass the generator's `{backend, model}`)). `worktree=true` (evaluator/reviewer) runs the role
   in a temp, throwaway WIP-snapshot worktree so an exercising eval gets writable scratch + provisioned deps —
   pass it whenever the role runs tests/builds (an in-place eval false-blocks on scratch writes). `unitWorktree="<name>"`
   (generator-only, mutually exclusive with `worktree`) runs the writer in a **persistent** named per-unit worktree reused

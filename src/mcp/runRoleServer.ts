@@ -39,6 +39,11 @@ export interface RunRoleToolArgs {
   evalBaseRef?: string;
   resumeSessionId?: string;
   resumeBackend?: string;
+  /** Evaluator path: the generator's `{ backend, model }` identity (from a prior `run_role` result).
+   *  When supplied, the runner sets `sameModelGrade: true` on the result/payload if the evaluator's
+   *  ACTUAL post-fallback identity matches this baseline — signalling the cross-model gate collapsed.
+   *  Absent → no `sameModelGrade` on the result (backwards-compatible). */
+  crossModelBaseline?: { backend?: string; model?: string };
 }
 
 /**
@@ -70,6 +75,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     evalBaseRef: args.evalBaseRef,
     resumeSessionId: args.resumeSessionId,
     resumeBackend: args.resumeBackend,
+    crossModelBaseline: args.crossModelBaseline,
   };
 }
 
@@ -111,6 +117,13 @@ export function buildRunRolePayload(
         limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail
         hitMaxTurns: r.hitMaxTurns, // present → hit the turn cap unfinished: RESUME the session, NOT a fail
         hitBudget: r.hitBudget, // present → stopped on OUR budget cap: RESUME via sessionId, NOT a fail
+        // Fallback provenance: present when the run fell back from the requested backend/model.
+        // backend/model above already carry the ACTUAL post-fallback identity — do not rename.
+        fallbackFrom: r.fallbackFrom, // {backend, model?} of the requested role that hit a limit
+        // Same-model-grade signal (evaluator branch only): true when the actual post-fallback
+        // evaluator identity matches the crossModelBaseline (the generator). Signals the cross-model
+        // gate collapsed. undefined when crossModelBaseline was not supplied.
+        sameModelGrade: r.sameModelGrade,
       }
     : {
         ...driftField,
@@ -138,6 +151,9 @@ export function buildRunRolePayload(
         // self-verify is off → these commands were approval-blocked, claims may be "unverified".
         // Fix: re-run with allowVerify:true or on a worktree boundary.  HOLDOUT-SAFE.
         verifyGateWarning: r.verifyGateWarning,
+        // Fallback provenance: present when the run fell back from the requested backend/model.
+        // backend/model above already carry the ACTUAL post-fallback identity — do not rename.
+        fallbackFrom: r.fallbackFrom, // {backend, model?} of the requested role that hit a limit
       };
 }
 
@@ -238,6 +254,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .string()
         .optional()
         .describe("The `backend` of that prior session. Resume is ignored (fresh session) if it differs from this call's backend — session ids aren't portable across backends."),
+      crossModelBaseline: z
+        .object({ backend: z.string().optional(), model: z.string().optional() })
+        .optional()
+        .describe(
+          "Evaluator path only: the generator's { backend?, model? } identity (from the prior run_role result's `backend`/`model` fields). When supplied, the runner compares the evaluator's ACTUAL post-fallback backend+model against this baseline; if they match (same-model grade: the cross-model gate collapsed because the evaluator fell back to the generator's identity), the result and payload carry `sameModelGrade: true` and the verdict notes a warning. `false` when a baseline is present but differs; `undefined` when this field is absent (backwards-compatible). The result's `fallbackFrom` field (present when any fallback occurred) identifies the originally-requested evaluator role. Pass the generator's `backend`/`model` from its run_role result here."
+        ),
     },
     async (args) => {
       try {

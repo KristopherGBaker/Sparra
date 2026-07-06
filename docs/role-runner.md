@@ -62,7 +62,7 @@ output). Wire it into Claude Code pointed at your project:
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
 holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree,
-unitWorktree, expectedHead, evalBaseRef })`.
+unitWorktree, expectedHead, evalBaseRef, crossModelBaseline })`.
 `worktree` (read-only judge roles — `evaluator`, `reviewer`, **and `contract-evaluator`**) runs the
 eval/review/critique in a **temporary, throwaway linked git worktree** snapshotted from `workspace`'s
 WIP — the same machinery as `sparra eval --worktree` (`keepWorktree` retains it), torn down after the
@@ -344,11 +344,40 @@ The on-disk read surface is **shrunk**, not eliminated. Stated honestly:
   the guarantee. To fully close it for Codex, keep the holdout outside the workspace, or run
   forbid roles on Claude.
 
+**Fallback provenance + same-model-grade warning.** When an evaluator role-run falls back from its
+configured backend (e.g. `codex/gpt-5.5`) to a fallback (e.g. `claude/opus`) after a provider
+limit, the result now reflects this precisely:
+- The persisted verdict **header** names the **ACTUAL post-fallback grader** (e.g. `evaluator
+  (claude/opus — fell back from codex/gpt-5.5)`) — not the originally-configured backend. Before
+  this fix, the header always showed the requested config, so a conductor couldn't tell a real
+  cross-model grade from a collapsed same-model grade at a glance.
+- **`fallbackFrom?: { backend, model? }`** on the result/payload: present when a fallback occurred,
+  names the originally-requested backend/model. Absent when no fallback happened. The top-level
+  `backend`/`model` fields always carry the ACTUAL post-fallback identity (unchanged).
+- **`crossModelBaseline?: { backend?, model? }`** request field (evaluator path): supply the
+  generator's `{ backend, model }` from its prior `run_role` result. When supplied, the runner
+  compares the evaluator's ACTUAL post-fallback identity against this baseline using the same
+  equality rule as the U-6 second-opinion independence guard (`backendKey === backendKey &&
+  model === model`, where absent backend defaults to `"claude"`). Sets **`sameModelGrade: true`**
+  on the result/payload when they match (the cross-model gate has silently collapsed to a
+  same-model grade), `false` when they differ, and leaves `sameModelGrade` `undefined` when this
+  field is absent. When `true`, the verdict notes carry a "same-model grade — not cross-model"
+  warning. Fully backwards-compatible — callers that don't supply `crossModelBaseline` see
+  identical behavior to before.
+
+The conductor pattern is: after a `run_role` generator call, pass the returned `backend`/`model`
+as `crossModelBaseline` on the evaluator call. The evaluator payload then carries `sameModelGrade`
+(and `fallbackFrom` if a fallback occurred) so you can detect a collapsed gate before accepting a
+verdict.
+
 ## Cross-model is the point
 Per-role backends come from `.sparra/config.yaml` (`roles.*`); override per call with
 `--backend`/`backend`. The high-value pattern is an **independent second opinion**:
 Claude generates, Codex evaluates (or vice versa) — the same cross-backend evaluation
-Sparra supports, now one call away in an interactive session.
+Sparra supports, now one call away in an interactive session. **Pass `crossModelBaseline`** (the
+generator's `backend`/`model`) on the evaluator call so the runner flags if a fallback collapsed
+the independence (`sameModelGrade: true` on the payload). Without it, a fallback that swaps the
+evaluator to the same model family as the generator silently degrades the adversarial gate.
 
 ## Honest limits
 - **Zero-setup:** `sparra eval` / `sparra role run` / the MCP `run_role` tool work in a
