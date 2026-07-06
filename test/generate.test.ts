@@ -234,6 +234,113 @@ describe("generateItem — JSON re-ask + assertionsClaimed (Q7 c/d)", () => {
   });
 });
 
+describe("generateItem — turn-cap report recovery (U-D)", () => {
+  const REPORT_JSON =
+    '```json\n{"report":"recovered","deviations":[],"assertionsClaimed":[{"id":1,"claim":"pass","how":"ran tests"}]}\n```';
+
+  /** Fake session returning results[i] (last repeats), recording every request. */
+  function capSession(results: Partial<RunResult>[]) {
+    const calls: RunSessionParams[] = [];
+    const base: RunResult = {
+      ok: true, subtype: "success", resultText: "", sessionId: "cap-sess",
+      costUsd: 0, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+    };
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const shape = results[Math.min(calls.length, results.length - 1)]!;
+      calls.push(p);
+      return { ...base, ...shape };
+    };
+    return { calls, fn };
+  }
+
+  /** A turn-capped writer death: hit the 60-turn cap with a partial reply. */
+  const TURN_CAP = (resultText: string): Partial<RunResult> => ({
+    ok: false, subtype: "error_max_turns", resultText, hitMaxTurns: true, sessionId: "cap-sess", errors: ["error_max_turns"],
+  });
+
+  async function gen(ctx: Ctx, dir: string, rec: ReturnType<typeof capSession>, landed: string[]) {
+    return generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      runSessionFn: rec.fn, changedFilesFn: () => landed,
+    });
+  }
+
+  it("(#3/#5) turn-cap + landed work + prose (no JSON) → ONE tightCap report-only re-ask on the same session; report + assertionsClaimed recovered, hitMaxTurns STAYS true", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP("I was still editing files when I ran out of turns…"), { resultText: REPORT_JSON, sessionId: "cap-sess" }]);
+    const out = await gen(ctx, dir, rec, ["/ws/a.ts"]);
+    // exactly ONE re-ask, resuming the dying session, report-only (no full-brief replay).
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("cap-sess");
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
+    expect(rec.calls[1]!.prompt).not.toContain("Implement work item"); // never replays the brief
+    // tightCap: one text-only turn, overriding the inherited writer state.
+    expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
+    expect(rec.calls[0]!.hooks).toBeDefined(); // …and carried writer hooks
+    expect(rec.calls[1]!.maxTurns).toBe(1);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(ctx.config.build.maxBudgetUsdPerItem);
+    expect(rec.calls[1]!.readOnly).toBe(true);
+    expect(rec.calls[1]!.permissionMode).toBe("plan");
+    expect(rec.calls[1]!.hooks).toBeUndefined();
+    // recovery never launders the capped run as complete.
+    expect(out.report).toBe("recovered");
+    expect(out.assertionsClaimed).toEqual([{ id: 1, claim: "pass", how: "ran tests" }]);
+    expect(out.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2 robustness) turn-cap + landed work + incidental WRONG-SHAPE JSON → still re-asks (a non-report block is not a report)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    // a JSON block that is NOT a completion report (no report/deviations) — the old noJson-only gate
+    // would have skipped the re-ask; the turn-cap path must still recover.
+    const rec = capSession([TURN_CAP('here is some telemetry ```json\n{"tokens":42,"note":"partial"}\n```'), { resultText: REPORT_JSON, sessionId: "cap-sess" }]);
+    const out = await gen(ctx, dir, rec, ["/ws/a.ts"]);
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.maxTurns).toBe(1); // tightCap fired
+    expect(out.report).toBe("recovered");
+    expect(out.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2 contrast) turn-cap but a PROPER report already emitted → NO re-ask", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP(REPORT_JSON)]);
+    const out = await gen(ctx, dir, rec, ["/ws/a.ts"]);
+    expect(rec.calls).toHaveLength(1); // nothing to recover
+    expect(out.report).toBe("recovered");
+    expect(out.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4 gating) turn-cap with NO landed work → NO re-ask (nothing to recover)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP("prose, no report"), { resultText: REPORT_JSON }]);
+    const out = await gen(ctx, dir, rec, []); // zero changed files
+    expect(rec.calls).toHaveLength(1);
+    expect(out.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4 gating) build.jsonReask off → NO re-ask even on a turn-cap", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    ctx.config.build.jsonReask = false;
+    const rec = capSession([TURN_CAP("prose, no report"), { resultText: REPORT_JSON }]);
+    const out = await gen(ctx, dir, rec, ["/ws/a.ts"]);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4 gating) a provider limitHit on a turn-capped reply → NO re-ask (the fallback chain owns limits)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([{ ...TURN_CAP("prose"), limitHit: { kind: "usage", raw: "limited" } }, { resultText: REPORT_JSON }]);
+    const out = await gen(ctx, dir, rec, ["/ws/a.ts"]);
+    expect(rec.calls).toHaveLength(1);
+    expect(out.limitHit).toBeDefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("generateItem — build read scope (extraReadDirs)", () => {
   it("adds absolute, ~, and repo-relative extra dirs to additionalDirectories", async () => {
     const { ctx, dir } = await ctxFor("cli");

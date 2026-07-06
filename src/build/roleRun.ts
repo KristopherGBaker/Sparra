@@ -221,6 +221,16 @@ export interface RoleRunResult {
   hitBudget?: boolean;
 }
 
+/** True when `text` carries a parseable GENERATOR completion report — a JSON block with a
+ *  `report`/`deviations` field (the writer's self-report shape, mirroring `generate.ts`'s
+ *  `isReport`). Used to decide whether a turn-capped writer forfeited its report: empty text,
+ *  prose with no JSON, and incidental/wrong-shape JSON all return false (→ recover via re-ask),
+ *  while a properly-shaped report returns true (→ nothing to recover). */
+function hasCompletionReport(text: string): boolean {
+  const isReport = (v: any) => v && typeof v === "object" && ("report" in v || "deviations" in v);
+  return !!extractJsonWhere(text, isReport);
+}
+
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
 function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
   const w = ctx.config.rubric.weights;
@@ -847,17 +857,24 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // 7. Normal success — no classification flag.
 
   // One-shot report re-ask (build.jsonReask) — the interactive analogue of generate.ts's re-ask.
-  // A branch-3 cap-death LANDED work (filesChanged>0) but emitted no usable report: that's a
-  // REPORT problem, not a work problem, so resume the SAME session ONCE, tightly capped, to
-  // re-emit only the final report block. Gated to OUR-OWN-cap deaths (a budget-cap death carries no
-  // `res.limitHit`): a session already under a provider limit (the Codex empty-completion promotes
-  // to one, and the fallback chain deliberately STOPPED on it) can't be resumed usefully, so it's
-  // left to the conductor exactly as today. On a usable reply the report surfaces and
-  // `emptyCompletion` clears, but the cap telemetry (hitBudget + the recorded notes) stays truthful
-  // — the summary still says the cap hit and the report came from a re-ask; on a failed/disabled
-  // re-ask, today's behavior stands (flags surface, the conductor decides). Never fires without
-  // landed work (branch 3 gates that) and never more than once (no loop).
-  if (result.emptyCompletion && !res.limitHit && ctx.config.build.jsonReask) {
+  // Two cap-death shapes forfeit the report while the work LANDED (filesChanged>0), and both are a
+  // REPORT problem, not a work problem, so we resume the SAME session ONCE, tightly capped, to
+  // re-emit only the final report block:
+  //   (a) a branch-3 empty-completion / budget-cap death (empty result text), and
+  //   (b) a branch-2 TURN-CAP death whose partial reply carries no parseable completion report —
+  //       empty text, prose with no JSON, or incidental/wrong-shape JSON (`hasCompletionReport`
+  //       is the robust, un-gameable test; a properly-shaped report is NOT re-asked).
+  // Gated to OUR-OWN-cap deaths (neither carries `res.limitHit`): a session already under a provider
+  // limit (the Codex empty-completion promotes to one, and the fallback chain deliberately STOPPED
+  // on it) can't be resumed usefully, so it's left to the conductor exactly as today. On a usable
+  // reply the report surfaces and `emptyCompletion` clears while `hitMaxTurns` STAYS true — the cap
+  // telemetry (hitBudget/hitMaxTurns + the recorded notes) stays truthful, so the summary still says
+  // the cap hit and the report came from a re-ask; on a failed/disabled re-ask, today's behavior
+  // stands (flags surface, the conductor decides). Never fires without landed work and never more
+  // than once (no loop).
+  const turnCapNoReport =
+    result.hitMaxTurns === true && isWriter && (filesChanged ?? 0) > 0 && !hasCompletionReport(res.resultText);
+  if ((result.emptyCompletion || turnCapNoReport) && !res.limitHit && ctx.config.build.jsonReask) {
     const reaskBudget = effectiveUsdCap > 0 ? Math.min(effectiveUsdCap, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
     const retry = await run({
       ...commonReq,
@@ -877,8 +894,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     result.tokens += retry.tokens;
     if (retry.resultText.trim() && !retry.emptyCompletion && !retry.limitHit) {
       // The report was recovered — surface it and clear the empty-report flag, but KEEP the cap
-      // telemetry (hitBudget, filesChanged) so the summary still records that a cap was hit and the
-      // report came from a re-ask.
+      // telemetry (hitBudget, hitMaxTurns, filesChanged) so the summary still records that a cap was
+      // hit and the report came from a re-ask. `hitMaxTurns` is deliberately left set on the turn-cap
+      // path: recovery never launders a capped run as complete.
       result.resultText = retry.resultText;
       result.emptyCompletion = undefined;
       const recovered =

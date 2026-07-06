@@ -1738,6 +1738,130 @@ describe("runRole — cap-death report re-ask (U4)", () => {
   });
 });
 
+// ── U-D: one-shot report re-ask on a writer TURN-CAP death (build.jsonReask) ──
+
+describe("runRole — turn-cap report re-ask (U-D)", () => {
+  const FILE = "/ws/src/new.ts";
+  const SENTINEL = "TURNCAP-RECOVERED-REPORT";
+  const SENTINEL_REPORT = '```json\n{"report":"' + SENTINEL + '","deviations":[]}\n```';
+  /** A turn-cap death (60/60, OUR own cap — no provider limitHit) carrying `resultText`. */
+  const turnCap = (resultText: string): Partial<RunResult> => ({
+    ok: false,
+    subtype: "error_max_turns",
+    resultText,
+    hitMaxTurns: true,
+    sessionId: "sess-cap",
+    errors: ["error_max_turns"],
+  });
+  const RECOVERED: Partial<RunResult> = { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-cap", tokens: 5, costUsd: 0.01 };
+
+  it("(#1/#5) turn-cap + landed work + prose (no report) → ONE tightCap report-only resume; report surfaces, hitMaxTurns STAYS true, note records the recovery", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.maxBudgetUsdPerItem = 5;
+    const rec = seqSession([turnCap("I was mid-edit when I hit the turn cap…"), RECOVERED]);
+    const r = await runRole({
+      ctx,
+      roleKind: "generator",
+      brief: "Build the widget.",
+      runSessionFn: rec.fn,
+      changedFilesFn: scripted([[], [FILE]]),
+    });
+    // exactly two calls; the second RESUMES the dying session with a report-only prompt.
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("sess-cap");
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
+    expect(rec.calls[1]!.prompt).not.toContain("Build the widget."); // never replays the brief
+    // tightCap text-only turn (overrides the inherited writer state).
+    expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
+    expect(rec.calls[0]!.hooks).toBeDefined();
+    expect(rec.calls[1]!.maxTurns).toBe(1);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
+    expect(rec.calls[1]!.readOnly).toBe(true);
+    expect(rec.calls[1]!.permissionMode).toBe("plan");
+    expect(rec.calls[1]!.hooks).toBeUndefined();
+    // report recovered; the cap state stays truthful — never laundered as complete.
+    expect(r.resultText).toContain(SENTINEL);
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.emptyCompletion).toBeUndefined();
+    expect(r.filesChanged).toBe(1);
+    expect(r.sessionId).toBe("sess-cap");
+    expect(r.errors.some((e) => /re-ask/i.test(e))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2a) turn-cap + landed work + EMPTY result text → re-asks (no report to keep)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap(""), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(2);
+    expect(r.resultText).toContain(SENTINEL);
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2c) turn-cap + landed work + incidental WRONG-SHAPE JSON → still re-asks (a non-report block is not a report)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap('progress so far ```json\n{"tokens":42,"phase":"editing"}\n```'), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(2);
+    expect(r.resultText).toContain(SENTINEL);
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2 contrast) turn-cap but a PROPER report already emitted → NO re-ask (nothing to recover)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const properReport = '```json\n{"report":"done despite the cap","deviations":[]}\n```';
+    const rec = seqSession([turnCap(properReport)]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(1); // report present → no re-ask
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.resultText).toContain("done despite the cap");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) turn-cap with ZERO landed files → NO re-ask (no work to recover a report for)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("prose, no report"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], []]) });
+    expect(rec.calls).toHaveLength(1);
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.filesChanged).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) build.jsonReask disabled → NO re-ask on a turn-cap", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.jsonReask = false;
+    const rec = seqSession([turnCap("prose, no report"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(1);
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) turn-cap co-occurring with a provider limit → limitHit wins, NO re-ask", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.generator = { backend: "claude", model: "opus" }; // no fallback → surfaces the limit
+    const rec = seqSession([{ ...turnCap("prose"), limitHit: { kind: "usage", raw: "limited" } }, RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(1);
+    expect(r.limitHit).toBeDefined();
+    expect(r.hitMaxTurns).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) the re-ask itself returns unusable text → no third call; no bogus report attached, hitMaxTurns stays", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("partial prose"), { ...turnCap(""), sessionId: "sess-cap" }]);
+    const r = await runRole({ ctx, roleKind: "generator", brief: "b", runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]) });
+    expect(rec.calls).toHaveLength(2); // re-asked exactly once, never a third
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.resultText).toBe("partial prose"); // the original partial stands; no bogus report
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // ── Item B: anchored functionality cap — parity with the autonomous evaluate.ts path ──
 
 /** An evaluator reply with a controllable assertion set + functionality score. */

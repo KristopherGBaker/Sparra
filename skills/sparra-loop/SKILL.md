@@ -158,7 +158,13 @@ see [How to invoke a role](#how-to-invoke-a-role--delegate-to-a-subagent).
    Re-call `run_role` for the SAME role with `resumeSessionId` + `resumeBackend` set to that
    result's `sessionId`/`backend` (and a short "continue where you left off" brief) so it
    picks up its own context instead of re-reading the workspace — exactly how the build loop
-   continues a turn-capped generator. Don't pivot or feed it back as a FAIL.
+   continues a turn-capped generator. Don't pivot or feed it back as a FAIL. **Report
+   auto-recovery:** if a generator hit the turn cap with work landed (`filesChanged > 0`) but
+   forfeited its completion report, the runner **already re-asks automatically** — with
+   `build.jsonReask` on it fires ONE tightly-capped (1-turn, text-only) report-only re-ask on
+   the same session, so a recovered report rides in `resultText` (an `errors` note says
+   "recovered … via a one-shot re-ask") while `hitMaxTurns` STAYS true (recovery never launders
+   a capped run as complete). You still RESUME to finish the unfinished work.
 5. **Review (optional).** `run_role(roleKind="reviewer")` for a code-review gate.
 6. **Reflect (recommended after a run).** Before moving on, run `sparra reflect` to capture what
    the run taught you. It auto-discovers `.sparra/traces/role-run-*` traces newer than the last

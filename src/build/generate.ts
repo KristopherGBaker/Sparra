@@ -15,7 +15,8 @@ import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./hold
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy, selfVerifyGuidance } from "./modeText.ts";
 import { selectMapContext } from "./mapContext.ts";
-import { reportReaskOverrides } from "./jsonReask.ts";
+import { reportReaskOverrides, REPORT_REASK_MAX_BUDGET_USD } from "./jsonReask.ts";
+import { changedFiles } from "../util/git.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
 import { buildReadDirs } from "./readscope.ts";
@@ -70,10 +71,14 @@ export async function generateItem(args: {
   role?: RoleConfig;
   /** Injectable for tests; defaults to the real SDK session. */
   runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+  /** Injectable for tests; defaults to git `changedFiles`. Used only to confirm a turn-capped
+   *  run LANDED work before the tightCap report re-ask fires. */
+  changedFilesFn?: (root: string) => string[];
 }): Promise<GenerateOutput> {
   const { ctx, item, contractText, workspaceDir } = args;
   const role = args.role ?? ctx.config.roles.generator;
   const run = args.runSessionFn ?? runSession;
+  const listChanges = args.changedFilesFn ?? changedFiles;
   const system = fill(await loadPrompt(ctx.paths, "generator"), {
     MODE: ctx.store.data.mode,
     DEVIATION: ctx.config.deviation.strictness,
@@ -144,18 +149,31 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
   const isReport = (v: any) => v && typeof v === "object" && ("report" in v || "deviations" in v);
   let parsed = extractJsonWhere<Report>(res.resultText, isReport);
 
-  // JSON re-ask (build.jsonReask): ONLY when the reply has no parseable JSON at all — a JSON
-  // block of the wrong shape goes straight to today's degraded fallback ("re-emit the JSON
-  // block" can't fix a block that was already emitted). ONE resumed re-emit call inside this
-  // step; never on a provider-limit reply (the round loop's fallback chain owns those), and
-  // skipped when this session already exhausted the item budget.
+  // JSON re-ask (build.jsonReask): resume the SAME session ONCE to re-emit only the report block.
+  // Never on a provider-limit reply (the round loop's fallback chain owns those) and skipped when
+  // this session already exhausted the item budget. Two shapes, one re-ask:
+  //   (a) a TURN-CAP death (`hitMaxTurns`) with landed work but no parseable report — empty text,
+  //       prose, OR incidental/wrong-shape JSON. The work landed, only the report was forfeited at
+  //       60/60, so recover it — but with `tightCap`: the resumed turn is ONE text-only turn and
+  //       can't keep building past the cap it just hit. Gated on landed work (nothing wrote → no
+  //       report to recover, and a naked resume of a capped-but-empty session is pointless).
+  //   (b) a clean-ended reply with NO parseable JSON at all — re-ask WITHOUT tightCap (the run ended
+  //       normally, so re-entering a turn is fine). A wrong-shape block on a clean end still goes to
+  //       today's degraded fallback ("re-emit the JSON block" can't fix a block already emitted).
   const itemBudget = args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
   const noJson = extractAllJson(res.resultText).length === 0;
-  if (!parsed && noJson && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
+  const turnCapNoReport = res.hitMaxTurns && !parsed && listChanges(workspaceDir).length > 0;
+  const doReask = !parsed && (res.hitMaxTurns ? turnCapNoReport : noJson);
+  if (doReask && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
     warn(`Generator for ${item.id} returned no parseable report JSON — re-asking once for the JSON block.`);
+    const reaskBudget = itemBudget > 0 ? Math.min(itemBudget, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
     const retry = await run({
       ...baseReq,
-      ...reportReaskOverrides({ role: `generator-${item.id}-reask`, sessionId: res.sessionId }),
+      ...reportReaskOverrides({
+        role: `generator-${item.id}-reask`,
+        sessionId: res.sessionId,
+        ...(res.hitMaxTurns ? { tightCap: { maxBudgetUsd: reaskBudget } } : {}),
+      }),
     });
     costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;

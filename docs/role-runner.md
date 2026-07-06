@@ -153,6 +153,19 @@ same session** by re-calling `run_role` with `resumeSessionId` + `resumeBackend`
 result's `sessionId`/`backend`, mirroring how the build loop continues a turn-capped generator
 across rounds rather than re-reading the workspace or pivoting.
 
+**Turn-cap report recovery.** A generator that hits the turn cap *mid-report* forfeits its
+completion-report JSON — the calibration machinery (`assertionsClaimed`) would lose it. So when a
+writer dies at the turn cap with landed work (`filesChanged > 0`) but **no parseable completion
+report** (empty text, prose, or incidental/wrong-shape JSON — a properly-shaped report is left
+alone), the runner does the **same one-shot re-ask** it does for a budget-cap death: with
+`build.jsonReask` on it resumes the same session ONCE, tightly capped (1 turn, small budget) and
+**text-only** (`readOnly`/`permissionMode: "plan"`/hooks cleared, so it can re-emit the report but
+not re-enter work past the cap it just hit), with a report-only prompt (never the full brief). On a
+usable reply the report surfaces in `resultText` and an `errors` note records the recovery, while
+`hitMaxTurns` **stays true** — recovery never launders a capped run as complete, so the conductor
+still resumes to finish the unfinished work. Gated to our-own-cap deaths (a co-occurring provider
+limit is left to the fallback chain) and fires at most once.
+
 **Live progress (non-evaluator roles).** A backgrounded role streams its transcript to disk as it
 works (`TraceWriter` appends per step). For a **non-evaluator** role the result and MCP payload
 carry `traceDir` — that role is holdout-free by scope, so the conductor may tail
