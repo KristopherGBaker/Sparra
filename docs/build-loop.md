@@ -80,6 +80,32 @@ a real team. Findings are written to `.sparra/reviews/<id>.r<n>.review.md`; cost
 toward the per-item budget. The reviewer is held to the same **proportionality** bar as the
 contract — substantive issues only, never style the formatter/linter already handles.
 
+## Second-opinion gate (optional)
+The evaluator is otherwise the **sole** quality gate, so a lenient mid-tier evaluator can
+quietly launder slop. Turned on with `evaluator.secondOpinion.enabled` (off by default), this
+gate runs **only on a PASS verdict** (bounded cost): a second evaluator — `roles.evaluatorSecond`,
+best on a **different backend/model** than `roles.evaluator` — re-grades the **same** inputs (same
+item, contract, workspace/artifact, round, and holdout) via the same `evaluateItem`, so the
+holdout wall + verdict redaction already apply. If the second opinion produces a real `fail`, the
+round is **demoted**: its merged, **holdout-redacted** blocking (marked as a second-opinion
+disagreement) becomes the next round's feedback and the generator patches again — the item is not
+accepted on a single lenient pass. On a passing second opinion, acceptance (and the review gate, if
+enabled) proceeds unchanged.
+
+**Independence guard (no self-approval):** the gate is a **no-op with a warning** when
+`roles.evaluatorSecond` is unset, **or** resolves to the *same* effective backend+model as the
+**actually-selected** primary evaluator — i.e. compared after fallback resolution, not just against
+the configured `roles.evaluator` — because a same-model second opinion is pointless.
+
+**Bounded / demote only on a REAL fail.** The second grade runs only on a primary PASS and demotes
+**only** when it actually produced a `fail` that is **not** a provider-`limitHit`/empty completion,
+whose exercise was **not blocked**, and whose assertions were **not all un-run**. A limit/empty/
+blocked/all-un-run second grade is treated as *no second opinion* (accept proceeds — consistent with
+the loop's "never demote on an un-run gate"); a garbled, non-empty, non-limit completion that can't
+be parsed normalizes to `fail` and demotes (fail-closed — a broken second grader must not launder a
+primary PASS). The second grade's cost/tokens fold into the per-item budget the same way the review
+gate's do.
+
 ## Holdout / isolation wall (optional)
 Author acceptance checks in **`HOLDOUT.md`** and **only the evaluator** ever sees them — the generator and the contract negotiation never do. The wall is **enforced in code several ways**: a holdout leak into a forbid role's *prompt* throws (`assertNoHoldoutLeak`); every build-loop forbid role (generator, reviewer, contract-generator/-evaluator, decomposer, plan reconcile) **drops holdout-bearing dirs from its read scope** so the `Read`/`Glob`/`Grep` tool can't reach `HOLDOUT.md` or anything under `.sparra` (verdicts and evaluator traces are holdout-derived too); and the verdict that flows back as generator feedback is holdout-**redacted** first. A PreToolUse deny-hook also blocks `Read`/`Glob`/`Grep`/`Bash` calls that would touch the holdout — deciding on the **path each call resolves to**, not on incidental substrings of the tool input: a `Read` of a protected file, a `Grep` whose search *root* reaches `.sparra` (the content regex is never inspected), a `Glob` whose pattern resolves/`**`-descends into an artifact, or a `Bash` command naming a protected path/basename. So a search over `src/` for a `holdout` identifier — or `cat src/build/holdout.ts` — is **allowed** (it reads no artifact), while `cat .sparra/HOLDOUT.md` is denied. The tool-scope exclusion + prompt wall + redaction are the **authoritative** guarantees; the **Bash** deny is *best-effort* — a shell on a backend with no FS sandbox can read an arbitrary absolute path (or assemble it via string concatenation / an interpreter), so a determined Bash read of a holdout that sits outside the role's cwd is a residual (the hook still blocks the protected path/basename + glob-evasion cases, and a cooperative generator has no reason to seek it). This residual is the same on Codex (which ignores hooks entirely) and Claude (raw Bash isn't FS-sandboxed); a holdout in the role's *cwd* is likewise reachable there. To shrink it, the build-loop forbid roles that carry a *cwd* — the **decomposer** and **contract-generator/-evaluator** — run in a **holdout-free cwd** when building isolated: the git **worktree** (`.sparra` is gitignored, so the worktree is a full source checkout *without* the holdout), removing the holdout from their cwd tree entirely so a pathless `Glob`/`Grep` no longer resolves into `.sparra`. Their deny-hook tracks that cwd (not a hardcoded root) so worktree searches resolve correctly while absolute/pattern holdout reads stay denied; in-place (`workspaceDir === ctx.root`) runs keep `cwd=ctx.root` and the Bash residual. The builder can't overfit to checks it can't read, so holdouts are an independent gate on real behavior; any holdout failure is blocking. Strongest combined with a **different backend grading than building** (see [backends](backends.md)). The file is frozen alongside the plan at `freeze`.
 

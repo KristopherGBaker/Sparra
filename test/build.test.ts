@@ -1889,3 +1889,283 @@ describe("cmdBuild — terminal technique distillation (build.distillTechnique)"
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cmdBuild — second-opinion gate (opt-in)", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "first", summary: "", dependsOn: [], rationale: "" }];
+  // A second-opinion EvalOutput with an overridable verdict (defaults to a fail).
+  const secondEval = (over: Partial<Verdict> = {}, evalOver: Partial<EvalOutput> = {}): EvalOutput => ({
+    verdict: { ...makeVerdict(false), ...over },
+    raw: "",
+    sessionId: "e2",
+    costUsd: 0.001,
+    tokens: 100,
+    ...evalOver,
+  });
+  // Distinguish the primary evaluator (default opus/claude) from the injected second (codex/gpt-5.5).
+  const isSecond = (role?: { backend?: string; model?: string }) => role?.model === "gpt-5.5";
+
+  it("(A2) on a PASS, invokes a SECOND evaluateItem with evaluatorSecond against the same inputs", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    const calls: Array<{ role: unknown; item: string; contractText: string; workspaceDir: string; round: number }> = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async (args) => {
+        calls.push({ role: args.role, item: args.item.id, contractText: args.contractText, workspaceDir: args.workspaceDir, round: args.round });
+        return isSecond(args.role) ? secondEval({ verdict: "pass", blocking: [] }) : evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    const primary = calls.find((c) => !isSecond(c.role as { model?: string }))!;
+    const second = calls.find((c) => isSecond(c.role as { model?: string }))!;
+    expect(second).toBeTruthy();
+    expect(second.role).toEqual({ backend: "codex", model: "gpt-5.5" }); // full RoleConfig threaded through
+    // Same item / contract / workspace / round as the primary grade.
+    expect(second.item).toBe(primary.item);
+    expect(second.contractText).toBe(primary.contractText);
+    expect(second.workspaceDir).toBe(primary.workspaceDir);
+    expect(second.round).toBe(primary.round);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed"); // agreeing pass → accepted
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A3a) NO-OPs with a warning when evaluatorSecond is unset", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true; // enabled but no roles.evaluatorSecond
+    let evalCount = 0;
+    const cap = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCount++; return evalOut(true); },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    cap.restore();
+    expect(evalCount).toBe(1); // only the primary grade ran — no second
+    expect(cap.lines()).toContain("second-opinion gate is a no-op");
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A3b) NO-OPs when evaluatorSecond equals the configured primary backend+model", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    // Same effective backend+model as the default primary evaluator (opus/claude).
+    ctx.config.roles.evaluatorSecond = { model: "opus", effort: "high" };
+    let evalCount = 0;
+    const cap = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCount++; return evalOut(true); },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    cap.restore();
+    expect(evalCount).toBe(1);
+    expect(cap.lines()).toContain("second-opinion gate is a no-op");
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A3c) NO-OPs when the primary FALLS BACK to a role matching evaluatorSecond (post-pickRole)", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.build.autoRestart = { ...ctx.config.build.autoRestart, enabled: true };
+    // Primary evaluator's backend (claude) is in a limit window → pickRole selects its fallback…
+    ctx.config.roles.evaluator = { model: "opus", effort: "high", fallback: { backend: "codex", model: "gpt-5.5" } };
+    ctx.store.data.build.limitedRoles = { claude: Date.now() + 60 * 60 * 1000 };
+    // …which is the SAME effective backend+model as evaluatorSecond → independence guard no-ops.
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    let evalCount = 0;
+    const cap = captureStdout();
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => { evalCount++; return evalOut(true); },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    cap.restore();
+    expect(evalCount).toBe(1); // only the (fallback) primary grade — the gate no-opped
+    expect(cap.lines()).toContain("second-opinion gate is a no-op");
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A4) a second-opinion FAIL demotes the round; feedback carries the redacted blocking, holdout-scrubbed", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    const HOLDOUT_LINE = "the secret flag SPARRA_XYZ must equal 42 exactly";
+    fs.writeFileSync(ctx.paths.holdout, `# Holdout\n- ${HOLDOUT_LINE}\n`);
+    const genFeedbacks: Array<string | undefined> = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async (args) => { genFeedbacks.push(args.feedback); return genOut(); },
+      // The (unredacted) second-opinion verdict quotes holdout text in its blocking.
+      evaluateItem: async (args) =>
+        isSecond(args.role)
+          ? secondEval({ verdict: "fail", blocking: [`Assertion 3 fails: ${HOLDOUT_LINE} was not honored`] })
+          : evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+
+    const round2 = genFeedbacks[1]!; // the demote set feedback for the next round
+    expect(round2).toBeTruthy();
+    expect(round2).toContain("SECOND-OPINION");
+    expect(round2).toContain("[redacted: holdout]");
+    expect(round2).not.toContain(HOLDOUT_LINE); // raw holdout never reaches the generator
+    expect(ctx.store.data.build.items["item-001"]!.status).not.toBe("passed"); // demoted, not accepted
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A5a) a second fail with NO parseable verdict (non-empty, non-limit) DEMOTES", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      // Mirrors evaluateItem's forced-FAIL fallback: fail verdict, no limitHit, ran, no assertions.
+      evaluateItem: async (args) =>
+        isSecond(args.role)
+          ? secondEval({ verdict: "fail", exerciseStatus: "ran", blocking: ["Evaluator did not produce a parseable JSON verdict; re-run."] })
+          : evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).not.toBe("passed"); // fail-closed demote
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A5b) a second fail carrying limitHit / empty completion does NOT demote — accept proceeds", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async (args) =>
+        isSecond(args.role)
+          ? secondEval({ verdict: "fail" }, { limitHit: { kind: "usage" } as LimitHit })
+          : evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed"); // no second opinion → accept
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A5c) a second fail that is only environment-BLOCKED or ALL-UN-RUN does NOT demote", async () => {
+    for (const variant of ["blocked", "allUnrun"] as const) {
+      const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+      ctx.config.evaluator.secondOpinion.enabled = true;
+      ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+      const over: Partial<Verdict> =
+        variant === "blocked"
+          ? { verdict: "fail", exerciseStatus: "blocked" }
+          : { verdict: "fail", assertions: [{ id: 1, pass: false, evidence: "x" }], unrunAssertionIds: [1] };
+      const deps: Partial<BuildDeps> = {
+        ...baseDeps(),
+        decompose: async () => one,
+        generateItem: async () => genOut(),
+        evaluateItem: async (args) => (isSecond(args.role) ? secondEval(over) : evalOut(true)),
+      };
+      await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+      expect(ctx.store.data.build.items["item-001"]!.status, `variant ${variant}`).toBe("passed");
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("(A6) a second-opinion PASS lets acceptance proceed exactly as today", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    let secondCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async (args) => {
+        if (isSecond(args.role)) { secondCalls++; return secondEval({ verdict: "pass", blocking: [] }); }
+        return evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(secondCalls).toBe(1);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A7) bounded to PASS: no second grade runs on a primary FAIL", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    let secondCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async (args) => {
+        if (isSecond(args.role)) secondCalls++;
+        return evalOut(false); // primary always fails → gate never reached
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(secondCalls).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A8) the second grade's cost/tokens fold into the item's spend", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.evaluator.secondOpinion.enabled = true;
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ costUsd: 0.001, tokens: 100 }),
+      evaluateItem: async (args) =>
+        isSecond(args.role)
+          ? secondEval({ verdict: "pass", blocking: [] }, { costUsd: 0.5, tokens: 1000 })
+          : evalOut(true, { costUsd: 0.001, tokens: 100 }),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.costUsd).toBeGreaterThanOrEqual(0.5); // floor: includes the second-opinion cost
+    expect(st.tokensUsed).toBeGreaterThanOrEqual(1000);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A9) DISABLED by default: no second grade runs", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    // secondOpinion.enabled defaults to false; evaluatorSecond set but ignored.
+    ctx.config.roles.evaluatorSecond = { backend: "codex", model: "gpt-5.5" };
+    let secondCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async (args) => {
+        if (isSecond(args.role)) secondCalls++;
+        return evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(secondCalls).toBe(0);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A1) default config carries evaluator.secondOpinion.enabled=false and no evaluatorSecond", () => {
+    const cfg = defaultConfig();
+    expect(cfg.evaluator.secondOpinion.enabled).toBe(false);
+    expect(cfg.roles.evaluatorSecond).toBeUndefined();
+  });
+});
