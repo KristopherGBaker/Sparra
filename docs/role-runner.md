@@ -130,6 +130,18 @@ harness executor spawns argv with no shell and stays strict, rejecting any pipe.
 read-only roles** (only the generator's writer guard consumes it; the evaluator does not
 self-verify). The **`sparra-loop` skill** is the driving playbook.
 
+**Verify-gate advisory (`verifyGateWarning`).** When a generator role-run's contract references
+one or more of the configured `build.verifyCommands` (e.g. `npm test`, `npm run typecheck`) but
+self-verify is **not** enabled (no `allowVerify`, no `build.branch` / worktree boundary), those
+commands are approval-blocked — the generator can only claim them "unverified". The runner
+detects this **at launch time** and surfaces a `verifyGateWarning` field on the `run_role` result
+payload (and emits it to the phase log) naming the specific gated commands and how to fix it:
+pass `allowVerify: true` (`--verify` on the CLI) or run on a git worktree/branch boundary. This
+lets the conductor act before spending a session on work that can't self-verify. The warning is
+**holdout-safe** — it names only command strings from the config, never contract or holdout body
+text. When self-verify IS enabled, or the contract references no configured verify command, the
+field is absent.
+
 To **iterate a role without re-reading the workspace from scratch** (e.g. feeding the
 generator the evaluator's blocking points for another round), pass
 `resumeSessionId` + `resumeBackend` from the previous call's returned `sessionId`/`backend`

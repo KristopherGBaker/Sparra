@@ -46,6 +46,14 @@ a quick cross-model second opinion. Run init for a customized or full plan→bui
    (`make seed`, a project script) won't be auto-approved. Each entry must be a SINGLE
    matchable command: chained/subshell/piped forms (`(cd X && swift test)`, `a && b`)
    never match the allowlist.
+   **Pass `allowVerify: true` whenever the contract gates on commands:** if you launch a
+   generator whose contract's "I will verify by" section references a `build.verifyCommands`
+   entry (e.g. `npm test`, `npm run typecheck`) WITHOUT passing `allowVerify: true` (or running
+   on a `unitWorktree` / branch boundary), those commands are approval-blocked at runtime and
+   the generator can only claim them "unverified". The runner **warns you at launch** via a
+   `verifyGateWarning` field on the `run_role` result (and in the phase log): if you see it,
+   **re-run with `allowVerify: true`** (MCP) / **`--verify`** (CLI) before spending more turns,
+   or accept that the assertions will be unverified. The warning names the exact blocked commands.
 5. **Holdout (optional but recommended):** if the user wants a second, hidden gate, create
    `.sparra/HOLDOUT.md` with acceptance checks **the generator must not see** — you (the
    conductor) write it but DON'T keep it in context after; pass it to the evaluator by path.

@@ -219,3 +219,32 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     });
   });
 });
+
+describe("buildRunRolePayload — verifyGateWarning field (U-V Assertion 5)", () => {
+  // (Assertion 5) The warning is surfaced in the MCP payload's non-evaluator branch when set.
+  it("exposes verifyGateWarning on the non-evaluator branch when the result carries it", () => {
+    const warn = "[VERIFY-GATE ADVISORY] contract references `npm test`; self-verify is off";
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator", verifyGateWarning: warn }), 75);
+    expect(p.verifyGateWarning).toBe(warn);
+  });
+
+  it("verifyGateWarning is absent (undefined) when the result does not carry it", () => {
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator" }), 75);
+    // The field is optional — when the run had no warning it should be absent / undefined.
+    expect(p.verifyGateWarning).toBeUndefined();
+  });
+
+  it("verifyGateWarning is NOT present on the evaluator (verdict) branch — evaluator never self-verifies", () => {
+    const w = "[VERIFY-GATE ADVISORY] should not appear on evaluator branch";
+    const p = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        verifyGateWarning: w,
+        verdict: { verdict: "pass", weightedTotal: 88, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"],
+      }),
+      75
+    );
+    // The evaluator branch does not surface verifyGateWarning (it's a writer-only field).
+    expect("verifyGateWarning" in p).toBe(false);
+  });
+});

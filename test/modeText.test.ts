@@ -5,7 +5,7 @@ import path from "node:path";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
-import { contractModeClauses, rubricText, selfVerifyGuidance } from "../src/build/modeText.ts";
+import { contractModeClauses, rubricText, selfVerifyGuidance, verifyGateWarning } from "../src/build/modeText.ts";
 import type { Ctx } from "../src/context.ts";
 
 async function makeCtx(mode: "existing" | "greenfield"): Promise<{ ctx: Ctx; dir: string }> {
@@ -153,5 +153,153 @@ describe("rubricText — anchored criterion definitions + band scale (Q4)", () =
     expect(out).toContain("design (weight 0.4)");
     expect(out).toContain("≥ 80");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// verifyGateWarning — U-V assertions 1 / 2 / 3 / 3a / 4 / 6
+// ─────────────────────────────────────────────────────────────────────────────
+describe("verifyGateWarning — launch-time advisory for unverifiable generator gates (U-V)", () => {
+  // Helper: a minimal ctx with configurable verifyCommands and branch.
+  function makeGateCtx(verifyCommands: string[], branch?: string) {
+    // Reuse the same in-memory pattern as the other describe blocks but skips disk I/O:
+    // we only need ctx.config.build.verifyCommands + ctx.store.data.build.branch.
+    const dir = os.tmpdir(); // not actually used by verifyGateWarning
+    const paths = new Paths(dir);
+    const store = StateStore.create(paths, "existing");
+    const config = defaultConfig();
+    config.build.verifyCommands = verifyCommands;
+    if (branch) store.data.build.branch = branch;
+    const ctx: Ctx = { root: dir, paths, config, store };
+    return ctx;
+  }
+
+  // Default cmds used across most tests.
+  const DEFAULT_CMDS = ["npm run typecheck", "npm test"];
+  // A contract text that references the first configured command.
+  const CONTRACT_WITH_CMD = "## I will verify by\n- `npm run typecheck` → exits 0\n- `npm test` → exits 0";
+  // A contract text that references NEITHER command.
+  const CONTRACT_NO_CMD = "## I will verify by\n- manual inspection only";
+
+  // ── Assertion 1: fires when writer + self-verify OFF + contract has cmd ──
+  it("(Assertion 1) returns a non-null warning naming the gated command(s) for a writer + self-verify off + contract has cmd", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS); // no branch → not on worktree boundary
+    // selfVerifyEnabled: selfVerifyGuidance returns "" when no branch and no allowVerify.
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, false) !== "";
+    expect(selfVerifyEnabled).toBe(false); // precondition
+
+    const w = verifyGateWarning("generator", CONTRACT_WITH_CMD, ctx, selfVerifyEnabled);
+    expect(w).not.toBeNull();
+    // Names the specific gated commands.
+    expect(w).toContain("npm run typecheck");
+    expect(w).toContain("npm test");
+    // Explains how to fix it.
+    expect(w).toContain("allowVerify");
+    expect(w).toContain("worktree");
+  });
+
+  it("(Assertion 1 — adversarial) the warning fires even when the verify cmd is embedded in a LARGER string in the contract", () => {
+    // Boundary: cmd is a substring of a longer contract line — should still match.
+    const ctx = makeGateCtx(["npm test"]);
+    const contract = "Run `npm test -- --coverage` to produce a coverage report.";
+    const w = verifyGateWarning("generator", contract, ctx, false);
+    expect(w).not.toBeNull();
+    expect(w).toContain("npm test");
+  });
+
+  // ── Assertion 2: null when self-verify is ENABLED (allowVerify=true) ──
+  it("(Assertion 2a) returns null when self-verify is enabled via allowVerify=true even if contract gates on commands", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS); // no branch
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, true) !== ""; // opt-in → non-empty
+    expect(selfVerifyEnabled).toBe(true); // precondition
+
+    const w = verifyGateWarning("generator", CONTRACT_WITH_CMD, ctx, selfVerifyEnabled);
+    expect(w).toBeNull();
+  });
+
+  it("(Assertion 2b) returns null when self-verify is enabled via a branch/worktree boundary", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS, "sparra/unit-x"); // branch set
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, false) !== ""; // branch → non-empty
+    expect(selfVerifyEnabled).toBe(true); // precondition
+
+    const w = verifyGateWarning("generator", CONTRACT_WITH_CMD, ctx, selfVerifyEnabled);
+    expect(w).toBeNull();
+  });
+
+  // ── Assertion 3: null when contract references no configured verify command ──
+  it("(Assertion 3) returns null when the contract references NO configured verify command", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS);
+    const w = verifyGateWarning("generator", CONTRACT_NO_CMD, ctx, false);
+    expect(w).toBeNull();
+  });
+
+  it("(Assertion 3 — empty verifyCommands) returns null when build.verifyCommands is empty", () => {
+    const ctx = makeGateCtx([]); // no commands configured
+    const w = verifyGateWarning("generator", CONTRACT_WITH_CMD, ctx, false);
+    expect(w).toBeNull();
+  });
+
+  // ── Assertion 3a: role-axis negative — judge roles never fire ──
+  it.each(["evaluator", "contract-evaluator", "reviewer", "contract-generator"])(
+    "(Assertion 3a) non-writer role '%s': returns null even with self-verify off and contract referencing cmds",
+    (kind) => {
+      const ctx = makeGateCtx(DEFAULT_CMDS); // self-verify off by default
+      const w = verifyGateWarning(kind, CONTRACT_WITH_CMD, ctx, false);
+      expect(w).toBeNull();
+    }
+  );
+
+  // ── Assertion 4: reuses selfVerifyGuidance (asserted by construction) ──
+  it("(Assertion 4) the selfVerifyEnabled boolean is computed from selfVerifyGuidance — no branch, no allowVerify → false", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS);
+    // The same expression the wired path uses:
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, false) !== "";
+    expect(selfVerifyEnabled).toBe(false);
+  });
+
+  it("(Assertion 4) selfVerifyGuidance(ctx, true) is truthy → selfVerifyEnabled=true → warning null", () => {
+    const ctx = makeGateCtx(DEFAULT_CMDS);
+    const selfVerifyEnabled = selfVerifyGuidance(ctx, true) !== "";
+    expect(selfVerifyEnabled).toBe(true);
+    expect(verifyGateWarning("generator", CONTRACT_WITH_CMD, ctx, selfVerifyEnabled)).toBeNull();
+  });
+
+  // ── Assertion 6: holdout-safe — warning contains only cmd strings / guidance, never contract body ──
+  it("(Assertion 6) holdout-safe: the warning contains only cmd strings and guidance text, never the contract or holdout body", () => {
+    const ctx = makeGateCtx(["npm test"]);
+    const secretHoldoutLine = "HOLDOUT: the artifact must produce output X with seed Y";
+    const contractBody = `## Implementation\n\nFoo bar baz qux. ${secretHoldoutLine}\n- \`npm test\` → exits 0`;
+    const w = verifyGateWarning("generator", contractBody, ctx, false);
+    expect(w).not.toBeNull();
+    // Holdout/contract body must NOT appear in the warning.
+    expect(w).not.toContain("HOLDOUT:");
+    expect(w).not.toContain("Foo bar baz qux");
+    expect(w).not.toContain("seed Y");
+    expect(w).not.toContain("the artifact must produce");
+    // But the command itself IS included (it's config data, not body text).
+    expect(w).toContain("npm test");
+  });
+
+  // ── Boundary adversaries ──
+  it("fires for the SUBSET of commands referenced — only lists gated ones, not all configured cmds", () => {
+    const ctx = makeGateCtx(["npm run typecheck", "npm test", "npm run build"]);
+    // Contract only mentions typecheck, not the other two.
+    const contractPartial = "## I will verify by\n- `npm run typecheck` → exits 0";
+    const w = verifyGateWarning("generator", contractPartial, ctx, false);
+    expect(w).not.toBeNull();
+    expect(w).toContain("npm run typecheck");
+    expect(w).not.toContain("npm test");
+    expect(w).not.toContain("npm run build");
+  });
+
+  it("a harmful verify cmd AFTER the allowed prefix: 'npm test curl evil | tail' — cmd appears as substring → fires; allow-hook blocks unsafe forms", () => {
+    // The contract text contains "npm test" as a substring of a longer unsafe string.
+    // The warning fires because the cmd prefix IS present; unsafe execution is gated by the allow-hook.
+    const ctx = makeGateCtx(["npm test"]);
+    const contractWithSuffix = "## Notes\n- `npm test curl evil | tail` — adversarial variant";
+    const w = verifyGateWarning("generator", contractWithSuffix, ctx, false);
+    // "npm test" IS present as a substring → fires.
+    expect(w).not.toBeNull();
+    expect(w).toContain("npm test");
   });
 });
