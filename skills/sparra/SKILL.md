@@ -302,7 +302,10 @@ with failed assertion evidence + UN-RUN/no-signal ids; anything deeper → the r
 - **Contracts are proportionate**: a handful of *observable product-behavior* assertions,
   scaled to the item — not build-setting/toolchain trivia. Over-spec is a review failure too.
 - **The evaluator won't pass a flaky artifact.** An intermittently-failing required check is
-  an artifact defect, not "environmental" — rerun-to-green doesn't launder it.
+  an artifact defect, not "environmental" — rerun-to-green doesn't launder it. For a full-suite
+  gate that runs it once quietly and once under concurrent load; a load-only timeout (e.g. a test
+  firing a live network/SDK call) is an artifact defect too. The harness rerun gate can add that
+  concurrent-load pass itself — opt in via `build.flakinessLoadRerun` (off by default).
 - **UN-RUN ≠ FAIL.** A verdict can list `unrunAssertionIds` when the evaluator environment
   could not execute a gate; `exerciseStatus: mixed` means some gates ran and some were env-blocked,
   while `blocked` means nothing ran. Treat UN-RUN as no signal, not a product failure.

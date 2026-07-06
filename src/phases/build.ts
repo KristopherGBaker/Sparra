@@ -953,7 +953,10 @@ export async function cmdBuild(
                   reruns,
                   d.execVerifyCommand,
                   ctx.config.build.verifyCommands, // explicit opt-in past the executor's argv[0] allowlist
-                  mergedBuildEnv(ctx.config)
+                  mergedBuildEnv(ctx.config),
+                  // Opt-in concurrent-load pass — surfaces a suite that only times out under machine
+                  // load. No-op unless build.flakinessLoadRerun is on (default off keeps CI unaffected).
+                  { enabled: ctx.config.build.flakinessLoadRerun }
                 )
               ).filter((r) => r.status !== "ok")
             : [];

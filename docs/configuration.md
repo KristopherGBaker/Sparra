@@ -138,6 +138,15 @@ build:
                               #   failed round (mixed exits = FLAKY, all-nonzero = failing-as-shipped,
                               #   UNSAFE = safety-rule-rejected/never ran) with the command + output
                               #   as blocking feedback; 0 = off
+  flakinessLoadRerun: false   # off by default. When on AND flakinessReruns >= 1, the rerun gate ADDS
+                              #   >=1 further pass of each command run while a bounded, self-terminating
+                              #   background CPU-load process runs concurrently — IN ADDITION to (not
+                              #   replacing) the quiet reruns — so a suite that only times out under
+                              #   machine load (e.g. a test firing a live network/SDK call, visible only
+                              #   as a load-dependent hang) is classified flaky/failing deterministically
+                              #   instead of by luck of ambient load. NO-OP when flakinessReruns is 0 or
+                              #   this knob is off (no load process spawned). Off keeps Sparra's own CI
+                              #   unaffected; opt in for load-sensitive gates
   preflightVerify: false      # PRE-evaluator gate (no model): after each generation and BEFORE the
                               #   evaluator, run the contract's own verify commands via the safe
                               #   executor; a deterministic BEHAVIORAL failure SKIPS the evaluator that
