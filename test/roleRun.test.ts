@@ -2080,15 +2080,15 @@ describe("runRole — cap-death report re-ask (U4)", () => {
     expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
     // #2 (U2) the re-ask is TEXT-ONLY at the request boundary: the overrides WIN over the inherited
     // writer state so the resumed turn can't re-enter work. The FIRST (writer) call carries the
-    // explicit writer permissionMode + hooks; the SECOND (re-ask) call must override them to
-    // plan/read-only with the writer hooks cleared (Claude then blocks write tools; Codex → RO sandbox).
+    // explicit writer permissionMode + hooks; the SECOND (re-ask) call must override them with
+    // tool-stripping + read-only (NOT plan mode — plan mode's prompt invited a blocked plan-file
+    // Write that burned the single turn; tool-stripping is the correct write-block for Claude).
     expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
     expect(rec.calls[0]!.hooks).toBeDefined(); // …and carried writer hooks that could keep writes live
+    expect(rec.calls[1]!.tools).toEqual([]); // stripped: no built-in tools can be invoked
+    expect(rec.calls[1]!.permissionMode).toBe("default"); // NOT plan
     expect(rec.calls[1]!.readOnly).toBe(true);
-    expect(rec.calls[1]!.permissionMode).toBe("plan");
     expect(rec.calls[1]!.hooks).toBeUndefined(); // inherited writer hooks cleared → backend derives RO hooks
-    // (plan + readOnly + cleared hooks block writes even if writeScope lingers — the Claude backend
-    //  checks readOnly before writeScope, and explicit permissionMode:"plan" wins.)
     // #3 the report surfaces; emptyCompletion cleared; filesChanged + the cap telemetry preserved.
     expect(r.resultText).toContain(SENTINEL);
     expect(r.emptyCompletion).toBeUndefined();
@@ -2200,13 +2200,14 @@ describe("runRole — turn-cap report re-ask (U-D)", () => {
     expect(rec.calls[1]!.resume).toBe("sess-cap");
     expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
     expect(rec.calls[1]!.prompt).not.toContain("Build the widget."); // never replays the brief
-    // tightCap text-only turn (overrides the inherited writer state).
+    // tightCap text-only turn: tool-stripping + read-only (NOT plan mode).
     expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
     expect(rec.calls[0]!.hooks).toBeDefined();
     expect(rec.calls[1]!.maxTurns).toBe(1);
     expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
+    expect(rec.calls[1]!.tools).toEqual([]); // stripped: no built-in tools can be invoked
+    expect(rec.calls[1]!.permissionMode).toBe("default"); // NOT plan
     expect(rec.calls[1]!.readOnly).toBe(true);
-    expect(rec.calls[1]!.permissionMode).toBe("plan");
     expect(rec.calls[1]!.hooks).toBeUndefined();
     // report recovered; the cap state stays truthful — never laundered as complete.
     expect(r.resultText).toContain(SENTINEL);

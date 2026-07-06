@@ -313,13 +313,14 @@ describe("generateItem — turn-cap report recovery (U-D)", () => {
     expect(rec.calls[1]!.resume).toBe("cap-sess");
     expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON block");
     expect(rec.calls[1]!.prompt).not.toContain("Implement work item"); // never replays the brief
-    // tightCap: one text-only turn, overriding the inherited writer state.
+    // tightCap: one text-only turn — tools stripped, no plan mode, read-only sandbox.
     expect(rec.calls[0]!.permissionMode).not.toBe("plan"); // the writer run was NOT read-only…
     expect(rec.calls[0]!.hooks).toBeDefined(); // …and carried writer hooks
     expect(rec.calls[1]!.maxTurns).toBe(1);
     expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(ctx.config.build.maxBudgetUsdPerItem);
+    expect(rec.calls[1]!.tools).toEqual([]); // no built-in tools → nothing can be invoked
+    expect(rec.calls[1]!.permissionMode).toBe("default"); // NOT plan (plan mode invited the blocked Write)
     expect(rec.calls[1]!.readOnly).toBe(true);
-    expect(rec.calls[1]!.permissionMode).toBe("plan");
     expect(rec.calls[1]!.hooks).toBeUndefined();
     // recovery never launders the capped run as complete.
     expect(out.report).toBe("recovered");

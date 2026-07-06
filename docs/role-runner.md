@@ -212,8 +212,9 @@ writer dies at the turn cap with landed work (`filesChanged > 0`) but **no parse
 report** (empty text, prose, or incidental/wrong-shape JSON — a properly-shaped report is left
 alone), the runner does the **same one-shot re-ask** it does for a budget-cap death: with
 `build.jsonReask` on it resumes the same session ONCE, tightly capped (1 turn, small budget) and
-**text-only** (`readOnly`/`permissionMode: "plan"`/hooks cleared, so it can re-emit the report but
-not re-enter work past the cap it just hit), with a report-only prompt (never the full brief). On a
+**text-only** (`tools: []`/`readOnly: true`/`permissionMode: "default"`/hooks cleared — tool-stripping
+is the write-block for Claude; plan mode was dropped because plan mode's own prompt induces a
+plan-file Write that the sandbox blocks, burning the single turn with no JSON emitted), with a report-only prompt (never the full brief). On a
 usable reply the report surfaces in `resultText` and an `errors` note records the recovery, while
 `hitMaxTurns` **stays true** — recovery never launders a capped run as complete, so the conductor
 still resumes to finish the unfinished work. Gated to our-own-cap deaths (a co-occurring provider

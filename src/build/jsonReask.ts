@@ -1,4 +1,3 @@
-import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { RunSessionParams } from "../sdk/session.ts";
 
 /**
@@ -35,18 +34,24 @@ export const REPORT_REASK_MAX_BUDGET_USD = 0.5;
 
 /**
  * Session-request overrides for the one-shot report re-ask: resume the dying session with the
- * report-only prompt. Spread over the caller's base request. `tightCap` (the role-runner's
- * cap-death path) additionally PINS the re-ask to one turn + a small USD budget AND forces the
- * resumed turn TEXT-ONLY so it can only re-emit the report — it can't re-enter work. `maxTurns:1`
- * alone still permits a single tool call (an `Edit`), so the cap-death re-ask also forces
- * read-only: `readOnly: true` is the backend-agnostic intent (Codex read-only sandbox), but a
- * WRITER `commonReq` carries an explicit `permissionMode`/writer `hooks` that would otherwise WIN
- * over a bare `readOnly` (see `src/sdk/backends/claude.ts` — `permissionMode = req.permissionMode
- * ?? …`, `hooks = req.hooks ?? …`). So we also OVERRIDE the inherited writer state:
- * `permissionMode: "plan"` (Claude blocks write tools) and `hooks: undefined` (the Claude backend
- * then derives read-only hooks from `readOnly`). Spread AFTER `commonReq`, these win. The
- * autonomous generator omits `tightCap`, so its re-ask behavior is unchanged (none of readOnly/
- * permissionMode/hooks/maxTurns/maxBudgetUsd added).
+ * report-only prompt. Spread over the caller's base request. `tightCap` (used by BOTH the
+ * autonomous generator's turn-cap recovery AND the interactive role-runner's budget/turn-cap
+ * recovery) additionally PINS the re-ask to one turn + a small USD budget AND makes the resumed
+ * turn genuinely TEXT-ONLY so it can only re-emit the report — it can't re-enter work:
+ *   • `tools: []` — the Claude backend maps `req.tools → options.tools`; an empty array means NO
+ *     built-in tools are available, so nothing (Write/Edit/Bash) can be induced or invoked.
+ *   • `permissionMode: "default"` (NOT "plan") — plan mode was dropped because plan mode's own
+ *     system prompt induces the model to Write a plan file; the read-only sandbox then BLOCKS that
+ *     Write and the single turn is consumed → error_max_turns with no JSON. Tool-stripping is the
+ *     correct write-block for the Claude path; plan mode is no longer needed.
+ *   • `readOnly: true` — keeps the Codex read-only sandbox intent (Codex ignores `tools`/
+ *     `permissionMode` but reads `readOnly` for its sandbox mode).
+ *   • `hooks: undefined` — present so it wins over an inherited writer `hooks`.
+ *   • `mcpServers: undefined`, `allowedTools: undefined` — a text-only re-emit needs no MCP tools;
+ *     clearing these prevents any inherited tool-enabling fields from reaching the resumed turn.
+ * Spread AFTER `commonReq`, these win. No `tightCap` → exactly `{role, prompt, resume}` (the
+ * autonomous generator passes `tightCap` on the turn-cap path; a base re-ask without it is a
+ * separate path and stays unchanged).
  */
 export function reportReaskOverrides(opts: {
   role: string;
@@ -61,11 +66,16 @@ export function reportReaskOverrides(opts: {
       ? {
           maxTurns: REPORT_REASK_MAX_TURNS,
           maxBudgetUsd: opts.tightCap.maxBudgetUsd,
-          // Force a text-only turn: read-only intent + override the inherited writer state so
-          // Claude resolves to plan/read-only (a bare `readOnly` is ignored when an explicit
-          // writer `permissionMode`/`hooks` is inherited from `commonReq`).
+          // Strip all tool surface: empty tools array → nothing can be invoked on the Claude
+          // path; cleared MCP/allowedTools so no inherited writer tool-enablers leak through.
+          tools: [] as string[],
+          mcpServers: undefined,
+          allowedTools: undefined,
+          // Use default permission mode (not plan — plan mode's own prompt invites a plan-file
+          // Write that the sandbox then blocks, burning the single turn with no JSON emitted).
+          permissionMode: "default" as const,
+          // Read-only sandbox for Codex; cleared hooks so the Claude backend derives RO hooks.
           readOnly: true,
-          permissionMode: "plan" as PermissionMode,
           hooks: undefined,
         }
       : {}),
