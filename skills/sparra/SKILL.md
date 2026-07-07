@@ -155,11 +155,16 @@ The few that matter most:
   all-un-run rounds don't advance the streak; a pivot resets it. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
-  to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Only single,
-  self-contained commands are approved (no chaining/redirect/network/mutation/commit), gated to a
-  worktree boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
+  to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Gated to a worktree
+  boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
   strict allow-hook with `allowVerify: true` (MCP) / `--verify` (CLI) — so the interactive
   generator self-verifies its gates and the conductor no longer has to run every gate out-of-band.
+  The **generator's Bash allow-hook** accepts two extra shapes beyond a bare command (the harness
+  executor still rejects both — allow-hook only): **(a)** a leading literal env-var assignment
+  `KEY=VALUE <core>` (e.g. `TMPDIR=/tmp/sprj-x npm test`, `LANG=C LC_ALL=C npm run typecheck`) —
+  the core is re-validated by the full safety rules; **(b)** a trailing output-shaping filter pipe
+  (e.g. `npm test 2>&1 | tail -20`). Both compose freely. The harness executor (`build.verifyCommands`
+  as config entries) still runs each entry as a single shell-less argv — no pipe/chain/env-prefix.
 - **`build.preflightVerify`** — off by default. When on, after each generation and **before** the
   evaluator, the harness runs the contract's own *"I will verify by"* commands via the safe
   executor; a deterministic **behavioral** failure **skips the evaluator that round** and bounces

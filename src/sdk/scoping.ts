@@ -116,17 +116,98 @@ export function denyBash(toolName: string, input: any, denyContains: string[]): 
  * carve-out is DELIBERATELY not added to the shared {@link unsafeVerifyCommandReason}: the harness
  * executor ({@link "../build/exec.ts"!unsafeExecReason}) spawns argv with NO shell and literally
  * cannot run a pipe, so it must stay strict and keep rejecting this shape.
+ *
+ * ALLOW-HOOK-ONLY env-var-prefix carve-out (NOT shared with the executor). A command of the form
+ * `KEY=VALUE … <core>` is granted iff the leading env assignments are all valid literal tokens
+ * (see {@link stripEnvPrefix}) and `<core>` would itself be granted by the existing rules — i.e.
+ * it passes the plain allowlist check OR the output-shaping filter-pipe check. This composes freely:
+ * `TMPDIR=/tmp/sprj-x npm test | tail -20` strips the prefix, then routes `npm test | tail -20`
+ * through `allowFilterPipe`. The executor ({@link "../build/exec.ts"!unsafeExecReason}) still rejects
+ * the env-prefixed form because `unsafeVerifyCommandReason` sees the `=` in the first token
+ * (the SHELL_METACHARS regex also blocks it); env-prefix support is intentionally allow-hook-only.
  */
 export function allowVerifyBash(toolName: string, input: any, allowPrefixes: string[], denyExtra: string[] = []): string | null {
   if (toolName !== "Bash" || allowPrefixes.length === 0) return null;
   const cmd = String(input?.command ?? "").trim();
   if (!cmd) return null;
-  if (unsafeVerifyCommandReason(cmd, denyExtra)) {
-    // Disqualified by the plain rule — reconsider ONLY the recognized filter-pipe shape.
-    return allowFilterPipe(cmd, allowPrefixes, denyExtra);
+
+  if (!unsafeVerifyCommandReason(cmd, denyExtra)) {
+    // Command is safe — check the plain allowlist prefix match first.
+    if (allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "))) {
+      return `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}`;
+    }
+    // Plain match failed — try env-prefix stripping: a "safe" command that starts with KEY=VALUE
+    // (not yet rejected by unsafeVerifyCommandReason) still needs prefix stripping.
+    return allowEnvPrefixedCmd(cmd, allowPrefixes, denyExtra);
   }
-  const ok = allowPrefixes.some((p) => cmd === p || cmd.startsWith(p + " "));
-  return ok ? `Auto-approved verification command (worktree-scoped, no chain/redirect/network/mutation): ${cmd.slice(0, 80)}` : null;
+
+  // Disqualified by the plain rule — try the output-shaping filter-pipe carve-out (legacy path).
+  const filterResult = allowFilterPipe(cmd, allowPrefixes, denyExtra);
+  if (filterResult) return filterResult;
+
+  // Also try the env-prefix carve-out: strip leading env assigns and re-check the core.
+  return allowEnvPrefixedCmd(cmd, allowPrefixes, denyExtra);
+}
+
+/**
+ * Strip a valid leading env-var prefix from `cmd` and return `[envTokens, core]`, or null if
+ * the prefix is absent or invalid. A valid env-assign token is `KEY=VALUE` where:
+ *   - `KEY` matches `^[A-Za-z_][A-Za-z0-9_]*$`
+ *   - `VALUE`, after stripping at most ONE surrounding matched quote pair (`'…'` or `"…"`),
+ *     matches `^[A-Za-z0-9_./:@%+,=-]*$` (metacharacter-free; empty value is valid).
+ * Tokenization is by whitespace so a space-bearing value is never treated as one token.
+ * Returns null when there is no valid env prefix, or when stripping would leave no core, or when
+ * the raw command contains a control character.
+ */
+function stripEnvPrefix(cmd: string): { envTokens: string[]; core: string } | null {
+  if (/[\x00-\x1f]/.test(cmd)) return null;
+  const tokens = cmd.split(/\s+/);
+  const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  // VALUE charset after unquoting: letters, digits, and _./:@%+,=- — NO whitespace, $, backtick,
+  // ;|&<>()\, unmatched quote, or control char.
+  const VALUE_SAFE_RE = /^[A-Za-z0-9_./:@%+,=-]*$/;
+
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    const eq = tok.indexOf("=");
+    if (eq < 0) break; // not an assignment token
+    const key = tok.slice(0, eq);
+    if (!KEY_RE.test(key)) break; // invalid KEY — stop stripping here
+    let value = tok.slice(eq + 1);
+    // Strip at most ONE surrounding matched quote pair.
+    if ((value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"'))) {
+      value = value.slice(1, -1);
+    }
+    if (!VALUE_SAFE_RE.test(value)) return null; // unsafe value — reject whole command
+    i++;
+  }
+  if (i === 0) return null; // no env tokens stripped
+  const core = tokens.slice(i).join(" ");
+  if (!core) return null; // nothing after the prefix
+  return { envTokens: tokens.slice(0, i), core };
+}
+
+/**
+ * ALLOW-HOOK-ONLY: try to grant an env-prefixed command by stripping the prefix and routing
+ * the core through the existing allow-hook rules. Returns an allow-reason or null.
+ */
+function allowEnvPrefixedCmd(cmd: string, allowPrefixes: string[], denyExtra: string[]): string | null {
+  const stripped = stripEnvPrefix(cmd);
+  if (!stripped) return null;
+  const { core } = stripped;
+
+  // The core must itself be safe by the shared rule — no laundering.
+  if (unsafeVerifyCommandReason(core, denyExtra)) {
+    // Core is disqualified — try the filter-pipe shape on the core (env-prefix + filter-pipe).
+    return allowFilterPipe(core, allowPrefixes, denyExtra)
+      ? `Auto-approved verification command (worktree-scoped, env-var prefix + output-shaping filter pipe): ${cmd.slice(0, 80)}`
+      : null;
+  }
+  // Core is safe — apply the plain allowlist prefix check.
+  const ok = allowPrefixes.some((p) => core === p || core.startsWith(p + " "));
+  return ok ? `Auto-approved verification command (worktree-scoped, env-var prefix): ${cmd.slice(0, 80)}` : null;
 }
 
 /**
@@ -281,6 +362,15 @@ export function unsafeVerifyCommandReason(cmd: string, denyExtra: string[] = [])
   // Any ASCII control char (newline, CR, tab, …) disqualifies — a newline is a shell command
   // separator, so `npm test\ntouch pwned` must NOT slip through a prefix/safety check.
   if (/[\x00-\x1f]/.test(cmd)) return "contains a control character (shell command separator)";
+  // A shell env-var assignment prefix (`KEY=VALUE cmd`) requires a shell to interpret — it is NOT
+  // a single self-contained command the harness executor can spawn as argv. The executor's own
+  // argv[0]-allowlist also rejects it (the first token would parse as a path, not a known tool),
+  // but catching it here keeps the shared rule and the executor consistent. The allow-hook
+  // (`allowVerifyBash` → `allowEnvPrefixedCmd`) provides the generator's carve-out.
+  const firstToken = cmd.slice(0, cmd.indexOf(" ") < 0 ? cmd.length : cmd.indexOf(" "));
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(firstToken)) {
+    return "starts with a shell env-var assignment (KEY=VALUE …) which requires shell interpretation";
+  }
   // Anything that could chain, redirect, reach the network, mutate the tree, install, or commit
   // disqualifies — only a single, self-contained verification command is granted.
   const disqualify = [

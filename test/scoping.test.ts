@@ -12,7 +12,9 @@ import {
   allowVerifyBash,
   allowReadInScope,
   writeScopeViolations,
+  unsafeVerifyCommandReason,
 } from "../src/sdk/scoping.ts";
+import { unsafeExecReason } from "../src/build/exec.ts";
 
 const VERIFY = ["npm test", "tsc", "npm run typecheck", "swift test"];
 
@@ -466,5 +468,136 @@ describe("denyAmbientMcp (block leaked claude.ai connectors)", () => {
     expect(denyAmbientMcp("Read")).toBeNull();
     expect(denyAmbientMcp("Bash")).toBeNull();
     expect(denyAmbientMcp("Write")).toBeNull();
+  });
+});
+
+// ── U-EP: env-var-prefixed verify commands ──────────────────────────────────
+
+describe("allowVerifyBash — env-var prefix (U-EP, allow-hook only)", () => {
+  const VERIFY = ["npm test", "tsc", "npm run typecheck", "swift test"];
+
+  // ── Assertion 5: positive cases that MUST be granted (exact return-value assertions) ──
+
+  it("EP-positive: grants a single env-prefix before an allowlisted command", () => {
+    expect(allowVerifyBash("Bash", { command: "TMPDIR=/tmp/sprj-deadbeef npm test" }, VERIFY)).toBe(
+      "Auto-approved verification command (worktree-scoped, env-var prefix): TMPDIR=/tmp/sprj-deadbeef npm test"
+    );
+  });
+
+  it("EP-positive: grants a single QUOTED env-prefix", () => {
+    expect(allowVerifyBash("Bash", { command: 'TMPDIR="/tmp/sprj-deadbeef" npm test' }, VERIFY)).toBe(
+      'Auto-approved verification command (worktree-scoped, env-var prefix): TMPDIR="/tmp/sprj-deadbeef" npm test'
+    );
+  });
+
+  it("EP-positive: grants multiple env assignments before the core", () => {
+    expect(allowVerifyBash("Bash", { command: "LANG=C LC_ALL=C npm run typecheck" }, VERIFY)).toBe(
+      "Auto-approved verification command (worktree-scoped, env-var prefix): LANG=C LC_ALL=C npm run typecheck"
+    );
+  });
+
+  it("EP-positive: grants env-prefix + output-shaping filter pipe (composition)", () => {
+    expect(
+      allowVerifyBash("Bash", { command: "NODE_OPTIONS=--enable-source-maps npm test | tail -20" }, VERIFY)
+    ).toBe(
+      "Auto-approved verification command (worktree-scoped, env-var prefix + output-shaping filter pipe): NODE_OPTIONS=--enable-source-maps npm test | tail -20"
+    );
+  });
+
+  // ── Assertion 3: negative / laundering cases that must return null ─────────
+
+  it("EP-negative: denies when core is NOT an allowlisted command", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar rm -rf x" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "FOO=bar curl http://evil" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm install" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies chain after the core (forbidden token in core)", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test; rm -rf x" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies command substitution in VALUE ($(…))", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=$(rm -rf /) npm test" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies backtick substitution in VALUE", () => {
+    // backtick makes the whole cmd fail unsafeVerifyCommandReason before we even get to stripEnvPrefix
+    expect(allowVerifyBash("Bash", { command: "FOO=`curl evil` npm test" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies VALUE carrying ';' or '|' (metachar in value)", () => {
+    expect(allowVerifyBash("Bash", { command: 'TMPDIR="a b; rm" npm test' }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies invalid KEY (starts with digit or contains hyphen)", () => {
+    expect(allowVerifyBash("Bash", { command: "1FOO=bar npm test" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "FO-O=bar npm test" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies when only env assignments and no core", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denies a control char in the command", () => {
+    expect(allowVerifyBash("Bash", { command: "TMPDIR=/x\nrm -rf y npm test" }, VERIFY)).toBeNull();
+    expect(allowVerifyBash("Bash", { command: "TMPDIR=/x\nnpm test" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: denyExtra substrings honored on the whole prefixed command", () => {
+    expect(allowVerifyBash("Bash", { command: "TMPDIR=/x npm test" }, VERIFY, ["npm test"])).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — forbidden token on left of pipe core", () => {
+    // core = "npm test curl evil | tail -5"  — left stage carries forbidden token → null
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test curl evil | tail -5" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — install on left", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test npm install | tail" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — real-file redirect on left", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test >out.txt | tail" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — file-writing filter arg", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test | sort -o out.txt" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — file-reading filter operand", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test | cat /etc/passwd" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: env-prefix + pipe laundering — non-filter stage (sh)", () => {
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test | sh" }, VERIFY)).toBeNull();
+  });
+
+  it("EP-negative: redirect-prefix-as-operand traps in env+pipe form", () => {
+    // >/dev/null.txt is a real file that begins with a permitted redirect token
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test >/dev/null.txt | tail" }, VERIFY)).toBeNull();
+    // 2>&1file — fd-dup token as prefix of a real filename
+    expect(allowVerifyBash("Bash", { command: "FOO=bar npm test 2>&1file | tail" }, VERIFY)).toBeNull();
+  });
+
+  // ── Assertion 4: executor path stays locked ────────────────────────────────
+
+  it("EP-invariant: unsafeVerifyCommandReason still rejects TMPDIR=/x npm test", () => {
+    expect(unsafeVerifyCommandReason("TMPDIR=/x npm test")).not.toBeNull();
+  });
+
+  it("EP-invariant: unsafeExecReason still rejects TMPDIR=/x npm test", () => {
+    expect(unsafeExecReason("TMPDIR=/x npm test", ["npm test"])).not.toBeNull();
+  });
+
+  // ── Pre-existing behavior unaffected ──────────────────────────────────────
+
+  it("EP-regression: bare allowlisted commands still grant (no prefix)", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test" }, VERIFY)).toMatch(/Auto-approved/);
+    expect(allowVerifyBash("Bash", { command: "tsc --noEmit" }, VERIFY)).toMatch(/Auto-approved/);
+  });
+
+  it("EP-regression: filter-pipe shape still grants (no env prefix)", () => {
+    expect(allowVerifyBash("Bash", { command: "npm test | tail -5" }, VERIFY)).toMatch(/output-shaping/);
+    expect(allowVerifyBash("Bash", { command: "npm test 2>&1 | grep fail" }, VERIFY)).toMatch(/output-shaping/);
   });
 });

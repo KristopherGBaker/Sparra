@@ -43,9 +43,13 @@ a quick cross-model second opinion. Run init for a customized or full plan→bui
 4. **Self-verify gates:** before relying on generator self-verify (`allowVerify` /
    `--verify`), set the project's own gates in `.sparra/config.yaml`
    `build.verifyCommands` — a config-less run only gets the defaults, so custom gates
-   (`make seed`, a project script) won't be auto-approved. Each entry must be a SINGLE
-   matchable command: chained/subshell/piped forms (`(cd X && swift test)`, `a && b`)
-   never match the allowlist.
+   (`make seed`, a project script) won't be auto-approved. Each config entry must be a SINGLE
+   matchable command (no chain/pipe/env-prefix) — the harness executor runs it as a bare argv.
+   The **generator's Bash allow-hook** adds flexibility at call-time (not in the config entry
+   itself): a leading literal env-var assignment (`TMPDIR=/tmp/sprj-x npm test`,
+   `LANG=C LC_ALL=C npm run typecheck`) and/or a trailing output-shaping filter pipe
+   (`npm test | tail -20`) are both auto-approved. Chained/subshell forms (`(cd X && swift test)`,
+   `a && b`) are still denied.
    **`unitWorktree` generators get self-verify automatically** — a `unitWorktree` generator
    runs in a persistent linked git worktree, so the runner detects the boundary and enables
    self-verify (the same strict `allowVerifyBash` allow-hook) without `allowVerify`. You do

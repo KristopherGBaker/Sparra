@@ -141,18 +141,26 @@ adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
 i.e. the interactive `/sparra-loop` path — auto-run its project's `build.verifyCommands`
 (typecheck/test/build) through the same **strict** allow-hook the build loop uses on a worktree,
 so each self-verify gate isn't blocked by the permission wall on a hooks-only backend (Claude
-without `auto`). It reuses the existing `allowVerifyBash` decider unchanged — a single,
-self-contained verify command matching a `build.verifyCommands` prefix, with **no** command
-chaining / redirect / network / mutation / install / commit — so it adds no new
-auto-approval surface; the opt-in only drops the branch precondition. The one **narrow**
-allow-hook-only exception is an **output-shaping filter pipe**: an allow-prefix (with an optional
-`2>&1` / `>/dev/null` discard) piped into pure, non-executing text filters — `npm test 2>&1 | tail -5`,
-`… | grep -E "fail"`, `… | wc -l` — so a giant test dump can be trimmed instead of false-blocked.
-Each filter stage is validated **argument-by-argument against a per-tool allowlist** (default-deny):
-non-flag operands are capped (a file path is rejected) and only known output-shaping flags are
-accepted, so a file-reading/writing arg (`sort -o out`, `cat /etc/passwd`, `grep -f pat.txt`) is
-still rejected. This carve-out lives ONLY in the allow-hook (the real-shell Claude Bash tool); the
-harness executor spawns argv with no shell and stays strict, rejecting any pipe. It is a **no-op for
+without `auto`). It reuses the existing `allowVerifyBash` decider unchanged — the opt-in only drops the branch
+precondition. The allow-hook auto-approves three shapes (allow-hook only; the harness executor
+stays strict on all of them):
+- **Plain command:** a single `build.verifyCommands`-prefix match with no chaining / redirect /
+  network / mutation / install / commit.
+- **Leading literal env-var assignment:** one or more `KEY=VALUE` tokens before the core command —
+  e.g. `TMPDIR=/tmp/x npm test`, `LANG=C LC_ALL=C npm run typecheck`. KEY must be a valid
+  identifier; VALUE (after stripping one optional matched quote pair) must be metacharacter-free
+  (no `$`, backtick, `;|&<>\`, unmatched quote, or whitespace). The core is re-validated by the
+  full safety rules — no laundering through the prefix.
+- **Output-shaping filter pipe:** an allow-prefix (with an optional `2>&1` / `>/dev/null` discard)
+  piped into pure, non-executing text filters — `npm test 2>&1 | tail -5`, `… | grep -E "fail"`,
+  `… | wc -l` — so a giant test dump can be trimmed instead of false-blocked. Each filter stage
+  is validated **argument-by-argument against a per-tool allowlist** (default-deny): non-flag
+  operands are capped (a file path is rejected) and only known output-shaping flags are accepted,
+  so a file-reading/writing arg (`sort -o out`, `cat /etc/passwd`, `grep -f pat.txt`) is rejected.
+
+The env-var-prefix and filter-pipe shapes compose freely: `TMPDIR=/x npm test | tail -20` strips
+the prefix then routes the core through the filter-pipe check. The harness executor spawns argv
+with **no shell** and stays strictly strict — env-prefix, pipe, and chain are all rejected there. It is a **no-op for
 read-only roles** (only the generator's writer guard consumes it; the evaluator does not
 self-verify). The **`sparra-loop` skill** is the driving playbook.
 
