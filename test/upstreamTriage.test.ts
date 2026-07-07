@@ -7,7 +7,7 @@ import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import { seedPrompts } from "../src/prompts.ts";
 import { cmdReflect, upstreamInboxDir } from "../src/phases/reflect.ts";
-import { parseInbox, emitSegments, loadInbox, type Segment } from "../src/phases/upstreamTriage.ts";
+import { parseInbox, emitSegments, loadInbox, parseRecurrence, incrementFinding, type Segment } from "../src/phases/upstreamTriage.ts";
 import type { Ctx } from "../src/context.ts";
 import type { RunResult } from "../src/sdk/session.ts";
 
@@ -278,6 +278,133 @@ describe("cmdReflect --upstream — untriaged findings resurface", () => {
     const { findings } = await loadInbox(dir);
     expect(findings.map((f) => f.title)).toEqual(["One", "Three"]); // Two gone, others re-indexed 1..2
     expect(findings.map((f) => f.globalIndex)).toEqual([1, 2]);
+  });
+});
+
+// ───────────────────────── parseRecurrence (pure) ─────────────────────────
+
+describe("parseRecurrence — parse or default to 1", () => {
+  it("returns the marker's n when a well-formed marker is present", () => {
+    expect(parseRecurrence("### T\n<!-- sparra-recurrence n=3 -->\nbody")).toBe(3);
+    expect(parseRecurrence("<!-- sparra-recurrence n=1 -->\nbody")).toBe(1);
+    expect(parseRecurrence("body\n<!-- sparra-recurrence n=7 -->\nmore")).toBe(7);
+  });
+
+  it("parse: malformed/absent marker loads as recurrence 1 (no throw)", () => {
+    // absent
+    expect(parseRecurrence("### T\nbody only")).toBe(1);
+    // malformed n value
+    expect(parseRecurrence("<!-- sparra-recurrence n=abc -->")).toBe(1);
+    // negative
+    expect(parseRecurrence("<!-- sparra-recurrence n=-5 -->")).toBe(1);
+    // empty string
+    expect(parseRecurrence("")).toBe(1);
+    // partial / wrong format
+    expect(parseRecurrence("<!-- sparra-recurrence n= -->")).toBe(1);
+  });
+});
+
+// ───────────────────────── incrementFinding (pure) ─────────────────────────
+
+describe("incrementFinding — counter splice (pure)", () => {
+  it("increment: legacy marker-less finding → recurrence 2, marker created, siblings byte-identical, NO new file", () => {
+    const content = "### Finding One\nbody one\n### Finding Two\nbody two\n";
+    const segs = parseInbox(content);
+    const oneIdx = segs.findIndex((s) => s.kind === "finding" && s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Finding One");
+    const result = incrementFinding(content, oneIdx);
+    // marker created at n=2
+    expect(result).toContain("<!-- sparra-recurrence n=2 -->");
+    // Finding One's recurrence is now 2
+    const newSegs = parseInbox(result);
+    const one = newSegs.find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Finding One") as Extract<Segment, { kind: "finding" }>;
+    expect(parseRecurrence(one.text)).toBe(2);
+    // siblings byte-identical: Finding Two is unchanged
+    const origTwo = segs.find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Finding Two") as Extract<Segment, { kind: "finding" }>;
+    const newTwo = newSegs.find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Finding Two") as Extract<Segment, { kind: "finding" }>;
+    expect(newTwo.text).toBe(origTwo.text);
+    // pure function — does not write any file (no side effect)
+  });
+
+  it("increments an already-marked finding from n=3 to n=4, rewrites only that marker line", () => {
+    const content = "### Alpha\n<!-- sparra-recurrence n=3 -->\nalpha body\n### Beta\nbeta body\n";
+    const segs = parseInbox(content);
+    const alphaIdx = segs.findIndex((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Alpha");
+    const result = incrementFinding(content, alphaIdx);
+    expect(result).toContain("<!-- sparra-recurrence n=4 -->");
+    expect(result).not.toContain("<!-- sparra-recurrence n=3 -->");
+    // Beta unchanged
+    const origBeta = segs.find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Beta") as Extract<Segment, { kind: "finding" }>;
+    const newBeta = parseInbox(result).find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "Beta") as Extract<Segment, { kind: "finding" }>;
+    expect(newBeta.text).toBe(origBeta.text);
+  });
+
+  it("A file with multiple findings: incrementing one leaves the others byte-identical", () => {
+    const content = "### A\nbody a\n### B\n<!-- sparra-recurrence n=2 -->\nbody b\n### C\nbody c\n";
+    const segs = parseInbox(content);
+    const bIdx = segs.findIndex((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === "B");
+    const result = incrementFinding(content, bIdx);
+    const newSegs = parseInbox(result);
+    const getTitle = (title: string, arr: Segment[]) =>
+      arr.find((s) => s.kind === "finding" && (s as Extract<Segment, { kind: "finding" }>).title === title) as Extract<Segment, { kind: "finding" }>;
+    expect(getTitle("A", newSegs).text).toBe(getTitle("A", segs).text); // A unchanged
+    expect(getTitle("C", newSegs).text).toBe(getTitle("C", segs).text); // C unchanged
+    expect(parseRecurrence(getTitle("B", newSegs).text)).toBe(3); // B bumped
+  });
+});
+
+// ───────────────────────── loadInbox ranking ─────────────────────────
+
+describe("loadInbox — recurrence-ranked globalIndex assignment", () => {
+  it("ranking: 3 findings with counts 3/1/2 → globalIndex 1→2→3 matches recurrence DESC", async () => {
+    const dir = withTempInbox();
+    // Write three inbox files with specific recurrence counts
+    write(dir, "a.md", "### Finding A\n<!-- sparra-recurrence n=3 -->\nbody a\n");
+    write(dir, "b.md", "### Finding B\nbody b\n"); // no marker → recurrence 1
+    write(dir, "c.md", "### Finding C\n<!-- sparra-recurrence n=2 -->\nbody c\n");
+
+    const { findings } = await loadInbox(dir);
+    expect(findings).toHaveLength(3);
+    // Ranked DESC: 3→2→1
+    expect(findings.map((f) => f.recurrence)).toEqual([3, 2, 1]);
+    expect(findings.map((f) => f.title)).toEqual(["Finding A", "Finding C", "Finding B"]);
+    // Global indices contiguous 1..3 in displayed order
+    expect(findings.map((f) => f.globalIndex)).toEqual([1, 2, 3]);
+  });
+
+  it("triage by displayed index [1] archives the highest-recurrence finding (not file-order first)", async () => {
+    const dir = withTempInbox();
+    write(dir, "a.md", "### Low\nbody low\n"); // recurrence 1
+    write(dir, "b.md", "### High\n<!-- sparra-recurrence n=5 -->\nbody high\n"); // recurrence 5
+
+    const { findings } = await loadInbox(dir);
+    // High should be at index 1 (highest recurrence)
+    expect(findings[0]!.title).toBe("High");
+    expect(findings[0]!.globalIndex).toBe(1);
+
+    // Triage index 1 → should archive "High", not "Low"
+    const cap = suppressStdout();
+    try {
+      await cmdReflect(DUMMY_CTX, { upstream: true, done: "1", now });
+    } finally {
+      cap.restore();
+    }
+    const { findings: after } = await loadInbox(dir);
+    expect(after.find((f) => f.title === "High")).toBeUndefined(); // archived
+    expect(after.find((f) => f.title === "Low")).toBeDefined(); // still in inbox
+  });
+
+  it("tie-break: same-recurrence findings keep file-sorted, in-file order", async () => {
+    const dir = withTempInbox();
+    write(dir, "a.md", "### First\nbody\n### Second\nbody\n");
+    write(dir, "b.md", "### Third\nbody\n");
+
+    const { findings } = await loadInbox(dir);
+    // All recurrence 1; file-order tie-break
+    expect(findings.map((f) => [f.globalIndex, f.title])).toEqual([
+      [1, "First"],
+      [2, "Second"],
+      [3, "Third"],
+    ]);
   });
 });
 

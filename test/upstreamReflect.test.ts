@@ -13,6 +13,7 @@ import {
   upstreamInboxDir,
   routeUpstreamFinding,
 } from "../src/phases/reflect.ts";
+import { loadInbox } from "../src/phases/upstreamTriage.ts";
 import type { Ctx } from "../src/context.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
 
@@ -259,15 +260,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // report is tool-free plain text), evaluator (verify pre-existing-failure carveouts against the
     // baseline; exactly one assertions entry per contract id), contract-evaluator (a shared-signal
     // fix must enumerate ALL call sites + require an observable per consumer).
-    // Regenerated 2026-07-06 (loop-0706f prompt-fold): folded 5 reflect-earned lessons into
-    // DEFAULT_PROMPTS — contract-evaluator + contract-generator (a guard on a capability with
-    // multiple entry surfaces must pin enforcement to the one core choke point + a test driving it
-    // directly; validate/execute sharing an allowlist needs a NON-DEFAULT-policy end-to-end
-    // fixture), evaluator (apply the first-round CORE-entry probe standard to fails-closed-before-
-    // launch + cleanup-on-error assertions too), generator (after a fix, re-verify rerouted
-    // assertions through the REAL default path; diff-check every contract-Scope-named file before
-    // reporting).
-    expect(h.digest("hex")).toBe("c476de37ea84692f3f0ba4a479562ba7b758cf7b8e717d46197b30ce9781ab59");
+    // Regenerated 2026-07-07 (U-REC recurrence-weighted inbox): only the reflector prompt changed
+    // (materiality bar + RECURRENCE-OF clause added). The hash over non-reflector prompts changed
+    // from the previous sentinel because earlier 0707a/0707b cycles folded additional lessons into
+    // non-reflector prompts (e.g. generator allowVerifyBash) without bumping this sentinel — those
+    // cycles had a stale sentinel. This update regenerates it from the current worktree state.
+    // To regenerate: run the suite; the received hash in the failure IS the correct new value.
+    expect(h.digest("hex")).toBe("88290d72d6ce9447079ad5d6303dfb75d25f0a273fa4fd519a50ff1e0dcbdeda");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
@@ -351,5 +350,162 @@ describe("cmdReflect --upstream — read & archive (runs no model session)", () 
     expect(inboxFiles()).toEqual(expect.arrayContaining([])); // sanity
     expect(inboxFiles().every((f) => f.endsWith(".md"))).toBe(true);
     expect(inboxFiles()).toHaveLength(1); // the dir is excluded
+  });
+
+  it("listing shows ×N recurrence marker in the [index] title line (degenerate-proof ordering)", async () => {
+    const home = withTempHome();
+    const inboxDir = path.join(home, "reflections");
+    fs.mkdirSync(inboxDir, { recursive: true });
+    // Three findings with distinct recurrence counts: 3, 1, 2 (file order is 3→1→2)
+    fs.writeFileSync(path.join(inboxDir, "a.md"), "### Finding A\n<!-- sparra-recurrence n=3 -->\nbody a\n");
+    fs.writeFileSync(path.join(inboxDir, "b.md"), "### Finding B\nbody b\n"); // recurrence 1
+    fs.writeFileSync(path.join(inboxDir, "c.md"), "### Finding C\n<!-- sparra-recurrence n=2 -->\nbody c\n");
+
+    const { ctx, dir } = await ctxFor();
+    const cap = captureStdout();
+    try {
+      await cmdReflect(ctx, { upstream: true });
+      const out = cap.buf();
+      // All three ×N markers present
+      expect(out).toContain("×3");
+      expect(out).toContain("×2");
+      expect(out).toContain("×1");
+      // Order: ×3 before ×2 before ×1 (NOT file order)
+      expect(out.indexOf("×3")).toBeLessThan(out.indexOf("×2"));
+      expect(out.indexOf("×2")).toBeLessThan(out.indexOf("×1"));
+      // Global indices [1] [2] [3] appear in the output
+      expect(out).toContain("[1]");
+      expect(out).toContain("[2]");
+      expect(out).toContain("[3]");
+      // [1] appears before [2] before [3] in the output
+      expect(out.indexOf("[1]")).toBeLessThan(out.indexOf("[2]"));
+      expect(out.indexOf("[2]")).toBeLessThan(out.indexOf("[3]"));
+    } finally {
+      cap.restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ───────────────────────── recurrence-aware routing ─────────────────────────
+
+describe("routeUpstreamFinding — recurrence-aware routing", () => {
+  it("routing recurrence: RECURRENCE-OF: <live title> → that finding's count bumps, NO duplicate/new file added", async () => {
+    const home = withTempHome();
+    const inboxDir = path.join(home, "reflections");
+    fs.mkdirSync(inboxDir, { recursive: true });
+    fs.writeFileSync(path.join(inboxDir, "first.md"), "### Existing Issue\nbody of existing issue\n");
+
+    // upstream.md with RECURRENCE-OF tag matching the live finding
+    const upstreamContent = "### Existing Issue Again\nRECURRENCE-OF: Existing Issue\nSame problem observed again\n";
+    const result = await routeUpstreamFinding("proj", "stamp1", upstreamContent);
+
+    // No new file — all were recurrences
+    expect(result).toBeNull();
+    expect(inboxFiles()).toHaveLength(1); // only "first.md"
+
+    // The existing finding's counter bumped to 2
+    const { findings } = await loadInbox(inboxDir);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.recurrence).toBe(2);
+    expect(fs.readFileSync(path.join(inboxDir, "first.md"), "utf8")).toContain("<!-- sparra-recurrence n=2 -->");
+  });
+
+  it("routing new: unmatched/typo RECURRENCE-OF AND a genuinely-new finding → both written as new (count 1)", async () => {
+    withTempHome();
+    // No live findings at all — both sections are new
+    const upstreamContent = "### Typo Recurrence\nRECURRENCE-OF: Nonexistent Title XYZ\nbody typo\n### Brand New\nbrand new body\n";
+    const result = await routeUpstreamFinding("proj", "stamp2", upstreamContent);
+
+    expect(result).not.toBeNull();
+    const written = fs.readFileSync(result!, "utf8");
+    expect(written).toContain("### Typo Recurrence");
+    expect(written).toContain("### Brand New");
+    expect(inboxFiles()).toHaveLength(1);
+    // Neither bumped an existing finding (there was none)
+  });
+
+  it("archived-negative: RECURRENCE-OF a title present ONLY in archive/ → treated as NEW, no counter touched", async () => {
+    const home = withTempHome();
+    const inboxDir = path.join(home, "reflections");
+    const archiveDir = path.join(inboxDir, "archive");
+    fs.mkdirSync(archiveDir, { recursive: true });
+    // Write an archived finding (NOT in the live inbox)
+    fs.writeFileSync(path.join(archiveDir, "old.md"), "### Archived Issue\nbody\n");
+    const originalArchive = fs.readFileSync(path.join(archiveDir, "old.md"), "utf8");
+
+    // Try to recur against the archived finding
+    const upstreamContent = "### Archived Issue\nRECURRENCE-OF: Archived Issue\nSaw this again\n";
+    const result = await routeUpstreamFinding("proj", "stamp3", upstreamContent);
+
+    // Should be treated as NEW (live inbox was empty → no match)
+    expect(result).not.toBeNull();
+    expect(inboxFiles()).toHaveLength(1); // new finding written
+    // Archive untouched
+    expect(fs.readFileSync(path.join(archiveDir, "old.md"), "utf8")).toBe(originalArchive);
+  });
+
+  it("mixed: one recurrence + one new finding → only new finding written, existing counter bumped", async () => {
+    const home = withTempHome();
+    const inboxDir = path.join(home, "reflections");
+    fs.mkdirSync(inboxDir, { recursive: true });
+    fs.writeFileSync(path.join(inboxDir, "live.md"), "### Known Gap\nbody known\n");
+
+    const upstreamContent = "### Known Gap Recurrence\nRECURRENCE-OF: Known Gap\nstill happening\n### Truly New\nnew finding body\n";
+    const result = await routeUpstreamFinding("proj", "stamp4", upstreamContent);
+
+    // One new file written (the new finding)
+    expect(result).not.toBeNull();
+    const written = fs.readFileSync(result!, "utf8");
+    expect(written).toContain("### Truly New");
+    expect(written).not.toContain("Known Gap Recurrence"); // recurrence not duplicated
+
+    // Known Gap counter bumped
+    const { findings } = await loadInbox(inboxDir);
+    const known = findings.find((f) => f.title === "Known Gap");
+    expect(known!.recurrence).toBe(2);
+  });
+});
+
+// ───────────────────────── prompt injection: inbox titles ─────────────────────────
+
+describe("cmdReflect task — inbox injection", () => {
+  it("prompt injection: a non-empty inbox injects each live finding's title into the reflect prompt", async () => {
+    const home = withTempHome();
+    const inboxDir = path.join(home, "reflections");
+    fs.mkdirSync(inboxDir, { recursive: true });
+    fs.writeFileSync(path.join(inboxDir, "find.md"), "### My Harness Gap\ndetails about the gap\n");
+
+    const { ctx, dir } = await ctxFor();
+    try {
+      const runId = "build-inject";
+      seedTrace(ctx, runId);
+      const rec = recorder();
+      await cmdReflect(ctx, { run: runId, runSessionFn: rec.fn });
+      const prompt = rec.calls[0]!.prompt;
+      expect(prompt).toContain("My Harness Gap"); // title injected
+      expect(prompt).toContain("RECURRENCE-OF"); // instruction injected
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prompt injection: an empty inbox injects nothing (behavior unchanged)", async () => {
+    withTempHome(); // fresh empty home — no inbox findings
+
+    const { ctx, dir } = await ctxFor();
+    try {
+      const runId = "build-empty-inject";
+      seedTrace(ctx, runId);
+      const rec = recorder();
+      await cmdReflect(ctx, { run: runId, runSessionFn: rec.fn });
+      const prompt = rec.calls[0]!.prompt;
+      // No inbox list injected
+      expect(prompt).not.toContain("CURRENT HARNESS INBOX");
+      // Core upstream.md instruction still present (not removed)
+      expect(prompt).toContain("upstream.md");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

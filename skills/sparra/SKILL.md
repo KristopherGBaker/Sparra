@@ -55,7 +55,7 @@ sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOU
 sparra build           # the autonomous generator↔evaluator loop
 sparra measure [dir]   # run measure.command → parse JSON metrics → diff vs baseline (compare-only; --set-baseline; --worktree)
 sparra reflect [--traces <glob-or-dir>] # propose prompt edits from build or role-run traces (--apply to accept)
-sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage per-finding harness reflections in ~/.sparra/reflections (SPARRA_HOME); --clear archives ALL
+sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage harness reflections in ~/.sparra/reflections (SPARRA_HOME), ranked by recurrence ×N DESC; --clear archives ALL
 sparra prompts status  # 3-way drift vs defaults: same/stale(newer default)/local(your edit)/conflict/drifted/missing
 sparra prompts sync    # adopt STALE only (safe); --role <r> or --all force-overwrite (discards edits); --dry-run
 # A `stale` (newer-default) prompt is surfaced once on the build AND `sparra eval`/`role run`/`sparra-loop` paths.
@@ -347,7 +347,9 @@ with failed assertion evidence + UN-RUN/no-signal ids; anything deeper → the r
   `role-run-*` traces into proposed prompt edits (`--traces <glob-or-dir>` overrides selection), and routes any
   **harness-level** findings (about Sparra itself, not this project's prompts) into a shared user-level
   inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides), each finding written as its own `###` section.
-  From the Sparra repo, `sparra reflect --upstream` lists every finding with a global 1-based index;
-  `--done <ids>` / `--wontdo <ids>` (comma-separated, optional `--reason "<text>"`) triage individual
-  findings into `archive/` and leave the un-triaged ones to resurface next run, while `--clear` archives
-  ALL files at once. Nothing is applied automatically.
+  Only material findings (those that caused a bounce, a wasted round, a wrong grade, burned turns, or a forced
+  override) are routed; recurring ones increment a `×N` counter on the existing inbox entry (no duplicates).
+  From the Sparra repo, `sparra reflect --upstream` lists every finding ranked by recurrence `×N` DESC with a
+  global 1-based index; `--done <ids>` / `--wontdo <ids>` (comma-separated, optional `--reason "<text>"`) triage
+  individual findings into `archive/` and leave the un-triaged ones to resurface next run, while `--clear`
+  archives ALL files at once. Nothing is applied automatically.

@@ -10,7 +10,7 @@ import { runSession, type RunResult, type RunSessionParams } from "../sdk/sessio
 import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { banner, color, detail, info, ok, raw, warn } from "../util/log.ts";
 import { ensureDir, exists, moveFile, readText, writeText } from "../util/io.ts";
-import { loadInbox, triageUpstream } from "./upstreamTriage.ts";
+import { loadInbox, triageUpstream, parseInbox, incrementFinding, type InboxFinding } from "./upstreamTriage.ts";
 import { appendLearning } from "../memory.ts";
 import { readHoldout, redactHoldout } from "../build/holdout.ts";
 
@@ -24,17 +24,96 @@ export function upstreamInboxDir(): string {
   return path.join(sparraHome(), "reflections");
 }
 
+/** One-line summary of a finding for prompt injection (first meaningful body line, max 80 chars). */
+function extractGist(text: string): string {
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || /^#{1,6}/.test(t) || t.startsWith("<!-- sparra-")) continue;
+    return t.length > 80 ? t.slice(0, 77) + "..." : t;
+  }
+  return "";
+}
+
 /**
- * Drop ONE harness-level reflection into the user-level inbox as a NEW, uniquely-named file. The name
- * carries a non-time random token (randomUUID) so two routings with an identical stamp NEVER collide —
- * this is the concurrency-safe alternative to appending to a shared file (no cross-process lock needed).
- * Returns the written path.
+ * Route harness-level findings from a reflector's `upstream.md` into the shared user-level inbox.
+ *
+ * Recurrence-aware: each `### section` in `content` is checked for a `RECURRENCE-OF: <title>` line.
+ * A matching LIVE inbox finding (trim+case-normalized; `archive/` excluded) gets its recurrence
+ * counter bumped in place — no duplicate file is written. Unmatched or genuinely-new findings are
+ * collected and written as a single new, uniquely-named file (recurrence 1). A run that produces
+ * ONLY recurrences adds NO new inbox file — returns null. Fail-safe: an unmatched `RECURRENCE-OF`
+ * tag is treated as a NEW finding (never silently dropped).
+ *
+ * Collision-safe: two concurrent new-finding routings with the same stamp still produce distinct
+ * files via a non-time randomUUID token (no cross-process lock needed).
  */
-export async function routeUpstreamFinding(project: string, stamp: string, content: string): Promise<string> {
+export async function routeUpstreamFinding(project: string, stamp: string, content: string): Promise<string | null> {
   const dir = upstreamInboxDir();
   await ensureDir(dir);
+
+  // Load the LIVE inbox (archive/ excluded) for recurrence matching.
+  const { findings: liveFindings } = await loadInbox(dir);
+  const normalize = (s: string) => s.trim().toLowerCase();
+  // First match wins for duplicate live titles.
+  const liveByTitle = new Map<string, InboxFinding>();
+  for (const f of liveFindings) {
+    const key = normalize(f.title);
+    if (!liveByTitle.has(key)) liveByTitle.set(key, f);
+  }
+
+  // Parse the content into finding segments.
+  const segments = parseInbox(content);
+
+  // newParts collects text segments + new finding segments for the output file.
+  // Recurrence findings are excluded (counter bumped in place; no duplicate written).
+  const newParts: string[] = [];
+  let hasNewFinding = false;
+  const incrementTargets: InboxFinding[] = [];
+
+  for (const seg of segments) {
+    if (seg.kind === "text") {
+      // Keep preamble/non-finding text so holdout-redacted context survives the route.
+      newParts.push(seg.text);
+      continue;
+    }
+    const recurrenceMatch = /^RECURRENCE-OF:\s*(.+)$/m.exec(seg.text);
+    if (recurrenceMatch) {
+      const claimedKey = normalize(recurrenceMatch[1]!);
+      const match = liveByTitle.get(claimedKey);
+      if (match) {
+        incrementTargets.push(match);
+        continue; // matched → increment existing finding, do not emit a new one
+      }
+      // Unmatched RECURRENCE-OF → fail-safe to NEW
+    }
+    newParts.push(seg.text);
+    hasNewFinding = true;
+  }
+
+  // Apply increments: group by file, apply sequentially to an in-memory string.
+  if (incrementTargets.length > 0) {
+    const byFile = new Map<string, InboxFinding[]>();
+    for (const t of incrementTargets) {
+      const list = byFile.get(t.file) ?? [];
+      list.push(t);
+      byFile.set(t.file, list);
+    }
+    for (const [file, targets] of byFile) {
+      const filePath = path.join(dir, file);
+      let fileContent = (await readText(filePath)) ?? "";
+      for (const t of targets) {
+        fileContent = incrementFinding(fileContent, t.segIndex);
+      }
+      await writeText(filePath, fileContent);
+    }
+  }
+
+  // Write new findings (if any) as a single uniquely-named file.
+  // If ALL findings were recurrences (only text segments remain), skip the new file.
+  if (!hasNewFinding) return null;
+  const newContent = newParts.join("\n");
   const file = path.join(dir, `${project}-${stamp}-${randomUUID().slice(0, 8)}.md`);
-  await writeText(file, content);
+  await writeText(file, newContent);
   return file;
 }
 
@@ -82,13 +161,11 @@ async function showUpstream(opts: {
     warn(`(empty inbox) no harness-level reflections in ${dir}.`);
     return;
   }
-  ok(`${files.length} reflection file(s), ${findings.length} finding(s) in ${dir}:`);
-  for (const file of files) {
-    process.stdout.write(`\n${color.bold("── " + file.file + " ──")}\n`);
-    for (const f of findings.filter((x) => x.file === file.file)) {
-      process.stdout.write(`${color.bold(`  [${f.globalIndex}] ${f.title}`)}\n`);
-      process.stdout.write(f.text + "\n");
-    }
+  ok(`${files.length} reflection file(s), ${findings.length} finding(s) in ${dir} (ranked by recurrence):`);
+  // Findings are already in recurrence-DESC order from loadInbox; globalIndex matches the display rank.
+  for (const f of findings) {
+    process.stdout.write(`\n${color.bold(`  [${f.globalIndex}] ×${f.recurrence} ${f.title}`)}\n`);
+    process.stdout.write(f.text + "\n");
   }
   if (opts.clear) {
     const archive = path.join(dir, "archive");
@@ -391,6 +468,19 @@ export async function cmdReflect(
         ...(nonEmptyDir(ctx.paths.measure) ? [`- Measure reports: ${path.relative(ctx.root, ctx.paths.measure)}/`] : []),
       ];
 
+  // Inject the live inbox findings for recurrence tagging (only when non-empty).
+  const { findings: liveInboxFindings } = await loadInbox(upstreamInboxDir());
+  let inboxBlock = "";
+  if (liveInboxFindings.length > 0) {
+    const list = liveInboxFindings
+      .map((f) => `  - "${f.title}": ${extractGist(f.text)}`)
+      .join("\n");
+    inboxBlock = `\nCURRENT HARNESS INBOX (existing live findings ×recurrence — avoid re-describing, tag recurrences instead):
+${list}
+
+For each finding you write to upstream.md: if it re-observes an existing inbox finding above, add a line \`RECURRENCE-OF: <exact title>\` in that \`### section\` (case- and whitespace-exact). An unmatched title is treated as a new finding — never dropped. Only report a harness finding when it materially changed this run's outcome (a bounce, a wasted/whipsaw round, a wrong grade, burned turns, a forced override) — skip speculation.`;
+  }
+
   const task = `Reflect on ${traceDir ? "the last build run" : "the selected interactive role-run traces"} to improve the role prompts.
 
 READ:
@@ -406,7 +496,7 @@ For EACH prompt you would change, WRITE the full improved prompt to:
 Also WRITE ${path.relative(ctx.root, outDir)}/SUMMARY.md explaining each change and why,
 with a short before/after for the key edits.
 
-If any finding is about the Sparra HARNESS itself (a config knob, a guard/holdout gap, a phase/role bug, a backend limit) rather than THIS project's prompts, do NOT make it a prompt edit — write EACH such finding as its own \`### <short title>\` section (with its rationale) in ${path.relative(ctx.root, outDir)}/upstream.md (a portable note routed to a shared inbox for the Sparra repo, where each section is triaged separately). Omit the file if there are no harness-level findings.
+If any finding is about the Sparra HARNESS itself (a config knob, a guard/holdout gap, a phase/role bug, a backend limit) rather than THIS project's prompts, do NOT make it a prompt edit — write EACH such finding as its own \`### <short title>\` section (with its rationale) in ${path.relative(ctx.root, outDir)}/upstream.md (a portable note routed to a shared inbox for the Sparra repo, where each section is triaged separately). Omit the file if there are no harness-level findings.${inboxBlock}
 
 Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
 
@@ -446,8 +536,12 @@ Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
     const content = (await readText(upstreamFile)) ?? "";
     if (content.trim()) {
       const dest = await routeUpstreamFinding(path.basename(ctx.root), stamp, redactHoldout(content, await readHoldout(ctx)));
-      ok(`Harness-level findings → ${dest}`);
-      info(`Triage them in the Sparra repo with ${color.bold("sparra reflect --upstream")}.`);
+      if (dest) {
+        ok(`Harness-level findings → ${dest}`);
+        info(`Triage them in the Sparra repo with ${color.bold("sparra reflect --upstream")}.`);
+      } else {
+        ok(`Harness-level findings → all matched existing inbox entries (recurrence counters updated).`);
+      }
     }
   }
 

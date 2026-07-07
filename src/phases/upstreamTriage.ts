@@ -13,6 +13,58 @@ import { appendText, exists, readDir, readText, removeFile, writeText } from "..
 export type Disposition = "done" | "wontdo";
 
 /**
+ * Marker stored inside a finding segment's text to track how many times the finding has been
+ * surfaced (re-observed). Must be on its own line and match this exact format.
+ * Backward-compat: a finding with NO marker is treated as recurrence 1 everywhere.
+ */
+const RECURRENCE_MARKER_RE = /^<!-- sparra-recurrence n=(\d+) -->$/m;
+
+/**
+ * Parse the recurrence count from a finding's text. Returns the marker's `n` when present, else 1
+ * for a legacy finding with no marker. A malformed or absent marker never throws — defaults to 1.
+ */
+export function parseRecurrence(text: string): number {
+  const m = RECURRENCE_MARKER_RE.exec(text);
+  if (!m) return 1;
+  const n = parseInt(m[1]!, 10);
+  return Number.isFinite(n) && Number.isInteger(n) && n >= 1 ? n : 1;
+}
+
+/**
+ * Increment a single finding's recurrence counter in-place within a file's raw content string.
+ * Pure — takes the file content and the segment index of the target finding; returns the updated
+ * content. Byte-faithful to every untouched line (other segments are never modified). A legacy
+ * marker-less finding gets its marker created at n=2; a marked finding is bumped by 1.
+ */
+export function incrementFinding(content: string, segIndex: number): string {
+  const segments = parseInbox(content);
+  const seg = segments[segIndex];
+  if (!seg || seg.kind !== "finding") return content; // defensive
+
+  const current = parseRecurrence(seg.text);
+  const newMarkerLine = `<!-- sparra-recurrence n=${current + 1} -->`;
+
+  let newText: string;
+  if (RECURRENCE_MARKER_RE.test(seg.text)) {
+    // Replace the existing marker line in place
+    newText = seg.text.replace(RECURRENCE_MARKER_RE, newMarkerLine);
+  } else if (/^###(?:\s|$)/.test(seg.text)) {
+    // Has a ### heading — insert the marker right after the heading line
+    const nl = seg.text.indexOf("\n");
+    if (nl < 0) {
+      newText = seg.text + "\n" + newMarkerLine;
+    } else {
+      newText = seg.text.slice(0, nl + 1) + newMarkerLine + "\n" + seg.text.slice(nl + 1);
+    }
+  } else {
+    // Whole-file fallback (no ### heading) — prepend the marker
+    newText = newMarkerLine + (seg.text.length > 0 ? "\n" + seg.text : "");
+  }
+
+  return emitSegments(segments.map((s, i) => (i === segIndex ? { ...s, text: newText } : s)));
+}
+
+/**
  * An ordered piece of an inbox file. `text` is the segment's lines joined with "\n"; concatenating all
  * segments' `text` with "\n" reproduces the original file byte-for-byte (no reflow/normalization), so
  * splicing a finding out and re-emitting the rest is byte-faithful for every untouched line.
@@ -78,7 +130,7 @@ export function emitSegments(segments: Segment[]): string {
 }
 
 export interface InboxFinding {
-  /** 1-based index across the whole inbox, in file-sorted then in-file order (matches the listing). */
+  /** 1-based index across the whole inbox, ranked by recurrence DESC (matches the listing). */
   globalIndex: number;
   file: string;
   /** Position of this finding within its file's segment list (for splicing). */
@@ -87,6 +139,8 @@ export interface InboxFinding {
   title: string;
   /** The verbatim finding block. */
   text: string;
+  /** How many times this finding has been surfaced (1 for a legacy marker-less finding). */
+  recurrence: number;
 }
 
 export interface InboxFile {
@@ -99,25 +153,31 @@ export interface LoadedInbox {
   findings: InboxFinding[];
 }
 
-/** Read every inbox `.md` file (sorted), parse it, and assign each finding a global 1-based index. */
+/**
+ * Read every inbox `.md` file (sorted), parse it, and assign each finding a global 1-based index.
+ * Findings are ranked by recurrence count DESC; ties keep file-sorted, in-file order (stable sort).
+ * The globalIndex matches the displayed index in `sparra reflect --upstream`.
+ */
 export async function loadInbox(dir: string): Promise<LoadedInbox> {
   const names = readDir(dir)
     .filter((f) => f.endsWith(".md"))
     .sort();
   const files: InboxFile[] = [];
   const findings: InboxFinding[] = [];
-  let g = 0;
   for (const name of names) {
     const content = (await readText(path.join(dir, name))) ?? "";
     const segments = parseInbox(content);
     files.push({ file: name, segments });
     segments.forEach((seg, segIndex) => {
       if (seg.kind === "finding") {
-        g++;
-        findings.push({ globalIndex: g, file: name, segIndex, title: seg.title ?? name, text: seg.text });
+        const recurrence = parseRecurrence(seg.text);
+        findings.push({ globalIndex: 0 /* assigned below */, file: name, segIndex, title: seg.title ?? name, text: seg.text, recurrence });
       }
     });
   }
+  // Rank by recurrence DESC; stable sort preserves original (file-sorted, in-file) order for ties.
+  findings.sort((a, b) => b.recurrence - a.recurrence);
+  findings.forEach((f, i) => { f.globalIndex = i + 1; });
   return { files, findings };
 }
 

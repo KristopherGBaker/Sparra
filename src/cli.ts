@@ -39,7 +39,7 @@ ${color.bold("Commands")}
   reflect [--apply] [--run <runId>] [--traces <glob-or-dir>]
                                                 self-improvement: propose/apply prompt edits from build or role-run traces
   reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "<text>"] [--clear]
-                                                list harness-level findings (global 1-based index) in the shared inbox (~/.sparra/reflections); --done/--wontdo triage individual findings to archive/; --clear archives ALL
+                                                list harness-level findings ranked by recurrence ×N DESC (global 1-based index) in the shared inbox (~/.sparra/reflections); --done/--wontdo triage individual findings to archive/; --clear archives ALL
   prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]
                                                 compare/sync .sparra/prompts with the built-in defaults; audit = concision review (--apply coverage-gated; --source default audits DEFAULT_PROMPTS, report-only)
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
