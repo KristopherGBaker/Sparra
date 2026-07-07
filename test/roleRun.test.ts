@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
+import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
 import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
@@ -3086,5 +3086,60 @@ describe("runRole — U-2: worktree-boundary threading (runner-level, Assertion 
 
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — brief remap to workspace (U-BR)", () => {
+  it("generator brief with <root>/... and .sparra/... paths: task assembled with workspace path + neutral marker", async () => {
+    const { ctx, dir } = await makeCtx(false); // dir = ctx.root
+    // A separate workspace directory (not a git worktree — the remap is path-only, no git needed)
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rr-br-"));
+
+    const brief =
+      `Implement the feature.\n` +
+      `See ${dir}/src/example.ts for reference.\n` +
+      `Contract is at ${dir}/.sparra/loop-br/u.contract.md — also bare: .sparra/loop-br/u.contract.md`;
+
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "generator",
+      brief,
+      workspace,
+      runSessionFn: rec.fn,
+      // Inject changedFilesFn so the no-progress probe doesn't spawn git on the plain tmpdir.
+      changedFilesFn: () => [path.join(workspace, "src/x.ts")],
+    });
+
+    const prompt = rec.calls[0]!.prompt;
+
+    // The root path is remapped to the workspace path.
+    expect(prompt).toContain(`${workspace}/src/example.ts`);
+    // The original root path must NOT appear as a path token.
+    expect(prompt).not.toContain(`${dir}/src/example.ts`);
+    // Both the absolute and bare .sparra references are neutralized.
+    expect(prompt).not.toContain(".sparra");
+    // The neutral marker is present instead.
+    expect(prompt).toContain(BRIEF_SPARRA_MARKER);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("in-place run (workspace === ctx.root): brief is byte-identical — no remap side-effects", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const brief = `Build at ${dir}/src/x.ts — contract at .sparra/loop/u.md`;
+
+    const rec = recorder();
+    // No workspace override → in-place run (workspace = ctx.root = dir)
+    await runRole({ ctx, roleKind: "generator", brief, runSessionFn: rec.fn });
+
+    const prompt = rec.calls[0]!.prompt;
+    // In-place: the original paths survive unchanged.
+    expect(prompt).toContain(`${dir}/src/x.ts`);
+    // The .sparra reference is also preserved (holdout check happens separately — no .sparra content here)
+    expect(prompt).toContain(".sparra/loop/u.md");
+
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

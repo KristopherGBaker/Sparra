@@ -865,6 +865,77 @@ export function validateBaselineCommand(req: RoleRunRequest): void {
   }
 }
 
+/** Neutral marker that replaces `.sparra/…` references in a conductor-authored brief — a short
+ *  note that the agreed contract is already inlined in the prompt; contains no `.sparra` path. */
+export const BRIEF_SPARRA_MARKER = "[the agreed contract is inlined in this prompt]";
+
+/**
+ * Pure helper: rewrites a conductor-authored brief so absolute paths resolve to the run's
+ * `workspace` instead of the (denied) main-repo `root`. No-op when `workspace` is falsy or
+ * `path.resolve(workspace) === path.resolve(root)` (the in-place case — brief is byte-identical).
+ *
+ * When `workspace !== root`:
+ * - Every `<root>/<rest>` absolute-path token → `<workspace>/<rest>`, anchored on the root +
+ *   separator boundary so a path that merely CONTAINS `root` as a non-prefix substring is
+ *   left untouched (e.g. `/other/Sparra-fork/file.ts` when root is `/abs/Sparra`).
+ * - `<root>/.sparra/…` or bare `.sparra/…` references → `BRIEF_SPARRA_MARKER` (a short neutral
+ *   phrase noting the contract is inlined; contains no `.sparra` path — `.sparra` is gitignored
+ *   and absent in the worktree).
+ *
+ * Idempotent; safe on a brief with no paths; only rewrites PATH tokens, never other prose.
+ */
+export function remapBriefForWorkspace(brief: string, root: string, workspace: string): string {
+  if (!workspace) return brief;
+  const absRoot = path.resolve(root);
+  const absWorkspace = path.resolve(workspace);
+  if (absRoot === absWorkspace) return brief;
+
+  // Escape a literal string for safe use inside a RegExp pattern.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedRoot = esc(absRoot);
+
+  // Characters that can appear in a file path token (RIGHT-side boundary): excludes whitespace
+  // AND common prose delimiters (backtick \x60, quotes, comma, semicolon, colon, parens,
+  // brackets, braces, pipe, angle-brackets) so a path inside "`.sparra/x.md`," stops at the
+  // closing backtick and comma — they are NOT consumed.
+  const pathChar = `[^\\s\\x60'",;:\\(\\)\\[\\]{}|<>]`;
+
+  // LEFT-boundary negative lookbehind: a path token must NOT be immediately preceded by a
+  // path-interior character (letter, digit, /, ., -, _, ~). If it IS preceded by one of these,
+  // the occurrence is embedded INSIDE a larger path token and must be left untouched.
+  // Examples fixed: "/tmp/abs/Sparra/x.ts" — the "/" before root is a path char → left alone.
+  //                 "foo.sparra/x.md"      — the "o" before ".sparra" is a path char → left alone.
+  const leftBoundary = `(?<![a-zA-Z0-9/._\\-~])`;
+
+  // Step 1: neutralize absolute <root>/.sparra/… references BEFORE the general root-rewrite —
+  // .sparra is gitignored and absent in the worktree; pointing there is holdout risk / pure noise.
+  // Left boundary guards against non-token occurrences; right pathChar stops at prose punctuation.
+  const absSparraRx = new RegExp(`${leftBoundary}${escapedRoot}[/\\\\]\\.sparra(?:[/\\\\]${pathChar}*)?`, "g");
+  let result = brief.replace(absSparraRx, BRIEF_SPARRA_MARKER);
+
+  // Step 2: neutralize bare .sparra/… relative references (e.g. ".sparra/loop-x/u.contract.md").
+  // Left boundary prevents matching "foo.sparra/..." (preceded by "o", a path-interior char).
+  const bareSparraRx = new RegExp(`${leftBoundary}\\.sparra\\/${pathChar}*`, "g");
+  result = result.replace(bareSparraRx, BRIEF_SPARRA_MARKER);
+
+  // Step 3: rewrite remaining <root>/<rest> → <workspace>/<rest>. Left boundary prevents matching
+  // root embedded inside a longer path (e.g. /tmp/abs/Sparra/x.ts → "/" before root is path-char).
+  //
+  // Idempotency fix (workspace ⊂ root): negative lookahead skips already-workspace-rooted paths
+  // on a second pass so there is no double-nesting.
+  let rootPrefixRx: RegExp;
+  if (absWorkspace.startsWith(absRoot + "/") || absWorkspace.startsWith(absRoot + "\\")) {
+    // workspace ⊂ root: combine left boundary + negative lookahead for full idempotency.
+    const workspaceSuffix = esc(absWorkspace.slice(absRoot.length)); // e.g. "/worktrees/u1"
+    rootPrefixRx = new RegExp(`${leftBoundary}${escapedRoot}(?!${workspaceSuffix})([/\\\\])`, "g");
+  } else {
+    rootPrefixRx = new RegExp(`${leftBoundary}${escapedRoot}([/\\\\])`, "g");
+  }
+  result = result.replace(rootPrefixRx, `${absWorkspace}$1`);
+
+  return result;
+}
+
 /**
  * Run a single Sparra role once, enforcing the holdout wall, and return a normalized
  * result (a verdict for the evaluator). The interactive surface never receives holdout
@@ -1109,6 +1180,11 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       brief = `Critique the proposed "done" contract for fidelity, proportionality, satisfiability, and gameability.`;
     } else throw new Error(`runRole(${roleKind}) requires a non-empty brief (brief or briefPath).`);
   }
+
+  // Remap conductor-authored brief paths to the run's workspace — rewrite <root>/... tokens to
+  // <workspace>/..., and neutralize .sparra/... refs (contract is already inlined in the prompt).
+  // Applied BEFORE task assembly and assertNoHoldoutLeak; a no-op for in-place runs (byte-identical).
+  brief = remapBriefForWorkspace(brief, ctx.root, workspace);
 
   // The runner — not the conductor — is the only context that reads holdout.
   const holdoutText = await resolveHoldout(req);
