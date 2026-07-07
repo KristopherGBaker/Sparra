@@ -85,7 +85,7 @@ describe("generateItem — writable-scratch session env (U-X #1/#3/#4)", () => {
     expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
     // Durable, worktree-local SwiftPM cache keyed on the workspace — NOT the ephemeral per-run scratch.
     expect(env.SWIFTPM_CACHE_DIR).toBe(swiftpmCacheDir(dir));
-    expect(env.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+    expect(path.basename(path.dirname(env.SWIFTPM_CACHE_DIR!))).toBe("sparra-swiftpm");
     expect(env.PATH).toBe(process.env.PATH); // unrelated process.env survives
     fs.rmSync(dir, { recursive: true, force: true });
   });

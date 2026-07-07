@@ -676,7 +676,7 @@ describe("runRole — writable-scratch env layer for sandboxed build sessions (U
     expect(env.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
     expect(env.CLANG_MODULE_CACHE_PATH).toMatch(/sprj-[0-9a-f]{8}/);
     expect(env.SWIFTPM_CACHE_DIR).toMatch(/sparra-swiftpm/);
-    expect(env.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/); // durable, not the ephemeral scratch
+    expect(path.basename(path.dirname(env.SWIFTPM_CACHE_DIR!))).toBe("sparra-swiftpm"); // durable, not the ephemeral scratch
     // Unrelated process.env survives the merge.
     expect(env.PATH).toBe(process.env.PATH);
     fs.rmSync(dir, { recursive: true, force: true });

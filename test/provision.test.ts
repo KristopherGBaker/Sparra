@@ -189,7 +189,11 @@ describe("swiftpmCacheDir — durable, worktree-local derivation", () => {
     expect(swiftpmCacheDir("/wt/one")).toBe(a); // deterministic — two calls agree
     expect(swiftpmCacheDir("/wt/two")).not.toBe(a); // keyed on the worktree path
     expect(a).toMatch(/sparra-swiftpm/);
-    expect(a).not.toMatch(/sprj-[0-9a-f]{8}/); // NOT the ephemeral clang/TMPDIR scratch
+    // STRUCTURAL: the durable cache lives under a "sparra-swiftpm" parent segment —
+    // immune to an ambient TMPDIR that itself contains a sprj-* token.
+    expect(path.basename(path.dirname(a))).toBe("sparra-swiftpm"); // NOT the ephemeral clang/TMPDIR scratch
+    // NEGATIVE FIXTURE: a synthetic ephemeral path must FAIL the same predicate, proving it discriminates.
+    expect(path.basename(path.dirname("/tmp/sprj-deadbeef/swiftpm"))).not.toBe("sparra-swiftpm");
   });
 });
 
@@ -210,7 +214,7 @@ describe("SwiftPM durable cache continuity (U-X #3)", () => {
       expect(sessB.SWIFTPM_CACHE_DIR).toBe(sessA.SWIFTPM_CACHE_DIR);
       // The ephemeral clang/TMPDIR scratch, by contrast, IS fresh per session (regenerable).
       expect(sessB.TMPDIR).not.toBe(sessA.TMPDIR);
-      expect(sessA.SWIFTPM_CACHE_DIR).not.toMatch(/sprj-[0-9a-f]{8}/);
+      expect(path.basename(path.dirname(sessA.SWIFTPM_CACHE_DIR!))).toBe("sparra-swiftpm");
       // The durable cache is materialized on disk (ensureSwiftpmCacheDir), ready for an offline build.
       expect(fs.existsSync(ensureSwiftpmCacheDir(wt))).toBe(true);
     } finally {
