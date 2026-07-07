@@ -3,11 +3,15 @@ import type { Ctx } from "../context.ts";
 import { newRunId } from "../context.ts";
 import { loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
-import { readOnlyGuard, ensureAutoProbed } from "../sdk/guard.ts";
+import type { RunResult, RunSessionParams } from "../sdk/session.ts";
+import { singleFileGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { banner, info, ok, warn } from "../util/log.ts";
 import { exists } from "../util/io.ts";
 
-export async function cmdOrient(ctx: Ctx, opts: { light?: boolean }): Promise<void> {
+export async function cmdOrient(
+  ctx: Ctx,
+  opts: { light?: boolean; runSessionFn?: (p: RunSessionParams) => Promise<RunResult> } = {}
+): Promise<void> {
   banner("Phase 0 · ORIENT");
   if (ctx.store.data.mode === "greenfield" && !opts.light) {
     warn("Greenfield project — orient is normally skipped. Running a light pass over any scaffolding.");
@@ -25,7 +29,11 @@ export async function cmdOrient(ctx: Ctx, opts: { light?: boolean }): Promise<vo
     : `Map this existing codebase thoroughly and write the result to CODEBASE_MAP.md at ${ctx.paths.codebaseMap}. Root is ${ctx.root}. Follow the structure in your instructions exactly, cite file paths, and include the exact test command(s).`;
 
   info(`Mapping repository with ${role.model}…`);
-  const res = await runSession({
+  // The orienter reads the repo but must WRITE exactly one file (CODEBASE_MAP.md), so it runs under a
+  // single-file writer guard (not read-only) with the Write/Edit tools scoped to that path — every
+  // other write and any Bash mutation stays blocked.
+  const run = opts.runSessionFn ?? runSession;
+  const res = await run({
     role: "orienter",
     prompt: task,
     systemPrompt: system,
@@ -33,8 +41,8 @@ export async function cmdOrient(ctx: Ctx, opts: { light?: boolean }): Promise<vo
     model: role.model,
     effort: role.effort,
     cwd: ctx.root,
-    tools: ["Read", "Glob", "Grep", "Bash"],
-    ...readOnlyGuard(ctx),
+    tools: ["Read", "Glob", "Grep", "Bash", "Write", "Edit"],
+    ...singleFileGuard(ctx, ctx.paths.codebaseMap),
     maxTurns: ctx.config.build.maxTurnsPerSession,
     traceDir,
     traceSeq: 1,

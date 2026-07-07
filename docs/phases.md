@@ -13,7 +13,7 @@ The **only** edge that advances toward building is the human-run `freeze`. Nothi
 ---
 
 ## Phase 0 — ORIENT (existing projects only)
-`sparra orient` runs a read-only agent that maps the repo — architecture, module boundaries, the conventions/idioms **actually in use** (with file:line evidence), the build system, how tests run, CI, and the **seams** where new work attaches — into **`CODEBASE_MAP.md`**. Greenfield skips this. This map is what lets planning answer its own questions instead of interrupting you.
+`sparra orient` runs an agent that reads the repo and maps it — architecture, module boundaries, the conventions/idioms **actually in use** (with file:line evidence), the build system, how tests run, CI, and the **seams** where new work attaches — into **`CODEBASE_MAP.md`**. It runs under a single-file writer guard: it may read anything but the **only** file it can write is `CODEBASE_MAP.md` (every other write and any Bash mutation is blocked). Greenfield skips this. This map is what lets planning answer its own questions instead of interrupting you.
 
 ## Phase A — COLLABORATIVE PLANNING (interactive, human-led)
 `sparra plan` opens an interview that **co-edits `PLAN.md` with you**:
