@@ -191,4 +191,71 @@ describe("build-cache exclusion (isBuildCachePath + guard integration)", () => {
     expect(mutated).toEqual([]);
     expect(ctx.files.get(".build/x.o")!.toString()).toBe("V2"); // left as rebuilt, not reverted to V1
   });
+
+  describe(".claude/skills scratch exclusion", () => {
+    it("isBuildCachePath returns true for .claude/skills paths (direct and nested)", () => {
+      // Direct: tool writes .claude/skills/aseprite during exercise.
+      expect(isBuildCachePath(".claude/skills/aseprite")).toBe(true);
+      // Nested file inside skill dir.
+      expect(isBuildCachePath(".claude/skills/aseprite/tool.json")).toBe(true);
+      // Consecutive segment run appearing deeper in the path.
+      expect(isBuildCachePath("some/dir/.claude/skills/x")).toBe(true);
+      // Windows-style separators normalize correctly.
+      expect(isBuildCachePath(".claude\\skills\\aseprite")).toBe(true);
+    });
+
+    it("isBuildCachePath returns false for other .claude/ paths — only skills scratch is whitelisted", () => {
+      // Settings file — must remain on the integrity surface.
+      expect(isBuildCachePath(".claude/settings.json")).toBe(false);
+      // Arbitrary file under .claude/ — not whitelisted.
+      expect(isBuildCachePath(".claude/foo.ts")).toBe(false);
+      // Hooks directory — not whitelisted.
+      expect(isBuildCachePath(".claude/hooks/x.sh")).toBe(false);
+    });
+
+    it("isBuildCachePath returns false for false-positive candidates (wrong segment name/boundary)", () => {
+      // Segment is 'skills-evil', not exactly 'skills'.
+      expect(isBuildCachePath(".claude/skills-evil/x")).toBe(false);
+      // Leading segment is 'foo.claude', not '.claude'.
+      expect(isBuildCachePath("foo.claude/skills/x")).toBe(false);
+    });
+
+    it("existing whitelisted paths still return true; ordinary source paths still return false", () => {
+      // Existing whitelist entries must be unaffected.
+      expect(isBuildCachePath(".swiftpm-home/x")).toBe(true);
+      expect(isBuildCachePath("a/.build/x")).toBe(true);
+      expect(isBuildCachePath("x/DerivedData/y")).toBe(true);
+      expect(isBuildCachePath("p/.cache/clang/ModuleCache/z")).toBe(true);
+      // Ordinary source.
+      expect(isBuildCachePath("src/foo.ts")).toBe(false);
+      expect(isBuildCachePath("README.md")).toBe(false);
+    });
+
+    it("a .claude/skills/… file written during exercise is not snapshotted, not reverted, not reported", () => {
+      const ctx = fakeDeps(WS, { "src/App.swift": "APP" }, ["src/App.swift"]);
+      const snap = snapshotArtifact(WS, ctx.deps);
+      // Skill scratch injected by a tool during exercise.
+      ctx.files.set(".claude/skills/aseprite", Buffer.from("skill-data"));
+      const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
+      // No integrity violation — skills scratch is whitelisted.
+      expect(mutated).toEqual([]);
+      // The file is left in place (not removed).
+      expect(ctx.files.has(".claude/skills/aseprite")).toBe(true);
+      expect(ctx.removes).toEqual([]);
+    });
+
+    it("a .claude/settings.json mutation alongside skills scratch reports only the settings file", () => {
+      const ctx = fakeDeps(WS, { "src/App.swift": "APP", ".claude/settings.json": "CFG" }, ["src/App.swift", ".claude/settings.json"]);
+      const snap = snapshotArtifact(WS, ctx.deps);
+      // Settings tampered with — MUST be detected.
+      ctx.files.set(".claude/settings.json", Buffer.from("HACKED"));
+      // Skills scratch added — MUST be ignored.
+      ctx.files.set(".claude/skills/aseprite", Buffer.from("skill"));
+      const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
+      expect(mutated).toEqual([".claude/settings.json"]);
+      // Settings reverted; skills scratch left alone.
+      expect(ctx.files.get(".claude/settings.json")!.toString()).toBe("CFG");
+      expect(ctx.files.has(".claude/skills/aseprite")).toBe(true);
+    });
+  });
 });

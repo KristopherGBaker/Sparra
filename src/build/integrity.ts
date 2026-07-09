@@ -43,7 +43,10 @@ export interface SourceSnapshot {
  *   - `.cache/clang/ModuleCache` as ANY path segment run (matches `**​/.cache/clang/ModuleCache/**`);
  *   - `.build` as ANY path segment (matches `**​/.build/**` and a leading `.build/`);
  *   - `DerivedData` as ANY path segment (matches `**​/DerivedData/**`);
- *   - a leading `.swiftpm-home/` prefix.
+ *   - a leading `.swiftpm-home/` prefix;
+ *   - `.claude/skills` as ANY consecutive segment run (matches `**​/.claude/skills/**`) — tool-generated
+ *     skill scratch (e.g. `.claude/skills/aseprite`) written during exercise. Only the `skills`
+ *     sub-dir is whitelisted, NOT all of `.claude/` — `.claude/settings.json` is still on the surface.
  * Separators are normalized so it works on the forward-slash relpaths git emits (and Windows `\`).
  */
 export function isBuildCachePath(rel: string): boolean {
@@ -54,6 +57,10 @@ export function isBuildCachePath(rel: string): boolean {
   // `.cache/clang/ModuleCache` as a consecutive segment run.
   for (let i = 0; i + 2 < segs.length; i++) {
     if (segs[i] === ".cache" && segs[i + 1] === "clang" && segs[i + 2] === "ModuleCache") return true;
+  }
+  // `.claude/skills` as a consecutive segment run — tool-generated skills scratch only.
+  for (let i = 0; i + 1 < segs.length; i++) {
+    if (segs[i] === ".claude" && segs[i + 1] === "skills") return true;
   }
   return false;
 }
