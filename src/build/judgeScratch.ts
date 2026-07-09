@@ -155,7 +155,7 @@ export function sandboxCapabilityNotes(args: {
 }): DeniedCapability[] {
   if (!args.hasOsSandbox) return [];
   if (args.sandboxMode === "danger-full-access") return [];
-  return [
+  const caps: DeniedCapability[] = [
     {
       capability: "unix-domain-socket-listen",
       detail:
@@ -164,6 +164,16 @@ export function sandboxCapabilityNotes(args: {
         `CLI smoke that IPCs over a .pipe, or any dev-server bind, cannot run under this ${args.sandboxMode} judge.`,
     },
   ];
+  if (args.sandboxMode === "read-only") {
+    caps.push({
+      capability: "vitest-vite-temp-write",
+      detail:
+        `vitest/vite writes cache files to the read-only checkout's node_modules/.vite-temp/ ` +
+        `(e.g. vitest.config.ts.timestamp-*), producing EPERM. Classify as a sandbox limit ` +
+        `(UN-RUN / environment-blocked) — not a code FAIL; do not re-prove or request a carve-out.`,
+    });
+  }
+  return caps;
 }
 
 /**

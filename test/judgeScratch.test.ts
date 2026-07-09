@@ -155,4 +155,49 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
     expect(text).toMatch(/unix-domain-socket-listen/);
     expect(text).toMatch(/UN-RUN/);
   });
+
+  describe("vitest-vite-temp-write entry", () => {
+    it("is PRESENT for read-only + hasOsSandbox=true, regardless of scratchEnabled", () => {
+      for (const scratchEnabled of [true, false]) {
+        const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled });
+        expect(caps.map((c) => c.capability)).toContain("vitest-vite-temp-write");
+        const entry = caps.find((c) => c.capability === "vitest-vite-temp-write")!;
+        // Detail must cite the concrete path so a presence-only stub cannot pass.
+        expect(entry.detail).toMatch(/node_modules\/.vite-temp/);
+        // Must instruct judge to classify as sandbox limit, not code FAIL.
+        expect(entry.detail.toLowerCase()).toMatch(/un-run|environment-blocked/);
+        expect(entry.detail.toLowerCase()).toMatch(/not a code fail/);
+      }
+    });
+
+    it("is ABSENT for workspace-write (writes to checkout are allowed)", () => {
+      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true });
+      expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
+    });
+
+    it("is ABSENT with no OS sandbox (Claude judge)", () => {
+      const caps = sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: "read-only", scratchEnabled: false });
+      expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
+    });
+
+    it("is ABSENT for danger-full-access", () => {
+      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "danger-full-access", scratchEnabled: true });
+      expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
+    });
+
+    it("appears in rendered text for read-only judge under the same header", () => {
+      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled: false });
+      expect(text).toMatch(/vitest-vite-temp-write/);
+      expect(text).toMatch(/node_modules\/.vite-temp/);
+      // Rendered under the same KNOWN SANDBOX CAPABILITY LIMITS header.
+      expect(text).toMatch(/KNOWN SANDBOX CAPABILITY LIMITS/);
+    });
+
+    it("does NOT appear in rendered text for workspace-write judge", () => {
+      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true });
+      expect(text).not.toMatch(/vitest-vite-temp-write/);
+      // UDS entry is still present for workspace-write.
+      expect(text).toMatch(/unix-domain-socket-listen/);
+    });
+  });
 });
