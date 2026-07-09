@@ -308,7 +308,9 @@ Beyond the per-project `.sparra/`, reflect keeps a **user-level inbox** for find
 itself* — `~/.sparra/reflections/` (override the root with the **`SPARRA_HOME`** env var). Each
 `sparra reflect` that surfaces a harness-level finding drops a uniquely-named file there, with each
 finding under its own `###` heading. From the Sparra repo, `sparra reflect --upstream` lists every
-finding with a global 1-based index; triage them individually with `--done <ids>` / `--wontdo <ids>`
+finding **ranked by recurrence** — a finding that recurs across runs bumps a `×N` counter instead of
+duplicating, and higher `×N` sorts first — each with a global 1-based index; triage them individually
+with `--done <ids>` / `--wontdo <ids>`
 (comma-separated indices from the listing; optional `--reason "<text>"`), which moves each marked
 finding to `archive/<file>` under a disposition marker and leaves the un-triaged ones to resurface next
 run. `--upstream --clear` (no triage flags) archives ALL inbox files at once. See [phases](phases.md).

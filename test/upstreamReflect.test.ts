@@ -266,7 +266,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // non-reflector prompts (e.g. generator allowVerifyBash) without bumping this sentinel — those
     // cycles had a stale sentinel. This update regenerates it from the current worktree state.
     // To regenerate: run the suite; the received hash in the failure IS the correct new value.
-    expect(h.digest("hex")).toBe("88290d72d6ce9447079ad5d6303dfb75d25f0a273fa4fd519a50ff1e0dcbdeda");
+    // Regenerated 2026-07-09 (loop-0709 prompt-fold): folded 5 reflect-earned lessons into
+    // DEFAULT_PROMPTS — evaluator (a violated UNNUMBERED contract clause / missed mandated sweep goes
+    // in `blocking`, not notes, even on a pass), contract-evaluator (stale-claim sweep must land as a
+    // NUMBERED zero-stale-hits assertion; explore from cwd via relative paths — root-anchored search is
+    // blocked, an abs path from the repo name is permission-denied), generator (RUN the sweep grep — the
+    // "known surfaces" list is a floor; a diff in a file Scope does NOT name needs a `deviations` entry).
+    expect(h.digest("hex")).toBe("53f059cce6835237d0bb5f3809e05a18bfc868f3df24e0ea0b0d327ca6a32779");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
