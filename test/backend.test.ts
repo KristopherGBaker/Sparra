@@ -371,6 +371,117 @@ describe("consumeQuery — terminal results survive the SDK's trailing exit-thro
     expect(ctx.result.subtype).toBe("unknown");
   });
 
+  // U-2 (a): auth pre-result throw → limitHit.kind="auth", no reject.
+  // Drives the NEW !gotResult catch path via a throwing fakeStream — distinct from the existing
+  // limitFromErrors unit tests (which test the classifier directly, not the intercept point).
+  describe("consumeQuery — auth pre-result throw → limitHit.kind=auth, no reject (U-2 assertion a)", () => {
+    const authSignatures = [
+      "401 Unauthorized: Missing bearer or basic authentication",
+      "Error: Not logged in · please run /login",
+      "invalid api key provided by the caller",
+      "authentication failed with the provider",
+      "authentication required to use this endpoint",
+    ];
+
+    for (const sig of authSignatures) {
+      it(`auth sig "${sig.slice(0, 45)}…" → limitHit.kind=auth, no throw`, async () => {
+        const ctx = makeCtx();
+        // Stream throws BEFORE any result message (gotResult remains false).
+        const throwingStream: AsyncIterable<any> = {
+          async *[Symbol.asyncIterator]() { throw new Error(sig); },
+        };
+        const r = await consumeQuery(throwingStream, ctx);
+        expect(r.limitHit?.kind).toBe("auth");
+        expect(r.errors.join(" ")).toContain(sig);
+        // No throw — the promise resolves.
+      });
+    }
+
+    it("negative: non-auth pre-result throw (spawn ENOENT) still REJECTS — no bogus limitHit", async () => {
+      // This is the existing :364 behavior — must not be altered by the auth intercept.
+      const ctx = makeCtx();
+      const throwingStream: AsyncIterable<any> = {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "system", subtype: "init", session_id: "s", model: "m", uuid: "u1" };
+          throw new Error("spawn ENOENT: /usr/bin/claude");
+        },
+      };
+      await expect(consumeQuery(throwingStream, ctx)).rejects.toThrow(/spawn ENOENT/);
+      expect(ctx.result.limitHit).toBeUndefined(); // no bogus limitHit
+    });
+
+    it("adversarial: a rate-limit pre-result throw does NOT match auth — still rejects (only auth → limitHit)", async () => {
+      // The contract is auth-only; a rate-limit pre-result throw is a genuine error, not an auth failure.
+      const ctx = makeCtx();
+      const throwingStream: AsyncIterable<any> = {
+        async *[Symbol.asyncIterator]() { throw new Error("rate limit exceeded (429)"); },
+      };
+      await expect(consumeQuery(throwingStream, ctx)).rejects.toThrow(/rate limit/);
+      expect(ctx.result.limitHit).toBeUndefined();
+    });
+  });
+
+  // U-2 (b): 0-turn empty completion → emptyCompletion:true + limitHit.
+  // Drives the NEW markEmptyCompletion-equivalent path at the end of consumeQuery.
+  describe("consumeQuery — 0-turn empty completion → emptyCompletion + limitHit (U-2 assertion b)", () => {
+    it("ok:true + numTurns:0 + empty resultText → emptyCompletion:true, limitHit set, ok:false", async () => {
+      const ctx = makeCtx();
+      // A success result with 0 turns and no output text.
+      const r = await consumeQuery(
+        fakeStream([
+          { type: "system", subtype: "init", session_id: "s-empty", model: "m", uuid: "u1" },
+          { type: "result", subtype: "success", is_error: false, result: "", num_turns: 0, total_cost_usd: 0, session_id: "s-empty", uuid: "u2" },
+        ]),
+        ctx,
+      );
+      expect(r.emptyCompletion).toBe(true);
+      expect(r.limitHit).toBeDefined();
+      expect(r.ok).toBe(false); // promoted to infra failure
+      expect(r.errors.join(" ")).toMatch(/empty completion/i);
+    });
+
+    it("ok:true + numTurns:0 + whitespace-only resultText → also promoted (whitespace counts as empty)", async () => {
+      const ctx = makeCtx();
+      const r = await consumeQuery(
+        fakeStream([
+          { type: "system", subtype: "init", session_id: "s-ws", model: "m", uuid: "u1" },
+          { type: "result", subtype: "success", is_error: false, result: "   \n  ", num_turns: 0, total_cost_usd: 0, session_id: "s-ws", uuid: "u2" },
+        ]),
+        ctx,
+      );
+      expect(r.emptyCompletion).toBe(true);
+      expect(r.limitHit).toBeDefined();
+    });
+
+    it("negative: normal success (numTurns>=1, non-empty text) → NOT promoted (no emptyCompletion, no limitHit)", async () => {
+      const ctx = makeCtx();
+      const r = await consumeQuery(
+        fakeStream([
+          { type: "system", subtype: "init", session_id: "s-real", model: "m", uuid: "u1" },
+          { type: "result", subtype: "success", is_error: false, result: "real answer", num_turns: 1, total_cost_usd: 0.5, session_id: "s-real", uuid: "u2" },
+        ]),
+        ctx,
+      );
+      expect(r.emptyCompletion).toBeUndefined();
+      expect(r.limitHit).toBeUndefined();
+      expect(r.ok).toBe(true);
+      expect(r.resultText).toBe("real answer");
+    });
+
+    it("negative: numTurns>=1 + empty text → NOT promoted (turns happened, content may have been in tools not result text)", async () => {
+      const ctx = makeCtx();
+      const r = await consumeQuery(
+        fakeStream([
+          { type: "system", subtype: "init", session_id: "s-t1e", model: "m", uuid: "u1" },
+          { type: "result", subtype: "success", is_error: false, result: "", num_turns: 1, total_cost_usd: 0.1, session_id: "s-t1e", uuid: "u2" },
+        ]),
+        ctx,
+      );
+      expect(r.emptyCompletion).toBeUndefined();
+      expect(r.ok).toBe(true); // genuine run with 1 turn but no result text — still a valid outcome
+    });
+  });
+
   it("success control: init + success result ⇒ ok:true, resultText populated, no throw", async () => {
     const ctx = makeCtx();
     const r = await consumeQuery(

@@ -208,8 +208,34 @@ export async function consumeQuery(
   } catch (err) {
     // Trailing exit-throw after a terminal result (see the ordering note above): the populated
     // result is the real, resumable outcome — return it rather than reject. If NO terminal result
-    // was consumed (genuine pre-result failure: spawn error, abort, etc.) the error propagates.
-    if (!gotResult) throw err;
+    // was consumed (genuine pre-result failure: spawn error, abort, etc.) inspect the error first.
+    if (!gotResult) {
+      // Auth/transport failure before ANY result — the session never ran. Classify it as a
+      // limitHit.kind="auth" so the build loop retries (INFRA path) rather than re-throwing
+      // and letting evaluate.ts synthesize a forced-FAIL verdict. Non-auth pre-result throws
+      // (spawn ENOENT, real bugs) still propagate unchanged to preserve existing behavior.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const authHit = limitFromErrors([errMsg]);
+      if (authHit?.kind === "auth") {
+        result.limitHit = authHit;
+        result.errors = [errMsg];
+        return result;
+      }
+      throw err;
+    }
+  }
+
+  // "Never ran" predicate: ok:true + numTurns===0 + no result text — the SDK returned a
+  // success message but no model turns were actually executed (provider unavailability or a
+  // usage/session-window problem). Promote to limitHit + emptyCompletion:true so the build
+  // loop retries (INFRA path) rather than scoring this as a zero verdict downstream.
+  if (result.ok && result.numTurns === 0 && !result.resultText.trim()) {
+    result.ok = false;
+    result.errors.push(
+      "Claude returned an empty completion (0 turns, no output) — likely provider unavailability or a usage/session limit."
+    );
+    result.limitHit = { kind: "session", raw: result.errors[result.errors.length - 1]! };
+    result.emptyCompletion = true;
   }
 
   return result;

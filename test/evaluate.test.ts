@@ -855,6 +855,157 @@ describe("evaluateItem — assertion-anchored functionality cap (Q4, rubric.anch
   });
 });
 
+describe("evaluateItem — infra limitHit skips verdict file write and is surfaced (U-2 assertion 3/c)", () => {
+  /** Build a RunResult that carries a limitHit (simulating a backend auth/infra failure). */
+  function infraResult(kind: "auth" | "session" | "rate" = "auth"): RunResult {
+    return {
+      ok: false,
+      subtype: "error",
+      resultText: "",
+      sessionId: "infra-session",
+      costUsd: 0,
+      tokens: 0,
+      numTurns: 0,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: ["401 Unauthorized"],
+      limitHit: { kind, raw: `http ${kind === "auth" ? "401" : "limit"}` },
+      tracePath: "",
+    };
+  }
+
+  /** Build a RunResult for a model that RAN but produced garbage output (numTurns>=1, no limitHit). */
+  function ranButGarbageResult(): RunResult {
+    return {
+      ok: true,
+      subtype: "success",
+      resultText: "This is not valid JSON verdict output at all — no scores block here.",
+      sessionId: "ran-session",
+      costUsd: 0.01,
+      tokens: 200,
+      numTurns: 2,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: [],
+      tracePath: "",
+    };
+  }
+
+  it("limitHit set → verdict file ABSENT + limitHit surfaced in output (primary fail-on-revert guard)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1,
+      runSessionFn: async () => infraResult("auth"),
+      integrityDeps: cleanIntegrityDeps,
+    });
+    // File must NOT be written — infra failure is not a real verdict round.
+    expect(fs.existsSync(ctx.paths.verdictFile(ITEM.id, 1))).toBe(false);
+    // limitHit must be surfaced so build.ts onLimit gives the round back.
+    expect(out.limitHit?.kind).toBe("auth");
+    // The returned verdict is a placeholder — it must NOT carry "no verdict parsed" notes
+    // that would mislead feedback, and it MUST carry notes marking it as infra-retry.
+    expect(out.verdict.notes).toBe("infra-retry");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("emptyCompletion set (0-turn silent success) → verdict file ABSENT + limitHit surfaced", async () => {
+    const { ctx, dir } = await makeCtx();
+    const emptyCompResult: RunResult = {
+      ok: false,
+      subtype: "error",
+      resultText: "",
+      sessionId: "ec-session",
+      costUsd: 0,
+      tokens: 0,
+      numTurns: 0,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: ["Claude returned an empty completion (0 turns, no output) — likely provider unavailability or a usage/session limit."],
+      limitHit: { kind: "session", raw: "empty completion" },
+      emptyCompletion: true,
+      tracePath: "",
+    };
+    const out = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1,
+      runSessionFn: async () => emptyCompResult,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(fs.existsSync(ctx.paths.verdictFile(ITEM.id, 1))).toBe(false);
+    expect(out.limitHit).toBeDefined();
+    expect(out.verdict.notes).toBe("infra-retry");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("numTurns===0 (no limitHit set explicitly) → verdict file ABSENT (0-turn is always infra)", async () => {
+    const { ctx, dir } = await makeCtx();
+    // A pathological case: ok:false, 0 turns, no limitHit from the backend.
+    const zeroTurnResult: RunResult = {
+      ok: false,
+      subtype: "error",
+      resultText: "",
+      sessionId: "zt-session",
+      costUsd: 0,
+      tokens: 0,
+      numTurns: 0,
+      hitMaxTurns: false,
+      hitBudget: false,
+      errors: [],
+      tracePath: "",
+    };
+    const out = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1,
+      runSessionFn: async () => zeroTurnResult,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(fs.existsSync(ctx.paths.verdictFile(ITEM.id, 1))).toBe(false);
+    expect(out.verdict.notes).toBe("infra-retry");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("CONTRAST: model ran (numTurns>=1) but produced unparseable output + no limitHit → verdict file PRESENT (forced FAIL)", async () => {
+    // This is the "model ran garbage" case — a real behavioral fail that must still count as a round.
+    const { ctx, dir } = await makeCtx();
+    ctx.config.build.jsonReask = false; // disable re-ask so we fall straight through to forced-FAIL
+    const out = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1,
+      runSessionFn: async () => ranButGarbageResult(),
+      integrityDeps: cleanIntegrityDeps,
+    });
+    // File MUST be written — this is a real fail round.
+    expect(fs.existsSync(ctx.paths.verdictFile(ITEM.id, 1))).toBe(true);
+    expect(out.limitHit).toBeUndefined();
+    expect(out.verdict.notes).toBe("no verdict parsed"); // the existing forced-FAIL note
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a parseable FAIL verdict (model ran + bad scores) is unaffected — file PRESENT even with low scores", async () => {
+    // Genuine behavioral fail from a model that actually ran — must not be swallowed.
+    const { ctx, dir } = await makeCtx();
+    const failJson =
+      '```json\n{"assertions":[{"id":1,"pass":false,"evidence":"broken"}],' +
+      '"scores":{"design":20,"originality":20,"craft":20,"functionality":20},' +
+      '"verdict":"fail","blocking":["it is broken"],"notes":"genuine fail"}\n```';
+    const out = await evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1,
+      runSessionFn: async (): Promise<RunResult> => ({
+        ok: true, subtype: "success", resultText: failJson, sessionId: "f", costUsd: 0.01,
+        tokens: 100, numTurns: 3, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      }),
+      integrityDeps: cleanIntegrityDeps,
+    });
+    expect(fs.existsSync(ctx.paths.verdictFile(ITEM.id, 1))).toBe(true);
+    expect(out.limitHit).toBeUndefined();
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.notes).toBe("genuine fail"); // parsed from the model's output, not synthesized
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("evaluateItem — run-scoped verdict files (collision-free across runs, U-B assertion 5)", () => {
   async function runWith(ctx: Ctx, dir: string, runId: string | undefined, round = 1) {
     return evaluateItem({

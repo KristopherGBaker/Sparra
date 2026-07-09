@@ -2180,3 +2180,68 @@ describe("cmdBuild — second-opinion gate (opt-in)", () => {
     expect(cfg.roles.evaluatorSecond).toBeUndefined();
   });
 });
+
+describe("cmdBuild — evaluator limitHit takes INFRA-RETRY path: round given back (U-2 assertion 4/d)", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+
+  it("evaluator limitHit → round given back (no weightedTotal:0 applied to st.lastScore); second attempt passes", async () => {
+    // Wire autoRestart + fallback so the onLimit handler fires without sleeping.
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 3 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 10 };
+    // A fallback model ensures onLimit returns "retry" immediately (no sleep needed).
+    ctx.config.roles.evaluator = { model: "primary-eval", fallback: { model: "fallback-eval" } };
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      // First evaluator call returns limitHit (auth); second call passes normally.
+      evaluateItem: async () => {
+        evalCalls++;
+        if (evalCalls === 1) {
+          // Infra result — injected directly (no live model call); simulates the auth intercept.
+          return evalOut(false, { limitHit: { kind: "auth", raw: "http 401" } as LimitHit });
+        }
+        return evalOut(true); // genuine pass on retry
+      },
+      waitForLimit: async () => {}, // no-op wait so the test runs instantly
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    // Item should pass — the infra-retried round did NOT count as a fail.
+    expect(st.status).toBe("passed");
+    // The final lastScore must be from the passing eval (90), NOT the infra placeholder (0).
+    expect(st.lastScore).toBe(90); // makeVerdict(true).weightedTotal
+    // Two evaluator calls total: one infra (round back), one real pass.
+    expect(evalCalls).toBe(2);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("evaluator limitHit does NOT increment the failed-round escalation counter (round genuinely given back)", async () => {
+    // If the round were consumed as a fail, the escalation counter (failedRounds) would advance;
+    // with INFRA-RETRY it must NOT.
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 4, escalateAfterRounds: 1 });
+    ctx.config.build.autoRestart = { enabled: true, maxWaitSec: 3600, pollSec: 300, maxRestarts: 10 };
+    ctx.config.roles.evaluator = { model: "primary-eval", fallback: { model: "fallback-eval" } };
+    ctx.config.roles.generator = { model: "gen-model" };
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut(),
+      evaluateItem: async () => {
+        evalCalls++;
+        if (evalCalls === 1) return evalOut(false, { limitHit: { kind: "auth", raw: "http 401" } as LimitHit });
+        return evalOut(true);
+      },
+      waitForLimit: async () => {},
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("passed");
+    // failedRounds should be 0 — the auth round was given back, so no real fail was counted.
+    // (If the round had been consumed, it would be 1, triggering escalation.)
+    expect(st.failedRounds ?? 0).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

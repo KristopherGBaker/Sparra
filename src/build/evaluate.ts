@@ -256,6 +256,31 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
     }
   }
 
+  // INFRA guard: backend signalled a limit, empty completion, or 0-turn "never ran" AND no
+  // parseable verdict was produced. Skip the forced-FAIL synthesis and disk write; surface
+  // limitHit so build.ts onLimit gives the round back. A genuine model-ran-but-unparseable
+  // result (numTurns>=1, no limitHit) falls through to the forced FAIL below — that IS a
+  // fail-worthy signal (the model ran and produced garbage output, which is behavioral).
+  if (!parsed && (res.limitHit || res.emptyCompletion || res.numTurns === 0)) {
+    warn(`Evaluator for ${item.id} round ${round}: infra result (${res.limitHit?.kind ?? "empty-completion"}) — not consuming as a FAIL round.`);
+    return {
+      verdict: {
+        assertions: [],
+        scores: { design: 0, originality: 0, craft: 0, functionality: 0 },
+        weightedTotal: 0,
+        verdict: "fail",
+        unrunAssertionIds: [],
+        blocking: [],
+        notes: "infra-retry",
+      },
+      raw: resultText,
+      sessionId: res.sessionId,
+      limitHit: res.limitHit,
+      costUsd,
+      tokens,
+    };
+  }
+
   // The harness — not the model's self-report — decides whether run_command/http_request
   // verifications actually ran (from real exit codes); when it's not "none" it OVERRIDES the
   // model's `exerciseStatus`, on both the parsed and the no-parseable-verdict paths below.
