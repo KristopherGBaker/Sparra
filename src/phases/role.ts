@@ -129,6 +129,9 @@ export function roleRequestFromFlags(
     // re-critique. The parser collapses a single occurrence to a string and repeats to an array, so
     // normalize both to a string[] (a bare `--prior-critique` with no value is dropped).
     priorCritiquePaths: priorCritiquePathsFromFlag(flags["prior-critique"]),
+    // `--prior-blocking <path>` (repeatable) → prior round's accepted blocking files for an
+    // evaluator re-grade. Same normalization as --prior-critique.
+    priorBlockingPaths: priorCritiquePathsFromFlag(flags["prior-blocking"]),
     holdoutPath: typeof flags.holdout === "string" ? (flags.holdout as string) : undefined,
     out: typeof flags.out === "string" ? (flags.out as string) : undefined,
     backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,

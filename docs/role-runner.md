@@ -302,10 +302,15 @@ reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--br
 `--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited),
 `--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
 generator** auto-run `build.verifyCommands` through the strict allow-hook; no-op on `eval`, which
-runs the evaluator, not a writer), and `--prior-critique <file>` (repeatable, contract-evaluator
+runs the evaluator, not a writer), `--prior-critique <file>` (repeatable, contract-evaluator
 only — the CLI form of the `priorCritiquePaths` MCP arg: the RUNNER reads each file and inlines it
 into the re-critique task labeled by round in the order given, so critique files under `.sparra/`
-work even though the role itself can't read them).
+work even though the role itself can't read them), and `--prior-blocking <file>` (repeatable,
+evaluator only — the CLI form of the `priorBlockingPaths` MCP arg: inlines the prior round's
+ACCEPTED blocking items into the evaluator re-grade task, prefixed with the ACCEPTED-BLOCKING
+instruction, so a fresh evaluator sees that the conductor accepted those blockings and does not
+whipsaw-bounce an already-accepted fix or reverse an accepted out-of-scope carve-out; files under
+`.sparra/` work).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
 [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>]` (alias for `role run --kind

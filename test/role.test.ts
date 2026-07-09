@@ -129,6 +129,30 @@ describe("roleRequestFromFlags — --prior-critique → priorCritiquePaths (U3)"
   });
 });
 
+// U4: repeatable `--prior-blocking <path>` → priorBlockingPaths (order preserved).
+describe("roleRequestFromFlags — --prior-blocking → priorBlockingPaths (U4)", () => {
+  it("a single --prior-blocking (parser yields a string) → a one-element array", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { "prior-blocking": "b1.md" }, {});
+    expect(req.priorBlockingPaths).toEqual(["b1.md"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("repeated --prior-blocking (parser yields a string[]) → paths in the GIVEN order", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { "prior-blocking": ["b1.md", "b2.md"] }, {});
+    expect(req.priorBlockingPaths).toEqual(["b1.md", "b2.md"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent → undefined; a value-less boolean --prior-blocking contributes no path", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(roleRequestFromFlags(ctx, "evaluator", {}, {}).priorBlockingPaths).toBeUndefined();
+    expect(roleRequestFromFlags(ctx, "evaluator", { "prior-blocking": true }, {}).priorBlockingPaths).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // Item D: `--worktree` / `--keep-worktree` → the request's INTENT flags (useWorktree/keepWorktree).
 // Pure mapping only — whether the run actually lands in a worktree is runtime (evalWorktree.test.ts).
 describe("roleRequestFromFlags — --worktree / --keep-worktree (Item D)", () => {

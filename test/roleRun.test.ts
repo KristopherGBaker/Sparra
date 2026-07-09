@@ -8,7 +8,7 @@ import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
 import { mergedBuildEnv } from "../src/build/env.ts";
-import { RE_CRITIQUE_INSTRUCTION } from "../src/build/contract.ts";
+import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION } from "../src/build/contract.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -2419,6 +2419,110 @@ describe("runRole — contract-evaluator prior-critique inlining (U3)", () => {
       ).rejects.toThrow(/priorCritiquePaths|contract-evaluator/i);
     }
     expect(rec.calls).toHaveLength(0); // rejected before any backend call, for every kind
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── U4: runner-side prior-blocking inlining for evaluator re-grade rounds ──
+describe("runRole — evaluator prior-blocking inlining (U4)", () => {
+  const CONTRACT_TEXT = "Assertion 1: the widget renders and the export is lossless.";
+  const BLOCKING1 = "BLOCKING-SENTINEL-ONE: function foo is undefined.";
+  const BLOCKING2 = "BLOCKING-SENTINEL-TWO: out-of-scope carve-out accepted by conductor.";
+
+  it("(a) POSITIVE: priorBlockingPaths on an evaluator → task contains ACCEPTED_BLOCKING_INSTRUCTION + file CONTENT; ordering: brief < prior-blocking < contract < holdout", async () => {
+    const { ctx, dir } = await makeCtx(); // withHoldout=true → holdout present
+    const p1 = path.join(dir, "b1.md");
+    const p2 = path.join(dir, "b2.md");
+    fs.writeFileSync(p1, BLOCKING1);
+    fs.writeFileSync(p2, BLOCKING2);
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "BRIEF-SENTINEL: grade the widget.",
+      contract: CONTRACT_TEXT,
+      priorBlockingPaths: [p1, p2],
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    const prompt = rec.calls[0]!.prompt;
+
+    // instruction + content (both required — a resolver that emits only the instruction fails)
+    expect(prompt).toContain(ACCEPTED_BLOCKING_INSTRUCTION);
+    expect(prompt).toContain(BLOCKING1);
+    expect(prompt).toContain(BLOCKING2);
+
+    // ordering: brief → prior-blocking block → contract → holdout (holdout LAST)
+    const iBrief = prompt.indexOf("BRIEF-SENTINEL");
+    const iInstr = prompt.indexOf(ACCEPTED_BLOCKING_INSTRUCTION);
+    const iB1 = prompt.indexOf(BLOCKING1);
+    const iB2 = prompt.indexOf(BLOCKING2);
+    const iB2Label = prompt.indexOf("--- Accepted blocking 2 ---");
+    const iContract = prompt.indexOf(CONTRACT_TEXT);
+    const iHoldout = prompt.indexOf("HOLDOUT ACCEPTANCE CHECKS");
+
+    expect(iBrief).toBeGreaterThanOrEqual(0);
+    expect(iInstr).toBeGreaterThan(iBrief);    // brief < prior-blocking instruction
+    expect(iB1).toBeGreaterThan(iInstr);       // instruction < blocking-1 content
+    expect(iB2Label).toBeGreaterThan(iB1);     // blocking-1 content < blocking-2 label
+    expect(iB2).toBeGreaterThan(iB2Label);     // blocking-2 label < blocking-2 content
+    expect(iContract).toBeGreaterThan(iB2);    // prior-blocking block < contract
+    expect(iHoldout).toBeGreaterThan(iContract); // holdout LAST
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(b) ANTI-NO-OP: priorBlockingPaths ABSENT → NO ACCEPTED-BLOCKING marker or entry labels injected", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    await runRole({
+      ctx,
+      roleKind: "evaluator",
+      brief: "grade",
+      contract: CONTRACT_TEXT,
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+    });
+    const prompt = rec.calls[0]!.prompt;
+    expect(prompt).not.toContain("ACCEPTED-BLOCKING");
+    expect(prompt).not.toContain("--- Accepted blocking 1 ---");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(c) priorBlockingPaths on a non-evaluator role throws (rejected for every non-evaluator kind)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const p1 = path.join(dir, "b1.md");
+    fs.writeFileSync(p1, BLOCKING1);
+    const rec = recorder();
+    for (const kind of ["generator", "contract-evaluator", "reviewer", "contract-generator"] as RoleKind[]) {
+      await expect(
+        runRole({ ctx, roleKind: kind, brief: "do the thing", contract: CONTRACT_TEXT, priorBlockingPaths: [p1], runSessionFn: rec.fn })
+      ).rejects.toThrow(/priorBlockingPaths|evaluator/i);
+    }
+    expect(rec.calls).toHaveLength(0); // rejected before any backend call
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(d) priorCritiquePaths on an evaluator still throws (unchanged eligibility guard)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const p1 = path.join(dir, "c1.md");
+    fs.writeFileSync(p1, "some critique");
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "grade", contract: CONTRACT_TEXT, priorCritiquePaths: [p1], runSessionFn: rec.fn })
+    ).rejects.toThrow(/priorCritiquePaths|contract-evaluator/i);
+    expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(e) a missing priorBlockingPaths file fails closed (throws naming the path)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const missing = path.join(dir, "does-not-exist-blocking.md");
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "grade", contract: CONTRACT_TEXT, priorBlockingPaths: [missing], runSessionFn: rec.fn })
+    ).rejects.toThrow(new RegExp(missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    expect(rec.calls).toHaveLength(0);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

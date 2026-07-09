@@ -20,7 +20,7 @@ import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 // now lives in holdout.ts so the autonomous build-loop forbid roles share the exact same wall.
 export { makeHoldoutReadDecider };
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance, verifyGateWarning } from "./modeText.ts";
-import { RE_CRITIQUE_INSTRUCTION } from "./contract.ts";
+import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION } from "./contract.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
@@ -360,6 +360,16 @@ export interface RoleRunRequest {
    *  skip. Meaningful only for `contract-evaluator`; supplying it to any other role kind is a hard
    *  error. Absent/empty → today's behavior, byte-for-byte. */
   priorCritiquePaths?: string[];
+  /** Re-grade input for an `evaluator` run: paths to the PRIOR round's ACCEPTED blocking items, in
+   *  document order (top-most first). The RUNNER — trusted, unlike the role — reads each file itself
+   *  and inlines it (labeled `--- Accepted blocking N ---`) ahead of the contract text, prefixed
+   *  with the `ACCEPTED_BLOCKING_INSTRUCTION`, so a fresh evaluator re-grade SEES the prior round's
+   *  accepted carve-outs and does not whipsaw-bounce an already-accepted fix. Because the runner
+   *  does the read, a path under `.sparra/` works even though the role's own readscope excludes it.
+   *  A missing/unreadable path FAILS CLOSED (throws, naming the path) — bad conductor input, not a
+   *  silent skip. Meaningful only for `evaluator`; supplying it to any other role kind is a hard
+   *  error. Absent/empty → today's behavior, byte-for-byte. */
+  priorBlockingPaths?: string[];
   /** Holdout file (evaluator-only). Defaults to the project holdout. Pass a PATH, never contents.
    *  If given and missing, the run FAILS CLOSED (throws) rather than silently running without it. */
   holdoutPath?: string;
@@ -689,6 +699,41 @@ async function resolvePriorCritiqueBlock(req: RoleRunRequest): Promise<string> {
     labeled.push(`--- Round ${i + 1} critique ---\n${text}`);
   }
   return `${RE_CRITIQUE_INSTRUCTION}\n\nPRIOR CRITIQUES (verify each is resolved):\n${labeled.join("\n\n")}\n\n`;
+}
+
+/**
+ * Compose the prior-accepted-blocking block an `evaluator` re-grade run inlines AHEAD of the
+ * contract text — the interactive analogue of conductor-accepted blocking persistence. The RUNNER
+ * (trusted) reads each prior-round blocking file itself, so a `.sparra/verdicts/`-resident path
+ * works even though the role's own readscope excludes it; the `ACCEPTED_BLOCKING_INSTRUCTION`
+ * (imported from `contract.ts`, never duplicated) prefixes the blockings, each labeled
+ * `--- Accepted blocking N ---` in the GIVEN order. "" when no paths were supplied (today's
+ * behavior, byte-for-byte).
+ *
+ * Fail-closed: a missing/unreadable path throws (naming it) rather than silently dropping an entry,
+ * and the option is meaningful ONLY for `evaluator` — supplying it to any other role kind is a hard
+ * error (bad conductor input). Holdout wall: prior-blocking text is fed from `verdict.blocking`,
+ * which is already holdout-REDACTED at verdict-write time (`redactVerdict`), so re-feeding it is
+ * holdout-safe; no new code here reads `HOLDOUT.md`.
+ */
+async function resolvePriorBlockingBlock(req: RoleRunRequest): Promise<string> {
+  const paths = req.priorBlockingPaths;
+  if (!paths || paths.length === 0) return "";
+  if (req.roleKind !== "evaluator") {
+    throw new Error(
+      `priorBlockingPaths is only meaningful for an evaluator run (re-grade rounds); rejected for "${req.roleKind}". Drop it.`
+    );
+  }
+  const labeled: string[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const p = paths[i]!;
+    const text = await readText(p);
+    if (text == null) {
+      throw new Error(`prior-blocking path not found or unreadable: ${p} (refusing to re-grade without the accepted blockings it names).`);
+    }
+    labeled.push(`--- Accepted blocking ${i + 1} ---\n${text}`);
+  }
+  return `${ACCEPTED_BLOCKING_INSTRUCTION}\n\nPRIOR ACCEPTED BLOCKINGS (verify each remains resolved):\n${labeled.join("\n\n")}\n\n`;
 }
 
 /** Resolve holdout text. Explicit path FAILS CLOSED if missing; else the project holdout (may be ""). */
@@ -1227,9 +1272,12 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Prior-round critiques (contract-evaluator re-critique) — read RUNNER-side, inlined AHEAD of the
   // contract text, labeled by round. Throws on a bad path / wrong role kind before any backend call.
   const priorCritiqueBlock = await resolvePriorCritiqueBlock(req);
+  // Prior accepted blockings (evaluator re-grade) — read RUNNER-side, inlined AHEAD of the contract
+  // text. Throws on a bad path / wrong role kind before any backend call.
+  const priorBlockingBlock = await resolvePriorBlockingBlock(req);
   const contractBlock = contract.trim() ? `\nAGREED CONTRACT (satisfy/grade against THIS):\n---\n${contract.trim()}\n---\n` : "";
   const environment = roleKind === "generator" ? await environmentNotesSection(ctx.paths) : "";
-  let task = `${brief.trim()}\n${environment}${provenanceBlock}${priorCritiqueBlock}${contractBlock}${conventions}${memory}`;
+  let task = `${brief.trim()}\n${environment}${provenanceBlock}${priorCritiqueBlock}${priorBlockingBlock}${contractBlock}${conventions}${memory}`;
   if (evaluator) {
     task += holdoutSection(holdoutText); // injected ONLY here
   } else {

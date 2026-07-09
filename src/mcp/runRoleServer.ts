@@ -24,6 +24,8 @@ export interface RunRoleToolArgs {
   briefPath?: string;
   contractPath?: string;
   priorCritiquePaths?: string[];
+  /** Artifact-evaluator re-grade ONLY: paths to the prior round's ACCEPTED blocking items. */
+  priorBlockingPaths?: string[];
   workspace?: string;
   holdoutPath?: string;
   backend?: string;
@@ -64,6 +66,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     briefPath: args.briefPath,
     contractPath: args.contractPath,
     priorCritiquePaths: args.priorCritiquePaths,
+    priorBlockingPaths: args.priorBlockingPaths,
     workspace: args.workspace,
     holdoutPath: args.holdoutPath,
     backend: args.backend,
@@ -211,6 +214,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .optional()
         .describe(
           "contract-evaluator re-critique ONLY: paths to this contract's prior-round critiques, in round order (Round 1 first). The runner reads them itself and inlines them (labeled by round, prefixed with the RE-CRITIQUE instruction) ahead of the contract — so a fresh evaluator grades the DELTA, not from scratch. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to another role is an error."
+        ),
+      priorBlockingPaths: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "artifact-evaluator re-grade ONLY: paths to the prior round's ACCEPTED blocking items, in document order. The runner reads them itself and inlines them (labeled by entry, prefixed with the ACCEPTED-BLOCKING instruction) ahead of the contract — so a fresh evaluator re-grade sees that the conductor accepted prior blockings (including any out-of-scope carve-out) and does not whipsaw-bounce an already-accepted fix. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to another role is an error."
         ),
       workspace: z.string().optional().describe("Working dir / artifact dir (default: project root)."),
       holdoutPath: z.string().optional().describe("Holdout file PATH (evaluator-only). Contents are never returned."),

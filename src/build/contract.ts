@@ -31,6 +31,14 @@ const SECTION = "## AGREED CONTRACT";
 export const RE_CRITIQUE_INSTRUCTION =
   `RE-CRITIQUE: this is a revision of a contract you already critiqued (your prior critiques are below, labeled by round). Verify each prior point is resolved; do NOT raise new points outside the changed text unless correctness-critical; do NOT reverse a position you took in a prior round unless you name the round and why; style/conciseness nits are non-blocking on re-critique.`;
 
+// Accepted-blocking instruction injected on re-grade artifact evaluator rounds. The conductor
+// ACCEPTED these blockings from a prior round (including any out-of-scope carve-out); a fresh
+// stateless re-grade must not whipsaw-bounce an accepted fix or reverse an accepted carve-out.
+// The distinctive `ACCEPTED-BLOCKING:` marker is asserted by the re-grade-shape tests. Exported
+// so the interactive role-runner (`roleRun.ts`) uses the EXACT same instruction — must not drift.
+export const ACCEPTED_BLOCKING_INSTRUCTION =
+  `ACCEPTED-BLOCKING: a prior round raised the blockings below and the conductor ACCEPTED them (including any out-of-scope carve-out). Verify each issue remains resolved. Do NOT reverse an accepted carve-out or re-bounce an accepted fix as out-of-scope. Raise nothing new unless correctness-critical.`;
+
 export interface ContractResult {
   text: string;
   agreed: boolean;

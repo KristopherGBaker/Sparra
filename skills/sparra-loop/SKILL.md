@@ -211,6 +211,17 @@ once they're launched.
    unit's WIP sits uncommitted, pass `evalBaseRef=<base>`: the runner scopes the changed-files list
    to `<base>..HEAD` + WIP and tells the judge to exclude foreign files from SCOPE/DEVIATION
    judgments — instead of hoping prose keeps it from bouncing on someone else's WIP.
+   **Prevent whipsaw on re-grade rounds with `priorBlockingPaths`** — an array of the prior
+   round's ACCEPTED blocking item file(s) (e.g. `priorBlockingPaths: [".sparra/verdicts/r1.verdict.md"]`
+   or CLI: repeat `--prior-blocking <path>`). A fresh stateless evaluator re-grade can whipsaw-bounce
+   a fix the conductor already accepted (including an accepted out-of-scope carve-out). Pass the
+   prior verdict file (its `## Blocking` section is already holdout-REDACTED at write time, so it's
+   safe to re-feed): the **runner reads it itself** and inlines it (prefixed with the
+   ACCEPTED-BLOCKING instruction) ahead of the contract, so the re-grader sees the accepted baseline
+   and must verify fixes are intact rather than re-litigating settled ground. Because the *runner*
+   does the read (it's trusted; the role is not), **files under `.sparra/` work** — e.g. the
+   auto-persisted `verdictPath` from the prior `run_role` result. A missing path fails the run;
+   passing the option to any role other than `evaluator` is an error.
 4. **Decide.** Act on the subagent's returned summary (verdict + blocking points) —
    not a raw re-read of the verdict file. If it passes, accept (commit if the user
    wants). If it fails, feed the blocking issues plus each failed assertion's

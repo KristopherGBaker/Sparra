@@ -190,6 +190,19 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     expect(req.priorCritiquePaths).toBeUndefined();
   });
 
+  it("forwards priorBlockingPaths verbatim (evaluator re-grade; .sparra/ paths OK)", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "evaluator",
+      priorBlockingPaths: [".sparra/verdicts/r1.verdict.md", ".sparra/verdicts/r2.verdict.md"],
+    });
+    expect(req.priorBlockingPaths).toEqual([".sparra/verdicts/r1.verdict.md", ".sparra/verdicts/r2.verdict.md"]);
+  });
+
+  it("leaves priorBlockingPaths undefined when not supplied", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
+    expect(req.priorBlockingPaths).toBeUndefined();
+  });
+
   it("forwards the rest of the overrides verbatim", () => {
     const req = toRunRoleRequest(ctx, {
       roleKind: "generator",
