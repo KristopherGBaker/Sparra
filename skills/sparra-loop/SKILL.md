@@ -40,6 +40,7 @@ Detect the current host's available delegation/background capabilities and load 
 adapter after the shared references above:
 
 - Claude Code: read [claude-code.md](references/claude-code.md).
+- Codex: read [codex.md](references/codex.md).
 - A host with no adapter in this installation: use the runner directly or its JSON CLI surface,
   preserving the same safety rule and canonical envelope. Do not invent host-specific behavior.
 

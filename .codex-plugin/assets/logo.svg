@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sparra">
+  <rect width="128" height="128" rx="28" fill="#6D5BD0"/>
+  <path d="M29 42c18-16 52-16 70 0L84 55c-11-9-29-9-40 0l-15-13Zm15 31c11 9 29 9 40 0l15 13c-18 16-52 16-70 0l15-13Z" fill="#FFF"/>
+  <circle cx="64" cy="64" r="9" fill="#FFF"/>
+</svg>

@@ -1,0 +1,41 @@
+{
+  "name": "sparra",
+  "version": "0.1.0-7d2f4c8a",
+  "description": "Conduct Sparra's adversarial cross-model build and evaluation loop from Codex.",
+  "author": {
+    "name": "Kristopher Baker",
+    "email": "hello@krisbaker.com",
+    "url": "https://github.com/KristopherGBaker"
+  },
+  "homepage": "https://github.com/KristopherGBaker/Sparra#readme",
+  "repository": "https://github.com/KristopherGBaker/Sparra",
+  "license": "MIT",
+  "keywords": [
+    "sparra",
+    "build-loop",
+    "cross-model",
+    "evaluation"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "Sparra",
+    "shortDescription": "Adversarial cross-model build loops",
+    "longDescription": "Conduct one-off evaluations, interactive cross-model loops, and stepped autonomous builds through Sparra's holdout-safe runner.",
+    "developerName": "Kristopher Baker",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Cross-model evaluation",
+      "Interactive build loops",
+      "Stepped autonomous builds"
+    ],
+    "websiteURL": "https://github.com/KristopherGBaker/Sparra",
+    "defaultPrompt": [
+      "Evaluate my current work once against its contract with a different model.",
+      "Run an interactive cross-model generate, evaluate, and decide loop for this work item.",
+      "Guide this project through a checkpointed sparra build --step=contract,round,commit,item run."
+    ],
+    "logo": "./.codex-plugin/assets/logo.svg",
+    "brandColor": "#6D5BD0"
+  }
+}
