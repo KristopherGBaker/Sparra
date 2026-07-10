@@ -272,11 +272,11 @@ export async function startRunRoleServer(root: string): Promise<void> {
       allowVerify: z
         .boolean()
         .optional()
-        .describe("Generator-only: let an in-place run (no build.branch) auto-run the project's build.verifyCommands (typecheck/test/build) via the same strict allow-hook, so self-verify gates don't hit the permission wall. No-op for read-only roles."),
+        .describe("Generator-only in-place opt-in: auto-run build.verifyCommands through the strict allow-hook. Read-only roles ignore this flag; a Claude contract-evaluator instead receives the hook automatically only with a real worktree boundary."),
       worktree: z
         .boolean()
         .optional()
-        .describe("Read-only judge roles (evaluator/reviewer/contract-evaluator): run in a TEMPORARY linked git worktree snapshotted from `workspace`'s WIP (torn down after). Gives the exercise/verify probe WRITABLE scratch + provisioned deps so `npm test`/build tools run — an in-place eval stays read-only and false-blocks on scratch writes (EPERM on node_modules/.vite-temp etc.). Use whenever the evaluator (or a contract-evaluator proving verify commands) will exercise the tree."),
+        .describe("Read-only judge roles (evaluator/reviewer/contract-evaluator): run in a TEMPORARY linked git worktree snapshotted from `workspace`'s WIP (torn down after). Gives writable scratch + provisioned deps; a Claude contract-evaluator also gets the strict build.verifyCommands allow-hook on this boundary. In-place contract evaluation gets no automatic verification permission."),
       keepWorktree: z
         .boolean()
         .optional()

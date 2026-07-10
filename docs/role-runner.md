@@ -216,6 +216,11 @@ so each self-verify gate isn't blocked by the permission wall on a hooks-only ba
 without `auto`). It reuses the existing `allowVerifyBash` decider unchanged — the opt-in only drops the branch
 precondition. The allow-hook auto-approves three shapes (allow-hook only; the harness executor
 stays strict on all of them):
+
+This opt-in remains generator-only. Separately, `role run --kind contract-evaluator --worktree`
+automatically gives a Claude contract-evaluator the same strict allow-hook for configured bare
+commands; an in-place contract-evaluator receives no grant. Codex uses its OS sandbox and does not
+claim hook enforcement.
 - **Plain command:** a single `build.verifyCommands`-prefix match with no chaining / redirect /
   network / mutation / install / commit.
 - **Leading literal env-var assignment:** one or more `KEY=VALUE` tokens before the core command —

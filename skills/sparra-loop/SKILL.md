@@ -71,6 +71,8 @@ entry; do not combine entries with chains, pipes, or environment prefixes.
 An in-place generator whose contract names a configured gate needs `allowVerify: true` over MCP
 or `--verify` on the CLI. A `unitWorktree` generator enables self-verification automatically.
 If `verifyGateWarning` appears, enable verification before spending another role turn.
+For contract critique, a Claude `contract-evaluator` on a worktree can run configured bare verify
+commands through the strict allow-hook; an in-place critique cannot, and Codex relies on its sandbox.
 
 Create optional hidden checks at `.sparra/HOLDOUT.md` without reading them back into conductor
 context; later supply only `holdoutPath: ".sparra/HOLDOUT.md"` to the evaluator.

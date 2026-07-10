@@ -2,7 +2,7 @@ import type { Ctx } from "../context.ts";
 import { fill, loadPrompt } from "../prompts.ts";
 import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
-import { readOnlyGuard } from "../sdk/guard.ts";
+import { contractEvaluatorGuard, readOnlyGuard } from "../sdk/guard.ts";
 import { holdoutFreeCwd } from "./readscope.ts";
 import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
@@ -16,7 +16,8 @@ import { selectMapContext } from "./mapContext.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
 import { getBackend } from "../sdk/session.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText } from "./judgeScratch.ts";
+import { isLinkedWorktree } from "../util/git.ts";
 
 const AGREED = "CONTRACT: AGREED";
 const SECTION = "## AGREED CONTRACT";
@@ -89,6 +90,11 @@ export async function negotiateContract(
 
   const genRole = ctx.config.roles.contractGenerator;
   const evalRole = ctx.config.roles.contractEvaluator;
+  const evalBackend = getBackend(evalRole.backend);
+  const evaluatorVerifyCommands =
+    evalBackend.capabilities.hooks && wtDir !== ctx.root && isLinkedWorktree(wtDir)
+      ? ctx.config.build.verifyCommands
+      : [];
   const vars = {
     MODE: ctx.store.data.mode,
     ASSERTION_MIN: String(ctx.config.contract.assertionMin),
@@ -102,12 +108,13 @@ export async function negotiateContract(
   // backend). The contract-evaluator runs read-only — so a sandboxed Codex judge is told up front
   // that e.g. unix-domain-socket LISTEN is policy-denied even with a writable TMPDIR, so any verify
   // command it dry-checks that needs a socket listener is classified UN-RUN, not re-proved.
-  const evalCapabilityNotes = judgeCapabilityNotesText({
-    backendId: evalRole.backend ?? "claude",
-    hasOsSandbox: getBackend(evalRole.backend).capabilities.sandbox,
-    sandboxMode: "read-only",
-    scratchEnabled: false,
-  });
+  const evalCapabilityNotes =
+    judgeCapabilityNotesText({
+      backendId: evalRole.backend ?? "claude",
+      hasOsSandbox: evalBackend.capabilities.sandbox,
+      sandboxMode: "read-only",
+      scratchEnabled: false,
+    }) + contractEvaluatorVerifyNoteText(evaluatorVerifyCommands);
 
   const plan = (await readText(ctx.paths.frozenPlan)) ?? "";
   const map = await readText(ctx.paths.frozenMap);
@@ -190,11 +197,15 @@ export async function negotiateContract(
       model: evalRole.model,
       effort: evalRole.effort,
       cwd,
-      tools: ["Read", "Glob", "Grep"],
+      // Bash is only added to the base tool set when this boundary actually has configured verify
+      // commands to run — otherwise the allow-hook wired below can never fire: `Options.tools` is
+      // the base set of available built-in tools, so without this the model literally cannot invoke
+      // Bash on the autonomous negotiation path.
+      tools: evaluatorVerifyCommands.length > 0 ? ["Read", "Glob", "Grep", "Bash"] : ["Read", "Glob", "Grep"],
       env: sessionEnv(),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
-      ...readOnlyGuard(ctx, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
+      ...contractEvaluatorGuard(ctx, evaluatorVerifyCommands, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
       maxTurns: ctx.config.build.maxTurnsPerSession,
       traceDir,
       traceSeq: seq++,

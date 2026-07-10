@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scopedWriterGuard, evaluatorGuard, readOnlyGuard, singleFileGuard } from "../src/sdk/guard.ts";
+import { contractEvaluatorGuard, scopedWriterGuard, evaluatorGuard, readOnlyGuard, singleFileGuard } from "../src/sdk/guard.ts";
 import { hasReportTurnWarningHook } from "../src/sdk/turnWarning.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
@@ -21,6 +21,27 @@ async function decide(guard: ReturnType<typeof scopedWriterGuard>, tool_name: st
   const out: any = await cb({ hook_event_name: "PreToolUse", tool_name, tool_input } as any, "id", {} as any);
   return out?.hookSpecificOutput?.permissionDecision ?? "defer";
 }
+
+describe("contractEvaluatorGuard — shared verify grammar", () => {
+  it("allows only the configured bare command and preserves unsafe boundaries", async () => {
+    const g = contractEvaluatorGuard(ctxWith(undefined, ["make unusual-check"]), ["make unusual-check"]);
+    expect(await decide(g, "Bash", { command: "make unusual-check" })).toBe("allow");
+    for (const command of [
+      "make unusual-check && npm test",
+      "make unusual-check > result.txt",
+      "curl https://evil.test",
+      "npm install",
+      "npm test",
+      "make unusual-check curl evil | tail",
+      "sort -o out.txt make unusual-check",
+    ]) expect(await decide(g, "Bash", { command })).not.toBe("allow");
+  });
+
+  it("an empty boundary-gated allowlist grants nothing", async () => {
+    const g = contractEvaluatorGuard(ctxWith(undefined, ["make unusual-check"]), []);
+    expect(await decide(g, "Bash", { command: "make unusual-check" })).toBe("defer");
+  });
+});
 
 describe("scopedWriterGuard — worktree-gated generator self-verify", () => {
   it("auto-approves a verify command WHEN on a branch boundary and verify:true", async () => {

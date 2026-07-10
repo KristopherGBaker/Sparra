@@ -179,7 +179,9 @@ The few that matter most:
   all-un-run rounds don't advance the streak; a pivot resets it. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
-  to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). Gated to a worktree
+  to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). A Claude
+  contract-evaluator receives the same strict allow-hook on an isolated autonomous or `--worktree`
+  run; in-place contract evaluation receives no grant, and Codex relies on its OS sandbox. Gated to a worktree
   boundary; `[]` disables. An **in-place** `run_role` (no worktree) can opt into the SAME
   strict allow-hook with `allowVerify: true` (MCP) / `--verify` (CLI) — so the interactive
   generator self-verifies its gates and the conductor no longer has to run every gate out-of-band.

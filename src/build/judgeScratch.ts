@@ -208,3 +208,28 @@ export function judgeCapabilityNotesText(args: {
 }): string {
   return sandboxCapabilityNotesText(sandboxCapabilityNotes(args));
 }
+
+/**
+ * Told-not-inferred note for a contract-evaluator that HAS the verify-Bash allow-hook wired for
+ * this run (an isolated-worktree boundary with `verifyCommands` non-empty — see
+ * `negotiateContract`/`runRoleInPlace`'s `contractEvaluatorGuard` wiring). Without this the judge
+ * has no way to know Bash is even usable here (the shared `allowVerifyBash` grammar is
+ * conservative and silent on rejection) and would default to classifying every configured command
+ * UN-RUN, the same as the read-only boundary — re-litigating a capability the harness already
+ * proved rather than exercising it. Returns "" when there is nothing to run (empty list), so a
+ * read-only/in-place judge gets no note.
+ */
+export function contractEvaluatorVerifyNoteText(verifyCommands: string[]): string {
+  if (!verifyCommands.length) return "";
+  return (
+    `\nVERIFICATION AVAILABLE on this run: you CAN run the project's configured checks via Bash to ` +
+    `confirm a proposed "I will verify by" command actually works AS WRITTEN, instead of classifying ` +
+    `it UN-RUN. Use these commands AS WRITTEN: ${verifyCommands.slice(0, 6).join(", ")} — run them, ` +
+    `READ the output. Auto-approved Bash shapes: (a) the exact listed command (a \`<cmd> -- <args>\` ` +
+    `suffix is fine — it still starts with the allowed command); (b) a leading LITERAL env-var ` +
+    `assignment (plain identifier key, metacharacter-free value); (c) piping into a read-only text ` +
+    `filter (\`| tail\`, \`| head\`, \`| grep\`, \`| wc -l\`). Anything else — chaining (\`&&\`/\`;\`), ` +
+    `file redirects, \`cd X &&\`/\`git -C <abs>\` wrapping, subshell/command-substitution, installs, ` +
+    `network, or a command not on this list — is NOT auto-approved and will be denied.\n`
+  );
+}

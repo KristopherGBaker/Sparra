@@ -127,12 +127,25 @@ export function singleFileHooks(allowedFile: string, denyBashContains: string[])
 }
 
 /** Read-only: blocks every write and any Bash mutation. Auto-approves in-scope reads when
- *  `readScopes` is given, so a read-only role can always read its workspace. */
-export function readOnlyHooks(denyBashContains: string[], opts: RoleHookOpts = {}): HookConfig {
+ *  `readScopes` is given, so a read-only role can always read its workspace. When `verifyCommands`
+ *  is non-empty, also AUTO-APPROVES those narrowly-allowlisted verification commands (the shared
+ *  `allowVerifyBash` grammar) — the caller gates this to an isolated worktree boundary; empty (the
+ *  default) is behaviorally identical to the original read-only-only hook. */
+export function readOnlyHooks(denyBashContains: string[], verifyCommands: string[] = [], opts: RoleHookOpts = {}): HookConfig {
   const { readScopes = [], extraDeny = [] } = opts;
   const deny: Decider[] = [(t) => denyAmbientMcp(t), (t, i) => denyDisableSandbox(t, i), (t) => denyAnyWrite(t), (t, i) => denyBashMutation(t, i, denyBashContains), ...extraDeny];
-  const allow: Decider[] = readScopes.length ? [(t, i) => allowReadInScope(t, i, readScopes)] : [];
+  const allow: Decider[] = [];
+  if (readScopes.length) allow.push((t, i) => allowReadInScope(t, i, readScopes));
+  if (verifyCommands.length) allow.push((t, i) => allowVerifyBash(t, i, verifyCommands, denyBashContains));
   return makeGuardHook(deny, allow);
+}
+
+/** Read-only contract judge with narrowly allowlisted verification Bash. A thin named alias over
+ *  {@link readOnlyHooks} with `verifyCommands` threaded through — ONE deny chain, no drift risk
+ *  between the two (an empty `verifyCommands` list makes this byte-identical to `readOnlyHooks`).
+ *  Callers must gate `verifyCommands` to an isolated worktree boundary. */
+export function contractEvaluatorHooks(denyBashContains: string[], verifyCommands: string[], opts: RoleHookOpts = {}): HookConfig {
+  return readOnlyHooks(denyBashContains, verifyCommands, opts);
 }
 
 /** Evaluator: blocks source writes, but allows Bash to exercise the artifact (minus dangerous patterns).

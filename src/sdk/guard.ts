@@ -3,7 +3,7 @@ import type { Ctx } from "../context.ts";
 import { warn, detail } from "../util/log.ts";
 import { readTextSync } from "../util/io.ts";
 import { probeAutoSupported } from "./capabilities.ts";
-import { evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig, type RoleHookOpts } from "./hooks.ts";
+import { contractEvaluatorHooks, evaluatorHooks, mergeHooks, readOnlyHooks, scopedWriterHooks, singleFileHooks, type HookConfig, type RoleHookOpts } from "./hooks.ts";
 import { makeFormatHook, type FormatOptions } from "./format.ts";
 import { makeReportTurnWarningHook } from "./turnWarning.ts";
 
@@ -115,7 +115,16 @@ export function singleFileGuard(ctx: Ctx, allowedFile: string): Guard {
 
 /** Read-only roles (orient, decompose, contract negotiation). */
 export function readOnlyGuard(ctx: Ctx, opts: RoleHookOpts = {}): Guard {
-  return { permissionMode: autonomousPermissionMode(ctx), hooks: readOnlyHooks(ctx.config.permission.denyBashContains, opts) };
+  return { permissionMode: autonomousPermissionMode(ctx), hooks: readOnlyHooks(ctx.config.permission.denyBashContains, [], opts) };
+}
+
+/** Contract-evaluator guard. Verification auto-approval is boundary- and capability-gated by the
+ *  caller; an empty command list is behaviorally the same as `readOnlyGuard`. */
+export function contractEvaluatorGuard(ctx: Ctx, verifyCommands: string[], opts: RoleHookOpts = {}): Guard {
+  return {
+    permissionMode: autonomousPermissionMode(ctx),
+    hooks: contractEvaluatorHooks(ctx.config.permission.denyBashContains, verifyCommands, opts),
+  };
 }
 
 /** Evaluator: no source writes, but may exercise via Bash + exercise MCP. */

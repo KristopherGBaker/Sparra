@@ -5,7 +5,7 @@ import { fill, loadPrompt } from "../prompts.ts";
 import { getBackend, runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import type { LimitHit } from "../sdk/backend.ts";
-import { evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
+import { contractEvaluatorGuard, evaluatorGuard, readOnlyGuard, scopedWriterGuard, type Guard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser, exerciseRunInstruction, nativeRunnerGuidance, type Exerciser } from "../sdk/exercise.ts";
 import { buildReadDirs } from "./readscope.ts";
@@ -34,7 +34,7 @@ import { costUsdOrZero } from "./budget.ts";
 import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -313,9 +313,10 @@ export function resolveEvalProvenance(
   return block;
 }
 
-/** The SANDBOXED JUDGE roles: the evaluator and the contract-evaluator. Both run under a native
- *  sandbox and exercise/probe the artifact (`npm test`, `swift build`), so both get the default
- *  writable-scratch env layer AND the isolated-checkout workspace-scratch carve-out. */
+/** The SANDBOXED JUDGE roles: the evaluator and the contract-evaluator. Both exercise/probe the
+ *  artifact and get writable scratch on an isolated checkout. A hooks-capable contract-evaluator
+ *  additionally receives the strict configured verify-command allow-hook only on that boundary;
+ *  Codex continues to rely on its native sandbox. */
 function isSandboxedJudge(kind: RoleKind): boolean {
   return kind === "evaluator" || kind === "contract-evaluator";
 }
@@ -1307,6 +1308,12 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, onWorktreeBoundary: onLinkedWorktree, readScopes, extraDeny })
       : spec.guard === "evaluator"
         ? evaluatorGuard(ctx, { readScopes, extraDeny })
+        : roleKind === "contract-evaluator"
+          ? contractEvaluatorGuard(
+              ctx,
+              onLinkedWorktree && getBackend(role.backend).capabilities.hooks ? ctx.config.build.verifyCommands : [],
+              { readScopes, extraDeny }
+            )
         : readOnlyGuard(ctx, { readScopes, extraDeny });
 
   // Reduced-surface, not closed: if a forbid role's readable scope (its cwd or a granted
@@ -1446,7 +1453,14 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           hasOsSandbox: getBackend(be).capabilities.sandbox,
           sandboxMode: exerciseScratch ? "workspace-write" : "read-only",
           scratchEnabled: exerciseScratch,
-        })
+        }) +
+        // A hooks-capable contract-evaluator on the isolated-worktree boundary has the verify-Bash
+        // allow-hook wired (see the `contractEvaluatorGuard` call above) — told, not inferred, so the
+        // judge exercises the configured commands instead of defaulting to UN-RUN like the read-only
+        // in-place case. Recomputed per attempt so a Claude→Codex fallback (no hooks) drops the note.
+        (roleKind === "contract-evaluator" && onLinkedWorktree && getBackend(be).capabilities.hooks
+          ? contractEvaluatorVerifyNoteText(ctx.config.build.verifyCommands)
+          : "")
       : task;
     res = await run({
       ...commonReq,

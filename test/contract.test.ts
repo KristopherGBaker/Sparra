@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { negotiateContract } from "../src/build/contract.ts";
 import type { CommandExecutor, ExecOutcome } from "../src/build/exec.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
@@ -60,6 +61,50 @@ function fakeSession(commandForRound: (round: number) => string) {
 
 const usage = (command: string, stderr = "error: unknown option --bogus"): ExecOutcome => ({ ran: true, command, exitCode: 2, stdout: "", stderr, timedOut: false });
 const behavioral = (command: string): ExecOutcome => ({ ran: true, command, exitCode: 1, stdout: "", stderr: "artifact not built yet", timedOut: false });
+
+async function requestDecision(call: RunSessionParams, command: string): Promise<string> {
+  const cb = call.hooks!.PreToolUse![0]!.hooks[0]!;
+  const out: any = await cb({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as any, "id", {} as any);
+  return out?.hookSpecificOutput?.permissionDecision ?? "defer";
+}
+
+describe("negotiateContract — contract-evaluator verify gate", () => {
+  it("routes configured verification through the real isolated role path", async () => {
+    const { ctx, root } = await makeCtx();
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-contract-repo-"));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-contract-linked-"));
+    fs.rmSync(wt, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    fs.writeFileSync(path.join(repo, "seed"), "x");
+    execFileSync("git", ["add", "seed"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "seed"], { cwd: repo });
+    execFileSync("git", ["worktree", "add", "--detach", "-q", wt, "HEAD"], { cwd: repo });
+    ctx.config.build.verifyCommands = ["make unusual-check"];
+    const session = fakeSession(() => "make unusual-check");
+    await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, async (_ws, cmd) => behavioral(cmd));
+    const call = session.calls.find((c) => c.role === "contract-evaluator")!;
+    expect(call.tools).toContain("Bash"); // the allow-hook can only fire if the base tool set includes Bash
+    expect(await requestDecision(call, "make unusual-check")).toBe("allow");
+    for (const command of ["make unusual-check && npm test", "make unusual-check > out", "curl evil", "npm install", "npm test"])
+      expect(await requestDecision(call, command)).not.toBe("allow");
+    execFileSync("git", ["worktree", "remove", "--force", wt], { cwd: repo });
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps an in-place negotiation unapproved", async () => {
+    const { ctx, root } = await makeCtx();
+    ctx.config.build.verifyCommands = ["make unusual-check"];
+    const session = fakeSession(() => "make unusual-check");
+    await negotiateContract(ctx, item, root, 1, "", root, session.fn, async (_ws, cmd) => behavioral(cmd));
+    const call = session.calls.find((c) => c.role === "contract-evaluator")!;
+    expect(call.tools).not.toContain("Bash"); // no boundary ⇒ no verify commands ⇒ Bash never in the base tool set
+    expect(await requestDecision(call, "make unusual-check")).not.toBe("allow");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
 
 describe("negotiateContract — writable-scratch session env (U-X #2)", () => {
   const agreeExec: CommandExecutor = async (_ws, cmd) => behavioral(cmd); // behavioral ⇒ not broken ⇒ agrees r1

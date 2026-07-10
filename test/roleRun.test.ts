@@ -56,6 +56,12 @@ function recorder(resultText?: string) {
   return { calls, fn };
 }
 
+async function hookDecision(call: RunSessionParams, command: string): Promise<string> {
+  const cb = call.hooks!.PreToolUse![0]!.hooks[0]!;
+  const out: any = await cb({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as any, "id", {} as any);
+  return out?.hookSpecificOutput?.permissionDecision ?? "defer";
+}
+
 function captureStdout() {
   // The logger is silenced under vitest; lift the gate via the documented escape hatch while capturing.
   const priorLogInTests = process.env.SPARRA_LOG_IN_TESTS;
@@ -736,6 +742,7 @@ describe("runRole — exerciseScratch on a REAL linked worktree (Item E)", () =>
     const { ctx, dir } = await makeCtx();
     const { repo, worktree } = makeRepoWithWorktree();
     ctx.config.exercise.sandbox = "workspace-write";
+    ctx.config.build.verifyCommands = ["make unusual-check"];
     expect(ctx.store.data.build.branch).toBeFalsy(); // no branch — the new path is the only reason
     const ev = recorder();
     await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace: worktree, runSessionFn: ev.fn, integrityDeps: cleanIntegrityDeps });
@@ -787,6 +794,7 @@ describe("runRole — contract-evaluator scratch + integrity (U-A #4/#5)", () =>
     const { ctx, dir } = await makeCtx();
     const { repo, worktree } = makeRepoWithWorktree();
     ctx.config.exercise.sandbox = "workspace-write";
+    ctx.config.build.verifyCommands = ["make unusual-check"];
     expect(ctx.store.data.build.branch).toBeFalsy(); // the linked-worktree branch is the only reason
     const ce = recorder();
     await runRole({
@@ -799,6 +807,11 @@ describe("runRole — contract-evaluator scratch + integrity (U-A #4/#5)", () =>
     });
     expect(ce.calls[0]!.exerciseScratch).toBe(true); // → codexSandboxMode workspace-write + network off
     expect(ce.calls[0]!.readOnly).toBe(true);
+    expect(ce.calls[0]!.tools).toContain("Bash"); // the allow-hook can only fire if the base tool set includes Bash
+    expect(ce.calls[0]!.prompt).toContain("VERIFICATION AVAILABLE"); // told, not inferred
+    expect(await hookDecision(ce.calls[0]!, "make unusual-check")).toBe("allow");
+    for (const command of ["make unusual-check && npm test", "make unusual-check > out", "curl evil", "npm install", "npm test"])
+      expect(await hookDecision(ce.calls[0]!, command)).not.toBe("allow");
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(worktree, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
@@ -808,6 +821,7 @@ describe("runRole — contract-evaluator scratch + integrity (U-A #4/#5)", () =>
     const { ctx, dir } = await makeCtx();
     const { repo, worktree } = makeRepoWithWorktree();
     ctx.config.exercise.sandbox = "workspace-write";
+    ctx.config.build.verifyCommands = ["make unusual-check"];
     const ce = recorder();
     await runRole({
       ctx,
@@ -819,6 +833,8 @@ describe("runRole — contract-evaluator scratch + integrity (U-A #4/#5)", () =>
     });
     expect(ce.calls[0]!.exerciseScratch).toBeUndefined();
     expect(ce.calls[0]!.readOnly).toBe(true);
+    expect(ce.calls[0]!.prompt).not.toContain("VERIFICATION AVAILABLE"); // no boundary ⇒ no note
+    expect(await hookDecision(ce.calls[0]!, "make unusual-check")).not.toBe("allow");
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(worktree, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
