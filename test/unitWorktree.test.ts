@@ -18,7 +18,12 @@ import type { Ctx } from "../src/context.ts";
 
 // Persistent per-unit WRITER worktrees (U-W). Real git ops run in a THROWAWAY temp repo (one per
 // test that mutates it — unique dirs, no shared state); the validator + foreign-adoption guard use
-// pure fakes. Headroom for spawn contention under full-suite load, NOT a retry.
+// pure fakes. This file lives in vitest.config.ts's "real-git" project (sequence.groupOrder: 1),
+// which Vitest's scheduler dispatches only once every group-0 project ("unit", holding the rest of
+// the suite) has fully drained — verified by instrumenting both projects' start/end timestamps, the
+// real-git file's first test starts only after the last group-0 file's teardown completes, so its
+// git subprocesses never contend with the parallel suite for CPU. The bounded per-test timeout below
+// still guards against a genuinely hung subprocess; it is not what buys the isolation.
 const GIT_IT = { timeout: 20_000 };
 
 function g(dir: string, args: string[]): string {
