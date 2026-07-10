@@ -272,7 +272,15 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // NUMBERED zero-stale-hits assertion; explore from cwd via relative paths — root-anchored search is
     // blocked, an abs path from the repo name is permission-denied), generator (RUN the sweep grep — the
     // "known surfaces" list is a floor; a diff in a file Scope does NOT name needs a `deviations` entry).
-    expect(h.digest("hex")).toBe("53f059cce6835237d0bb5f3809e05a18bfc868f3df24e0ea0b0d327ca6a32779");
+    // Regenerated 2026-07-10 (codex-loop reflect prompt-fold): folded 3 reflect-earned lessons into
+    // DEFAULT_PROMPTS — contract-evaluator (a "cd <elsewhere> && …" prefix is denied as a multi-op
+    // escape so run bare relative commands; ".sparra/" is outside this role's read scope, so a
+    // plan-cited artifact there is unavailable — judge without it; an inline "node -e"/"python -c"
+    // snippet is a command too, EXECUTE it verbatim; numeric test-count baselines are MEASURED, use a
+    // "count ≥ N" floor and never report an unexecuted command as confirmed runnable) and evaluator
+    // (a broken CONTRACT transcription of a check, while the shipped command runs clean and nothing
+    // broken is committed, is contract trivia — run the working form, don't fail the artifact).
+    expect(h.digest("hex")).toBe("d44db131b7ad2dcb0ff480ba69fa8993418364cbc364714e804aab8fc604d325");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
