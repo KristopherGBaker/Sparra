@@ -1,6 +1,8 @@
 import { autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest } from "../build/roleRun.ts";
+import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
+import { buildRunRolePayload } from "../mcp/runRoleServer.ts";
+import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 import { banner, detail, err, info, ok, warn } from "../util/log.ts";
 
 const VALID_KINDS: RoleKind[] = ["generator", "contract-generator", "contract-evaluator", "evaluator", "reviewer"];
@@ -15,8 +17,41 @@ export async function cmdRoleRun(
   ctx: Ctx,
   flags: Record<string, string | boolean | string[]>,
   runRoleFn: typeof runRole = runRole,
-  autoProbe: typeof autoProbeCtx = autoProbeCtx
+  autoProbe: typeof autoProbeCtx = autoProbeCtx,
+  payloadBuilder: typeof buildRunRolePayload = buildRunRolePayload
 ): Promise<void> {
+  const json = flags.json === true;
+  const jsonOut = process.stdout.write.bind(process.stdout);
+  const normalOut = process.stdout.write;
+  if (json) {
+    // Preserve one parseable stdout object even when nested runner/backend code logs progress.
+    process.stdout.write = ((chunk: unknown, enc?: unknown, cb?: unknown) =>
+      (process.stderr.write as (...a: unknown[]) => boolean)(chunk, enc, cb)) as typeof process.stdout.write;
+  }
+  let res: RoleRunResult | undefined;
+  let jsonPayload: ReturnType<typeof buildRunRolePayload> | undefined;
+  try {
+    res = await runRoleCommand(ctx, flags, runRoleFn, autoProbe);
+    if (json && res) {
+      const summary = summarizePromptDrift(await promptDrift(ctx.paths));
+      const drift =
+        summary.actionable && summary.line
+          ? { stale: summary.stale, conflict: summary.conflict, note: summary.line }
+          : null;
+      jsonPayload = payloadBuilder(res, ctx.config.rubric.passThreshold, drift);
+    }
+  } finally {
+    if (json) process.stdout.write = normalOut;
+  }
+  if (jsonPayload) jsonOut(`${JSON.stringify(jsonPayload)}\n`);
+}
+
+async function runRoleCommand(
+  ctx: Ctx,
+  flags: Record<string, string | boolean | string[]>,
+  runRoleFn: typeof runRole,
+  autoProbe: typeof autoProbeCtx
+): Promise<RoleRunResult | undefined> {
   banner("sparra role run");
   const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
   if (!VALID_KINDS.includes(kind)) {
@@ -80,6 +115,7 @@ export async function cmdRoleRun(
     warn(`emptyCompletion: true — work LANDED (${res.filesChanged ?? 0} file(s) changed) but the report failed to emit; resume sessionId=${res.sessionId} or accept the landed work — NOT a behavioral fail`);
   if (res.hitBudget) warn(`hitBudget: true — stopped on the per-call budget cap; resume sessionId=${res.sessionId} (backend=${res.backend})`);
   (res.ok ? ok : warn)(`role-run ${res.ok ? "ok" : "not ok"} — ${res.tokens} tokens` + (res.costUsd ? `, $${res.costUsd.toFixed(3)}` : ""));
+  return res;
 }
 
 /**
@@ -158,6 +194,8 @@ export function roleRequestFromFlags(
     // `--baseline-command <cmd>` (evaluator-only, requires --eval-base): run the allowlisted command
     // at the base ref in a throwaway worktree, injecting a runner-owned [VERIFIED BASELINE] block.
     baselineCommand: typeof flags["baseline-command"] === "string" ? (flags["baseline-command"] as string) : undefined,
+    resumeSessionId: typeof flags["resume-session"] === "string" ? (flags["resume-session"] as string) : undefined,
+    resumeBackend: typeof flags["resume-backend"] === "string" ? (flags["resume-backend"] as string) : undefined,
   };
 }
 

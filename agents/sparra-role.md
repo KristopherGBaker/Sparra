@@ -40,14 +40,21 @@ Codex role still runs on Codex. You do not move the work onto Claude.
   `role-run-evaluator-*` traces.
 - Put **NO raw output and NO holdout text** in your summary back to the conductor.
 
-## Return ONLY a summary
-- **Evaluator:** the verdict — pass/fail, the total vs. threshold, and the blocking
-  points (concise, for the conductor to feed back as a generator brief).
-- **Generator / reviewer / contract-*:** a one-paragraph digest (what changed / the
-  recommendation) — never the diff or the full role text.
-- **Any role:** if the payload carries a `promptDrift` field (present only when the
-  project's on-disk prompts are stale against Sparra's built-in defaults), pass it
-  through — name the `stale` role(s) and that `sparra prompts sync` adopts them. It's
-  holdout-safe (role names only) and informational, not a failure.
-Do not paste the raw diff, the full verdict dump, or any holdout. If something
-failed, say what failed in one or two lines.
+## Return ONLY the canonical decision summary
+
+Copy every decision field supplied by the runner; do not replace control data with prose:
+
+- identity/status: `roleKind`, `ok`, `sessionId`, `backend`, `model`;
+- grade: `verdict`, `weightedTotal`, `passThreshold`, `blocking`, `failedAssertions`;
+- safe role output: `resultText`, with optional worker-written `resultDigest`;
+- recovery: `limitHit`, `hitMaxTurns`, `hitBudget`, `emptyCompletion`, `noProgress`,
+  `sameModelGrade`, `fallbackFrom`, `verifyGateWarning`;
+- artifacts/telemetry: `verdictPath`, `outPath`, `traceDir`, `filesChanged`, `unitWorktree`,
+  `errors`, `promptDrift`, `tokens`, `costUsd`.
+
+Keep absent fields absent. `resultDigest` may briefly index `resultText`, but is the only field you
+may synthesize and never replaces another field. Pass `promptDrift` through verbatim; it is
+informational and holdout-safe.
+
+Return NO raw diff, full verdict dump, evaluator trace, raw role transcript, or holdout text. The
+evaluator payload intentionally has no `resultText` or `traceDir`; do not recover them yourself.

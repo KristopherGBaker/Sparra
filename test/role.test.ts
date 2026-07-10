@@ -74,6 +74,21 @@ describe("roleRequestFromFlags — CLI --unit-worktree → unitWorktree (U-W)", 
   });
 });
 
+describe("roleRequestFromFlags — CLI resume envelope", () => {
+  it("threads --resume-session and --resume-backend", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(
+      ctx,
+      "generator",
+      { "resume-session": "sess-9", "resume-backend": "codex" },
+      { briefText: "continue" }
+    );
+    expect(req.resumeSessionId).toBe("sess-9");
+    expect(req.resumeBackend).toBe("codex");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("cmdRoleRemoveWorktree — CLI role rm-worktree", () => {
   it("requires --name (errors without it, never calls the remover)", async () => {
     const { ctx, dir } = await makeCtx();
@@ -348,5 +363,74 @@ describe("cmdRoleRun — prints emptyCompletion / filesChanged / hitBudget (Item
     );
     expect(out).toContain("verdict persisted: /proj/.sparra/verdicts/role-run-evaluator-x.verdict.md");
     expect(out).toContain("wrote: /proj/out.md");
+  });
+});
+
+describe("cmdRoleRun — --json uses the shared payload builder", () => {
+  function fakeResult(kind: "generator" | "evaluator"): RoleRunResult {
+    return {
+      ok: true,
+      roleKind: kind,
+      backend: "claude",
+      model: "m",
+      resultText: "done",
+      traceDir: "/trace",
+      sessionId: "sess-json",
+      costUsd: 0.01,
+      tokens: 10,
+      errors: ["note"],
+      ...(kind === "evaluator"
+        ? { verdict: { verdict: "pass", weightedTotal: 90, blocking: [], assertions: [] } as unknown as RoleRunResult["verdict"] }
+        : {}),
+    };
+  }
+
+  async function jsonRun(kind: "generator" | "evaluator"): Promise<{ stdout: string; builder: ReturnType<typeof vi.fn> }> {
+    const { ctx, dir } = await makeCtx();
+    let stdout = "";
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      return true;
+    });
+    const builder = vi.fn(() => ({
+      roleKind: kind,
+      backend: "claude",
+      model: "m",
+      sessionId: "sess-json",
+      ok: true,
+      resultText: kind === "generator" ? "from shared builder" : undefined,
+      errors: ["from-builder"],
+      tokens: 10,
+      costUsd: 0.01,
+    }));
+    try {
+      await cmdRoleRun(
+        ctx,
+        { kind, json: true, ...(kind === "generator" ? { "brief-text": "build" } : {}) },
+        async () => fakeResult(kind),
+        async () => {},
+        builder as never
+      );
+    } finally {
+      stdoutSpy.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    return { stdout, builder };
+  }
+
+  it("role run --json emits exactly the builder payload as one JSON object", async () => {
+    const { stdout, builder } = await jsonRun("generator");
+    expect(JSON.parse(stdout)).toMatchObject({ resultText: "from shared builder", errors: ["from-builder"] });
+    expect(stdout.trim().split("\n")).toHaveLength(1);
+    expect(builder).toHaveBeenCalledTimes(1);
+  });
+
+  it("eval --json (the evaluator-kind alias) emits the same builder path and wall-safe shape", async () => {
+    const { stdout, builder } = await jsonRun("evaluator");
+    const payload = JSON.parse(stdout);
+    expect(payload.errors).toEqual(["from-builder"]);
+    expect(payload.resultText).toBeUndefined();
+    expect(payload.traceDir).toBeUndefined();
+    expect(builder).toHaveBeenCalledTimes(1);
   });
 });

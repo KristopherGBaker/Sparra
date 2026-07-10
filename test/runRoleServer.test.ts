@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRunRolePayload, toRunRoleRequest } from "../src/mcp/runRoleServer.ts";
+import { buildRunRolePayload, toRunRoleRequest, type RunRolePayload } from "../src/mcp/runRoleServer.ts";
 import type { Ctx } from "../src/context.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
@@ -48,6 +48,8 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     expect(p.passThreshold).toBe(75);
     expect(p.failedAssertions).toHaveLength(1);
     expect("result" in p).toBe(false);
+    expect("resultText" in p).toBe(false);
+    expect(p.errors).toEqual([]);
   });
 
   it("surfaces the auto-persisted verdictPath (distinct from outPath) on the evaluator branch", () => {
@@ -69,9 +71,20 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     const p = buildRunRolePayload(r, 75);
 
     expect(p.traceDir).toBe("/proj/.sparra/traces/role-run-generator-x/");
-    expect(p.result).toBe("did the thing");
+    expect(p.resultText).toBe("did the thing");
+    expect("result" in p).toBe(false);
+    expect(p.errors).toEqual([]);
     expect(p.noProgress).toBe(true);
     expect("verdict" in p).toBe(false);
+  });
+
+  it("preserves recovered resultText together with its recovery errors", () => {
+    const p: RunRolePayload = buildRunRolePayload(
+      baseResult({ resultText: "recovered report", errors: ["Recovered completion report after one-shot re-ask"] }),
+      75
+    );
+    expect(p.resultText).toBe("recovered report");
+    expect(p.errors).toEqual(["Recovered completion report after one-shot re-ask"]);
   });
 
   it("surfaces the unitWorktree {name,dir,branch,created} on the (non-evaluator) generator branch", () => {

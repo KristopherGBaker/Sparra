@@ -181,7 +181,8 @@ generator the evaluator's blocking points for another round), pass
 `resumeSessionId` + `resumeBackend` from the previous call's returned `sessionId`/`backend`
 — the runner resumes that backend session, or starts fresh (with a warning) if the backend
 differs, since session ids aren't portable across backends. Every result returns `sessionId`
-+ `backend` for exactly this.
++ `backend` for exactly this. On the CLI, pass the same values as
+`--resume-session <id> --resume-backend <backend>` to `sparra role run`.
 
 **Provider limits / empty completions.** If a backend hits a rate/usage/session limit — or
 returns a **silent empty completion** (which the Codex backend detects and stamps with an
@@ -294,12 +295,14 @@ The same runner for scripts and CI:
 # A Codex evaluator grading a Claude generator's work, against a contract + holdout:
 sparra role run --kind evaluator --backend codex \
   --brief brief.md --contract contract.md \
-  --holdout .sparra/HOLDOUT.md --workspace . --out .sparra/verdicts/r1.md
+  --holdout .sparra/HOLDOUT.md --workspace . --out .sparra/verdicts/r1.md --json
 ```
 Flags: `--kind` (generator | contract-generator | contract-evaluator | evaluator |
 reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--brief <file>` |
 `--brief-text "…"`, `--contract <file>`, `--holdout <file>`, `--workspace <dir>`, `--out <file>`,
 `--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited),
+`--json` (one machine-readable payload on stdout; human logs move to stderr),
+`--resume-session <id>` and `--resume-backend <backend>` (resume a prior backend session),
 `--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
 generator** auto-run `build.verifyCommands` through the strict allow-hook; no-op on `eval`, which
 runs the evaluator, not a writer), `--prior-critique <file>` (repeatable, contract-evaluator
@@ -313,9 +316,19 @@ whipsaw-bounce an already-accepted fix or reverse an accepted out-of-scope carve
 `.sparra/` work).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
-[--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>]` (alias for `role run --kind
+[--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>] [--json]` (alias for `role run --kind
 evaluator`, with the brief defaulted) — to grade whatever you've been building, no full
 plan→freeze→build.
+
+### Shared MCP / JSON payload
+
+MCP `run_role`, `sparra role run --json`, and `sparra eval --json` all call the same
+`buildRunRolePayload` projection. The JSON forms emit exactly one parseable object to stdout and
+send human progress to stderr. Non-evaluator payloads use `resultText` (never the former `result`
+key) and include `errors`, including recovered reports where both the report and recovery note are
+actionable. Evaluator payloads include `errors` but omit `resultText` and `traceDir`, preserving the
+holdout wall. The envelope also carries identity/session, normalized verdict fields, recovery
+flags, artifact paths, `tokens`, and `costUsd`; `resultDigest` is an optional worker-only summary.
 
 `--brief` is **optional for the read-only judge roles** — `evaluator`, `reviewer`, and
 `contract-evaluator` synthesize a sensible default brief from their inputs (the workspace, and for

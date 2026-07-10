@@ -490,8 +490,12 @@ describe("U-B delta-critique — prompt + skill + docs", () => {
     expect(batchLine).toMatch(/RE-CRITIQUE round/);
   });
 
-  it("SKILL.md instructs conductor-side re-critique (prior critique + delta instruction; inline, not a .sparra path) and bumps the plugin version (assertion 6)", () => {
-    const skill = fs.readFileSync(path.join(process.cwd(), "skills/sparra-loop/SKILL.md"), "utf8");
+  it("the split skill instructs conductor-side re-critique (prior critique + delta instruction; inline fallback) and bumps the plugin version (assertion 6)", () => {
+    const skillRoot = path.join(process.cwd(), "skills/sparra-loop");
+    const skill = [
+      fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8"),
+      fs.readFileSync(path.join(skillRoot, "references/loop-core.md"), "utf8"),
+    ].join("\n");
     expect(skill).toMatch(/RE-CRITIQUE/);
     expect(skill).toMatch(/prior critique/i); // carry the prior critique text
     expect(skill).toMatch(/delta instruction/i); // …and state the delta instruction

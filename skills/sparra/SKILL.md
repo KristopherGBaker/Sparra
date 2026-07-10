@@ -66,6 +66,12 @@ sparra clean           # prune stale sparra worktrees/branches (dry-run; --yes a
 sparra resume          # continue whatever phase, from .sparra/state.json
 ```
 
+For scriptable role calls, `sparra role run … --json` and `sparra eval … --json` emit the same
+holdout-safe payload as MCP `run_role`: one JSON object on stdout, with human logs on stderr.
+Resume a CLI role session with `--resume-session <id> --resume-backend <backend>`; MCP uses the
+matching `resumeSessionId`/`resumeBackend` inputs. Evaluator JSON intentionally omits `resultText`
+and `traceDir`; non-evaluators use `resultText`, and both include `errors`.
+
 `--root <dir>` targets a project; otherwise the cwd is used. Re-running `sparra build`
 resumes — passed/abandoned/budget_exceeded items are skipped.
 

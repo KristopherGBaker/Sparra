@@ -17,6 +17,39 @@ export interface PromptDriftNote {
   note: string;
 }
 
+/** Canonical, holdout-safe result envelope shared by MCP and JSON CLI callers. */
+export interface RunRolePayload {
+  roleKind: RoleKind;
+  backend: string;
+  model: string;
+  sessionId?: string;
+  ok: boolean;
+  verdict?: NonNullable<RoleRunResult["verdict"]>["verdict"] | null;
+  weightedTotal?: number;
+  passThreshold?: number;
+  blocking?: NonNullable<RoleRunResult["verdict"]>["blocking"];
+  failedAssertions?: NonNullable<RoleRunResult["verdict"]>["assertions"];
+  resultText?: string;
+  resultDigest?: string;
+  verdictPath?: string;
+  outPath?: string;
+  traceDir?: string;
+  filesChanged?: number;
+  sameModelGrade?: boolean;
+  fallbackFrom?: RoleRunResult["fallbackFrom"];
+  limitHit?: RoleRunResult["limitHit"];
+  hitBudget?: boolean;
+  hitMaxTurns?: boolean;
+  emptyCompletion?: boolean;
+  noProgress?: boolean;
+  verifyGateWarning?: string;
+  unitWorktree?: RoleRunResult["unitWorktree"];
+  promptDrift?: PromptDriftNote;
+  errors: string[];
+  tokens: number;
+  costUsd: number;
+}
+
 /** The `run_role` tool's argument shape (mirrors the zod schema below). */
 export interface RunRoleToolArgs {
   roleKind: RoleKind;
@@ -98,7 +131,7 @@ export function buildRunRolePayload(
   r: RoleRunResult,
   passThreshold: number,
   drift?: PromptDriftNote | null
-): Record<string, unknown> {
+): RunRolePayload {
   // Only surface the drift note when there's something actionable (a newer default / conflict) —
   // don't add noise to every call. Role names + the note line only; never a body, never holdout.
   const driftField = drift ? { promptDrift: drift } : {};
@@ -132,6 +165,7 @@ export function buildRunRolePayload(
         // evaluator identity matches the crossModelBaseline (the generator). Signals the cross-model
         // gate collapsed. undefined when crossModelBaseline was not supplied.
         sameModelGrade: r.sameModelGrade,
+        errors: r.errors,
       }
     : {
         ...driftField,
@@ -140,7 +174,7 @@ export function buildRunRolePayload(
         model: r.model,
         sessionId: r.sessionId,
         ok: r.ok,
-        result: r.resultText,
+        resultText: r.resultText,
         // Holdout-free for these roles (holdout is dropped from their scope) — the conductor
         // may tail `<traceDir>/NN-*.md` for live progress. NOT included in the evaluator
         // (verdict) branch above, whose trace is holdout-bearing.
@@ -162,6 +196,7 @@ export function buildRunRolePayload(
         // Fallback provenance: present when the run fell back from the requested backend/model.
         // backend/model above already carry the ACTUAL post-fallback identity — do not rename.
         fallbackFrom: r.fallbackFrom, // {backend, model?} of the requested role that hit a limit
+        errors: r.errors,
       };
 }
 
