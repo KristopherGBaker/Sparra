@@ -16,4 +16,6 @@ dist/
 /CODEBASE_MAP.md
 /CHANGELOG.md
 /prototypes/
-# git worktrees are created as siblings (../Sparra-build-*), outside this repo.
+# Local development worktrees may live here; Sparra's build worktrees are created
+# as siblings (../Sparra-build-*), outside this repo.
+.worktrees/
