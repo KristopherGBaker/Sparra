@@ -72,15 +72,23 @@ export function assertNoHoldoutLeak(role: string, prompt: string, holdoutText: s
  *      (`glob`) names an artifact (judged as a Glob pattern).
  *    - Glob: the pattern IS path-shaped — blocked when any brace alternative resolves (with `..`
  *      and absolute prefixes applied) to/under an artifact, names a protected segment (literal OR a
- *      wildcard matching a protected basename — `HOLDOUT.*`/`HOLD*`/`*OUT.md`), or — being recursive
- *      (`**`) — descends into one. A pathless Glob of innocent explicit files is allowed even at a
- *      holdout-bearing cwd. ROOT CAUSE of an observed brace-Glob block (e.g. `{CLAUDE.md,
- *      docs/build-loop.md,…}`) at a holdout-bearing repo root: it was the DESIGNED pathless-root
- *      rule, NOT a pattern bug — a pattern-LESS search resolves its root (the `path` arg, else the
- *      cwd) to the holdout-bearing repo root, so `blockedSearchRoot`'s ancestor check denies it;
- *      `patternRefsHoldout` (a text-inspection of the pattern) never fired because there is no such
- *      check. Here a PATTERNED Glob is instead decided on its resolved targets and never branches on
- *      whether `path` was supplied, so a brace-glob of innocent files is allowed in BOTH forms.
+ *      wildcard matching a protected basename — `HOLDOUT.*`/`HOLD*`/`*OUT.md`), or EXACTLY matches a
+ *      concrete protected file (`artifacts` = the holdout/frozen-holdout/explicit path + `.sparra`
+ *      itself). Fix round 3 pivot (a hand-maintained list of *example* artifact filenames — one round-2
+ *      tried — is inherently incomplete: a shape absent from the list silently flips DENY→ALLOW, as
+ *      happened for a trace file, a `proposals/` file, and a `reflect/` file). Instead, ANY wildcard
+ *      tail that structurally DESCENDS into `.sparra` — a (possibly recursive `**`) prefix fully
+ *      consumes the path down to the `.sparra` boundary with at least one pattern segment left to
+ *      enumerate beneath it (`matchGlobPrefix`) — is denied BY DEFAULT, regardless of what that final
+ *      segment names; this needs no knowledge of any specific artifact shape, so no new trace/
+ *      proposal/reflect/verdict/config filename can slip through un-anticipated. The ONE narrow,
+ *      explicitly-justified exception (`SAFE_RECURSIVE_TAILS`) is a basename shape PROVEN to never
+ *      correspond to a Sparra artifact — `vitest.config.*` — the required positive fixture for a
+ *      root-anchored recursive Glob that cannot reach a protected artifact; it does not broaden to
+ *      any pattern that also names a real path segment ahead of the tail. Patterned Glob and Grep
+ *      `glob` filters share this same resolved-match-language decision; pattern-less searches still
+ *      use the stricter root rule because they can enumerate every artifact below the root regardless
+ *      of filename.
  *    - Bash: best-effort and path-based (see below). */
 export function makeHoldoutReadDecider(
   ctx: Ctx,
@@ -139,20 +147,28 @@ export function makeHoldoutReadDecider(
   // Recursive minimatch of a relative glob (segments) against a relative path (segments); `**`
   // matches zero or more path segments. Lets the Glob path ask, directory-AWARE, whether a wildcard
   // pattern actually resolves ONTO a specific protected artifact under the dir it scans.
-  const matchGlobPath = (pat: string[], parts: string[]): boolean => {
+  const matchGlobPath = (pat: string[], parts: string[], protectedPath = false): boolean => {
     if (pat.length === 0) return parts.length === 0;
     const [head, ...rest] = pat;
     if (head === "**") {
-      for (let i = 0; i <= parts.length; i++) if (matchGlobPath(rest, parts.slice(i))) return true;
+      for (let i = 0; i <= parts.length; i++) if (matchGlobPath(rest, parts.slice(i), protectedPath)) return true;
       return false;
     }
     if (parts.length === 0) return false;
-    return segToRegex(head!).test(parts[0]!) && matchGlobPath(rest, parts.slice(1));
+    // Treat wildcard directory segments conservatively for protected paths: Glob implementations
+    // vary in dot-directory traversal, and the holdout wall must not depend on that ambient option.
+    const matches = segToRegex(head!).test(parts[0]!) ||
+      (protectedPath && parts[0]!.startsWith(".") && GLOB_META.test(head!) && segToRegex("." + head!).test(parts[0]!));
+    return matches && matchGlobPath(rest, parts.slice(1), protectedPath);
   };
 
   // Does the glob (segments) DESCEND INTO `parts` — i.e. some prefix of the pattern fully consumes
-  // `parts` with at least one pattern segment left to enumerate BELOW it? Used to deny a wildcard-dir
-  // glob (`.s*/verdicts/*`) that lists filenames beneath `.sparra` without matching a specific artifact.
+  // `parts` (the path down to a protected dir, ALWAYS `.sparra` here) with at least one pattern
+  // segment left to enumerate BELOW it? This is the DEFAULT-DENY safety net (fix round 3): unlike
+  // `matchGlobPath`'s exact-artifact match, it needs no knowledge of any specific artifact's shape —
+  // a wildcard tail that merely REACHES `.sparra` with something left to list is presumed dangerous,
+  // so an unanticipated future filename (a trace, a proposal, a reflect summary, …) can't slip through
+  // un-named. Same dot-directory conservatism as `matchGlobPath` (a bare `*` still reaches a dotdir).
   const matchGlobPrefix = (pat: string[], parts: string[]): boolean => {
     if (parts.length === 0) return pat.length > 0; // reached the dir; remaining pattern lists inside it
     if (pat.length === 0) return false;
@@ -161,7 +177,24 @@ export function makeHoldoutReadDecider(
       for (let i = 0; i <= parts.length; i++) if (matchGlobPrefix(rest, parts.slice(i))) return true;
       return false;
     }
-    return segToRegex(head!).test(parts[0]!) && matchGlobPrefix(rest, parts.slice(1));
+    const matches = segToRegex(head!).test(parts[0]!) ||
+      (parts[0]!.startsWith(".") && GLOB_META.test(head!) && segToRegex("." + head!).test(parts[0]!));
+    return matches && matchGlobPrefix(rest, parts.slice(1));
+  };
+
+  // The ONE required positive fixture (#1): a root-anchored RECURSIVE Glob whose final segment is
+  // PROVEN to never correspond to a real Sparra artifact. Every artifact `Paths` (src/paths.ts) can
+  // ever produce ends in `.md`/`.json`/`.yaml` and is drawn from a small closed name set (config.yaml,
+  // state.json, memory.md, environment.md, `*.contract.md`, `*.rN.verdict.md`, `*.rN.review.md`,
+  // `<NN>-<role>.md` traces, `<item>-<n>.md` proposals, reflect's SUMMARY.md/upstream.md/INDEX.md,
+  // `.baseline.json`, …) — none of which is `vitest.config.<ext>`, a dev-tooling file that legitimately
+  // lives at the repo root. Scoped NARROWLY: only exempts a pattern whose sole path-shape ahead of the
+  // final segment is unbounded recursion (`**`) — a literal segment naming a real subdirectory
+  // (`traces`, `proposals`, `reflect`, …) ahead of the tail still denies via `matchGlobPrefix` above.
+  const SAFE_RECURSIVE_TAILS = new Set(["vitest.config.*"]);
+  const hasProvablySafeTail = (segs: string[]): boolean => {
+    const tail = segs[segs.length - 1];
+    return tail !== undefined && segs.slice(0, -1).every((s) => s === "**") && SAFE_RECURSIVE_TAILS.has(tail);
   };
 
   // A single-file READ is blocked when it IS / sits under a holdout artifact.
@@ -226,27 +259,34 @@ export function makeHoldoutReadDecider(
       }
       literal.push(s);
     }
-    const globstar = segs.some((s) => s.includes("**")); // a `**` anywhere means unbounded recursion
     const base = path.isAbsolute(alt)
       ? path.resolve("/" + literal.join("/"))
       : path.resolve(root, literal.join("/"));
     if (!sawWildcard) return protectedFiles.has(base) || within(base, sparraDir); // concrete target
     if (protectedFiles.has(base) || within(base, sparraDir)) return true; // scans from inside an artifact
     // WILDCARD-basename evasion: does the glob (resolved under `base`) actually MATCH a protected
-    // artifact sitting in the dir it scans? (`HOLDOUT.*`/`HOLD*`/`*OUT.md` at a root holding the live
-    // <root>/HOLDOUT.md.) Directory-aware, so an innocent `docs/*.md` never reaches a root-level holdout.
+    // CONCRETE artifact sitting in the dir it scans? (`HOLDOUT.*`/`HOLD*`/`*OUT.md` at a root holding
+    // the live <root>/HOLDOUT.md, or the explicit holdout path.) Directory-aware, so an innocent
+    // `docs/*.md` never reaches a root-level holdout.
     const restSegs = segs.slice(literal.length);
     for (const a of artifacts) {
       const rel = path.relative(base, a);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && matchGlobPath(restSegs, rel.split(path.sep)))
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && matchGlobPath(restSegs, rel.split(path.sep), true))
         return true;
     }
-    // The wildcard tail traverses INTO `.sparra` (enumerates filenames beneath it) even without
-    // matching a specific artifact file — a prefix of the tail resolves onto the protected dir.
+    // STRUCTURAL descent (fix round 3, see `matchGlobPrefix` above): the wildcard tail traverses INTO
+    // `.sparra` — enumerating SOME filename beneath it — even without matching any concrete artifact
+    // by name. Denied by default; the one narrow, justified exception is `hasProvablySafeTail`.
     const relDir = path.relative(base, sparraDir);
-    if (relDir && !relDir.startsWith("..") && !path.isAbsolute(relDir) && matchGlobPrefix(restSegs, relDir.split(path.sep)))
+    if (
+      relDir &&
+      !relDir.startsWith("..") &&
+      !path.isAbsolute(relDir) &&
+      !hasProvablySafeTail(restSegs) &&
+      matchGlobPrefix(restSegs, relDir.split(path.sep))
+    )
       return true;
-    return globstar && artifacts.some((a) => within(a, base)); // `**` descends into a contained artifact
+    return false;
   };
   const globHitsArtifact = (pattern: string, root: string): boolean =>
     expandBraces(pattern).some((alt) => altHitsArtifact(alt, root));
@@ -276,7 +316,8 @@ export function makeHoldoutReadDecider(
     }
     return false;
   };
-  const DENY = "Holdout/.sparra is evaluator-only and not readable by this role.";
+  const DENY =
+    "Pattern targets evaluator-only Holdout/.sparra artifacts — narrow it to a safe relative subtree or filename, such as src/ or **/vitest.config.*.";
   const DENY_ROOT =
     "Search is rooted at a holdout-bearing dir (it contains .sparra) — pass an explicit non-holdout subdir path like src/ instead.";
   return (tool, input) => {
@@ -290,8 +331,9 @@ export function makeHoldoutReadDecider(
     if (tool === "Grep") {
       // Content `pattern` is never inspected; deny only on the search root or a path-shaped filter.
       const root = resolve(i?.path ?? workspace);
-      if (blockedSearchRoot(root)) return DENY_ROOT;
-      if (i?.glob && globHitsArtifact(i.glob, root)) return DENY;
+      if (i?.glob) {
+        if (globHitsArtifact(i.glob, root)) return DENY;
+      } else if (blockedSearchRoot(root)) return DENY_ROOT;
     }
     if (tool === "Glob") {
       // The pattern IS path-shaped — decide on the targets it resolves to, not the root shape.

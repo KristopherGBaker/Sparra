@@ -280,7 +280,9 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // "count ≥ N" floor and never report an unexecuted command as confirmed runnable) and evaluator
     // (a broken CONTRACT transcription of a check, while the shipped command runs clean and nothing
     // broken is committed, is contract trivia — run the working form, don't fail the artifact).
-    expect(h.digest("hex")).toBe("d44db131b7ad2dcb0ff480ba69fa8993418364cbc364714e804aab8fc604d325");
+    // Regenerated 2026-07-10 (holdout-safe root search): contract-evaluator guidance now permits
+    // selective filename Globs while retaining the protected-target and unfiltered-root denials.
+    expect(h.digest("hex")).toBe("8ae9f7b877d838a49f2a19bcad6384c41c6b57cac3fa3f750db6d7a7c20b72f7");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

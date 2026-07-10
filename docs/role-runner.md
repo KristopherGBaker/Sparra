@@ -299,8 +299,9 @@ path), independent of the resolved permission mode or a model classifier — so 
 silently starve with every read denied (the failure where a generator burned tokens and produced
 nothing). The holdout-read block is composed into the *same* hook as a deny-decider, so it still
 wins over the read allow (a holdout/`.sparra` read is denied even though it sits in the read scope);
-a pathless `Grep`/`Glob` over the cwd is **not** auto-granted (it could surface a cwd-resident
-holdout) and defers to the permission mode. As a backstop, a **writer that finishes without
+a pathless unfiltered `Grep`/`Glob` over the cwd is **not** auto-granted (it could surface a
+cwd-resident holdout); selective Glob patterns and Grep `glob:` filters are allowed only when
+their resolved matches cannot expose protected artifacts. As a backstop, a **writer that finishes without
 changing any file's content** (content-compared against the pre-run snapshot, so an edit to an
 already-dirty file on a continuation round is NOT falsely flagged) is marked `noProgress: true` on
 the result and the MCP payload — like `limitHit`, the conductor treats it as "investigate the

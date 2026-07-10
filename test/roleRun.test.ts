@@ -1002,6 +1002,11 @@ describe("runRole — holdout never reaches the conductor", () => {
     // Pathless search → searches the cwd (the holdout-bearing root) → its content reaches the holdout.
     expect(deny("Grep", { pattern: "byte-identical" })).toBeTruthy();
     expect(deny("Glob", { pattern: "**/*.md" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Glob", { path: dir, pattern: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Grep", { pattern: "x", glob: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Grep", { path: dir, pattern: "x", glob: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Grep", { path: dir, pattern: "x", glob: "**/*.md" })).toBeTruthy();
     // Explicit search root that IS / CONTAINS the holdout scope.
     expect(deny("Grep", { path: ".", pattern: "x" })).toBeTruthy(); // "." → root, contains .sparra
     expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy();

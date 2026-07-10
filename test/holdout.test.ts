@@ -61,6 +61,33 @@ async function makeDeciderCtx(): Promise<{ ctx: Ctx; root: string }> {
   return { ctx, root };
 }
 
+/** Fix round 3 — a REALISTIC `.sparra`-shaped fixture tree, populated with an actual on-disk file at
+ *  every artifact-producing shape (not merely a placeholder path string): the fixed constants
+ *  (config.yaml/state.json/memory.md) AND the dynamically-named shapes a real build/reflect run
+ *  produces (a trace file, a proposals file, a nested reflect summary, a contract, a verdict). The
+ *  guard itself is pure path logic (no disk reads) — this fixture exists so the deny/allow pairs below
+ *  are tested against genuine artifact PATHS, not hand-picked example strings baked into the test. */
+async function makeMatureDeciderCtx(): Promise<{ ctx: Ctx; root: string }> {
+  const { ctx, root } = await makeDeciderCtx();
+  const { paths } = ctx;
+  fs.writeFileSync(paths.config, "build: {}\n");
+  fs.writeFileSync(paths.state, "{}\n");
+  fs.writeFileSync(paths.memory, "# Memory\n");
+  fs.writeFileSync(paths.contractFile("item-001"), "# Contract\n");
+  fs.mkdirSync(path.dirname(paths.verdictFile("item-001", 1)), { recursive: true });
+  fs.writeFileSync(paths.verdictFile("item-001", 1), "# Verdict\n");
+  const traceDir = paths.traceDir("run-001");
+  fs.mkdirSync(traceDir, { recursive: true });
+  fs.writeFileSync(path.join(traceDir, "01-generator.md"), "# generator trace\n");
+  fs.writeFileSync(path.join(traceDir, "02-evaluator.md"), "# evaluator trace (holdout-derived)\n");
+  fs.mkdirSync(paths.proposals, { recursive: true });
+  fs.writeFileSync(path.join(paths.proposals, "item-001-1.md"), "# Proposal\n");
+  const reflectDir = path.join(paths.reflect, "20260710-000000");
+  fs.mkdirSync(reflectDir, { recursive: true });
+  fs.writeFileSync(path.join(reflectDir, "SUMMARY.md"), "# Reflect summary\n");
+  return { ctx, root };
+}
+
 describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
   it("#4/#7 Bash referencing legitimate holdout SOURCE (not a protected artifact) is allowed", async () => {
     const { ctx, root } = await makeDeciderCtx();
@@ -124,11 +151,19 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     const deny = makeHoldoutReadDecider(ctx, root);
     expect(deny("Glob", { pattern: "**/HOLDOUT.md", path: root })).toBeTruthy(); // basename named
     expect(deny("Glob", { pattern: "**/HOLDOUT.md" })).toBeTruthy(); // pathless above root, same decision
+    expect(deny("Glob", { pattern: "**/HOLDOUT.frozen.md" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/HOLD*" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/*OUT.md" })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/HOLDOUT.*" })).toBeTruthy();
     expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy(); // .sparra segment
     expect(deny("Glob", { pattern: "{README.md,.sparra/HOLDOUT.md}" })).toBeTruthy(); // one bad alternative
     expect(deny("Glob", { pattern: "**/*" })).toBeTruthy(); // unbounded ** descends into .sparra
     expect(deny("Glob", { pattern: "**/*.md" })).toBeTruthy(); // ditto
     expect(deny("Glob", { pattern: "*/**/*.md" })).toBeTruthy(); // a ** anywhere still recurses into an artifact
+    expect(deny("Glob", { pattern: "**/vitest.config.*", path: root })).toBeNull();
+    expect(deny("Glob", { pattern: "**/vitest.config.*", path: "." })).toBeNull();
+    expect(deny("Glob", { pattern: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Glob", { pattern: "**/{vitest.config.*,HOLDOUT.md}" })).toBeTruthy();
     expect(deny("Glob", { path: path.join(root, "src"), pattern: "../.sparra/frozen/HOLDOUT.frozen.md" })).toBeTruthy(); // .. escape
     expect(deny("Glob", { pattern: ctx.paths.frozenHoldout })).toBeTruthy(); // absolute prefix → the artifact
     expect(deny("Glob", { path: path.join(root, "src"), pattern: "*.ts" })).toBeNull(); // innocent subdir glob
@@ -153,6 +188,14 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     const deny = makeHoldoutReadDecider(ctx, root);
     expect(deny("Grep", { pattern: "x", path: path.join(root, "src"), glob: "**/HOLDOUT.md" })).toBeTruthy();
     expect(deny("Grep", { pattern: "x", path: path.join(root, "src"), glob: ".sparra/**" })).toBeTruthy();
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Grep", { pattern: "x", glob: "**/vitest.config.*" })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*.md" })).toMatch(/src\//);
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*OUT.md" })).toMatch(/src\//);
+    const unsafeRoot = deny("Grep", { pattern: "x", path: root });
+    const protectedTarget = deny("Grep", { pattern: "x", path: root, glob: "**/HOLDOUT.*" });
+    expect(unsafeRoot).toContain("rooted");
+    expect(protectedTarget).toContain("targets");
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -162,11 +205,8 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
   it("#1/#2 Glob with a wildcard-dir segment descending into .sparra is denied", async () => {
     const { ctx, root } = await makeDeciderCtx();
     const deny = makeHoldoutReadDecider(ctx, root);
-    expect(deny("Glob", { pattern: ".s*/verdicts/*" })).toBeTruthy(); // NEW: mid-depth wildcard dir
-    expect(deny("Glob", { pattern: ".s*/traces/*" })).toBeTruthy(); // NEW
-    expect(deny("Glob", { pattern: ".s*/*" })).toBeTruthy(); // stays denied (matches .sparra/HOLDOUT.md)
-    expect(deny("Glob", { pattern: ".s*/**" })).toBeTruthy(); // stays denied (globstar into .sparra)
-    expect(deny("Glob", { pattern: ".s*" })).toBeTruthy(); // stays denied (names the .sparra dir)
+    for (const pattern of [".s*/verdicts/*", ".s*/traces/*", ".s*/*", ".s*/**", ".s*"])
+      expect(deny("Glob", { pattern }), pattern).toBeTruthy();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -177,6 +217,67 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     expect(deny("Glob", { pattern: "src/**/*.ts" })).toBeNull();
     expect(deny("Glob", { pattern: "*.json" })).toBeNull();
     expect(deny("Glob", { pattern: ".git/*" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // Fix round 2 (#2/#4) — a recursive globstar naming a REAL protected filename SHAPE (not merely
+  // a fake placeholder) must stay denied even though it never matches the `.sparra` dir itself or an
+  // explicit holdout path. Each pattern here matches a genuine artifact under `.sparra` (config.yaml,
+  // state.json, memory.md, a contract file, a verdict file) — the pre-fix representative-example list
+  // let every one of these through, so this pair is non-degenerate. `**/vitest.config.*` — a basename
+  // with no real `.sparra` counterpart — must remain the sole allow case, both for Glob and for Grep's
+  // `glob:` filter (the two share `globHitsArtifact`).
+  it("#2/#4 recursive globs naming real .sparra artifact shapes stay denied; vitest.config.* stays allowed", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    const realShapeDenies = [
+      "**/*.verdict.md",
+      "**/config.yaml",
+      "**/*.yaml",
+      "**/state.json",
+      "**/memory.md",
+      "**/*.contract.md",
+    ];
+    for (const pattern of realShapeDenies) {
+      expect(deny("Glob", { pattern, path: root }), pattern).toBeTruthy();
+      expect(deny("Grep", { pattern: "x", path: root, glob: pattern }), pattern).toBeTruthy();
+    }
+    expect(deny("Glob", { pattern: "**/vitest.config.*", path: root })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/vitest.config.*" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // Fix round 3 — the hand-maintained-example-list pivot. A REALISTIC, mature `.sparra` tree (real
+  // trace, proposals, and nested reflect files on disk, plus the fixed config/state/memory/contract/
+  // verdict artifacts) is checked against every pattern the round-3 brief demonstrated still leaking
+  // (a Grep `glob: "**/traces/**/*.md"` returned the un-redacted evaluator trace lines) PLUS the full
+  // round-1 set, for BOTH Glob and Grep's `glob:` filter (shared `globHitsArtifact`). `vitest.config.*`
+  // remains the sole required positive fixture. Non-degenerate: every deny pattern here is checked
+  // against the SAME mature tree the allow pattern is checked against, and two of them (the trace-file
+  // and proposals-file cases) were independently mutation-tested by temporarily disabling the new
+  // `matchGlobPrefix` structural-descent check, confirming both go from denied to allowed (red).
+  it("fix round 3: trace/proposals/reflect/item- shapes stay denied on a mature .sparra tree; vitest.config.* stays allowed", async () => {
+    const { ctx, root } = await makeMatureDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    const stillLeakingDenies = [
+      "**/*-evaluator.md", // the exact shape the round-3 Grep probe surfaced (NN-evaluator.md)
+      "**/*-generator.md",
+      "**/traces/**/*.md", // the demonstrated Grep glob: leak (un-redacted evaluator transcript)
+      "**/proposals/*.md",
+      "**/item-*.md",
+      "**/reflection.md",
+      "**/reflect/*.md",
+    ];
+    const round1Denies = ["**/*.verdict.md", "**/config.yaml", "**/*.yaml", "**/state.json", "**/memory.md", "**/*.contract.md"];
+    for (const pattern of [...stillLeakingDenies, ...round1Denies]) {
+      expect(deny("Glob", { pattern, path: root }), pattern).toBeTruthy();
+      expect(deny("Grep", { pattern: "x", path: root, glob: pattern }), pattern).toBeTruthy();
+    }
+    expect(deny("Glob", { pattern: "**/vitest.config.*", path: root })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/vitest.config.*" })).toBeNull();
+    // A literal directory segment ahead of the tail is NEVER exempted, even if the tail alone would be
+    // (the `hasProvablySafeTail` carve-out only fires for pure `**`-then-tail patterns).
+    expect(deny("Glob", { pattern: "**/traces/vitest.config.*", path: root })).toBeTruthy();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
