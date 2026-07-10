@@ -1,4 +1,4 @@
-# Claude sparra-loop pre-split baseline
+# sparra-loop dogfood specifications
 
 This directory is the pre-split baseline of the Claude `sparra-loop` behavior documented by
 `skills/sparra-loop/SKILL.md` at git commit
@@ -22,3 +22,19 @@ argument, payload field, file boundary, or verbatim decision rule named by that 
 These files add no user-facing config knob, phase, role, backend capability, or CLI flag. The
 repository on-ramp, detailed docs, operational skill, and marketplace version therefore require no
 docs-sync change in this phase.
+
+## Cross-host dogfood
+
+The files above are the Phase 0 Claude baseline. The following are the cross-host specifications
+added in Phase 5; they test the shared contract and host adapters without replacing that baseline.
+
+| Cross-host behavior | Scenario |
+| --- | --- |
+| Config-less evaluation conducted from Codex | [`zero-setup-codex-eval.md`](zero-setup-codex-eval.md) |
+| Claude→Codex fail/fix/re-grade and reverse Codex→Claude split | [`cross-model-and-reverse.md`](cross-model-and-reverse.md) |
+| Refusal when evaluator independence collapses | [`collapsed-independence.md`](collapsed-independence.md) |
+| All canonical recovery-envelope branches | [`recovery-envelope.md`](recovery-envelope.md) |
+| Conservative Codex process queue and refill | [`parallel-queue-refill.md`](parallel-queue-refill.md) |
+| Runner-enforced holdout wall | [`holdout-wall.md`](holdout-wall.md) |
+| Codex handoff to the full stepped engine | [`full-engine-step-handoff.md`](full-engine-step-handoff.md) |
+| Representative Claude adapter regression | [`claude-regression.md`](claude-regression.md) |

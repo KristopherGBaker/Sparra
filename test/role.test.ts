@@ -8,6 +8,7 @@ import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags } from "../src/phases/role.ts";
+import { buildRunRolePayload } from "../src/mcp/runRoleServer.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
 async function makeCtx(): Promise<{ ctx: Ctx; dir: string }> {
@@ -385,29 +386,20 @@ describe("cmdRoleRun — --json uses the shared payload builder", () => {
     };
   }
 
-  async function jsonRun(kind: "generator" | "evaluator"): Promise<{ stdout: string; builder: ReturnType<typeof vi.fn> }> {
+  async function jsonRun(kind: "generator" | "evaluator"): Promise<{ stdout: string; result: RoleRunResult; builder: ReturnType<typeof vi.fn> }> {
     const { ctx, dir } = await makeCtx();
     let stdout = "";
     const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
       stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
       return true;
     });
-    const builder = vi.fn(() => ({
-      roleKind: kind,
-      backend: "claude",
-      model: "m",
-      sessionId: "sess-json",
-      ok: true,
-      resultText: kind === "generator" ? "from shared builder" : undefined,
-      errors: ["from-builder"],
-      tokens: 10,
-      costUsd: 0.01,
-    }));
+    const result = fakeResult(kind);
+    const builder = vi.fn(buildRunRolePayload);
     try {
       await cmdRoleRun(
         ctx,
         { kind, json: true, ...(kind === "generator" ? { "brief-text": "build" } : {}) },
-        async () => fakeResult(kind),
+        async () => result,
         async () => {},
         builder as never
       );
@@ -415,20 +407,20 @@ describe("cmdRoleRun — --json uses the shared payload builder", () => {
       stdoutSpy.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    return { stdout, builder };
+    return { stdout, result, builder };
   }
 
   it("role run --json emits exactly the builder payload as one JSON object", async () => {
-    const { stdout, builder } = await jsonRun("generator");
-    expect(JSON.parse(stdout)).toMatchObject({ resultText: "from shared builder", errors: ["from-builder"] });
+    const { stdout, result, builder } = await jsonRun("generator");
+    expect(JSON.parse(stdout)).toEqual(buildRunRolePayload(result, defaultConfig().rubric.passThreshold, null));
     expect(stdout.trim().split("\n")).toHaveLength(1);
     expect(builder).toHaveBeenCalledTimes(1);
   });
 
   it("eval --json (the evaluator-kind alias) emits the same builder path and wall-safe shape", async () => {
-    const { stdout, builder } = await jsonRun("evaluator");
+    const { stdout, result, builder } = await jsonRun("evaluator");
     const payload = JSON.parse(stdout);
-    expect(payload.errors).toEqual(["from-builder"]);
+    expect(payload).toEqual(buildRunRolePayload(result, defaultConfig().rubric.passThreshold, null));
     expect(payload.resultText).toBeUndefined();
     expect(payload.traceDir).toBeUndefined();
     expect(builder).toHaveBeenCalledTimes(1);

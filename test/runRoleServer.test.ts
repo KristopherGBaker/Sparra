@@ -24,6 +24,55 @@ function baseResult(over: Partial<RoleRunResult>): RoleRunResult {
 }
 
 describe("buildRunRolePayload — holdout-safe field split", () => {
+  it("copies every canonical RoleRunResult field verbatim or accounts for its intentional transformation", () => {
+    // Record<keyof ...> makes this fixture fail typecheck when RoleRunResult gains a field until
+    // the canonical-envelope policy below is deliberately extended.
+    const resultFields: Record<keyof RoleRunResult, true> = {
+      ok: true, roleKind: true, backend: true, model: true, resultText: true, verdict: true,
+      outPath: true, verdictPath: true, traceDir: true, sessionId: true, costUsd: true,
+      tokens: true, errors: true, limitHit: true, noProgress: true, hitMaxTurns: true,
+      emptyCompletion: true, filesChanged: true, hitBudget: true, unitWorktree: true,
+      fallbackFrom: true, sameModelGrade: true, verifyGateWarning: true,
+    };
+    const full = baseResult({
+      roleKind: "evaluator", backend: "codex", model: "gpt-complete", resultText: "raw",
+      verdict: { verdict: "fail", weightedTotal: 41, blocking: ["b"], assertions: [{ id: 7, pass: false }] } as any,
+      outPath: "/out", verdictPath: "/verdict", traceDir: "/secret-trace", sessionId: "session",
+      costUsd: 1.25, tokens: 987, errors: ["e"], limitHit: { backend: "claude" } as any,
+      noProgress: true, hitMaxTurns: true, emptyCompletion: true, filesChanged: 4, hitBudget: true,
+      unitWorktree: { name: "u", dir: "/u", branch: "sparra/u", created: true },
+      fallbackFrom: { backend: "claude", model: "opus" }, sameModelGrade: true,
+      verifyGateWarning: "run npm test",
+    });
+    const directWorkerFields = [
+      "ok", "roleKind", "backend", "model", "resultText", "outPath", "traceDir", "sessionId",
+      "costUsd", "tokens", "errors", "limitHit", "noProgress", "hitMaxTurns", "emptyCompletion",
+      "filesChanged", "hitBudget", "unitWorktree", "fallbackFrom", "verifyGateWarning",
+    ] as const satisfies readonly (keyof RoleRunResult)[];
+    const directEvaluatorFields = [
+      "ok", "roleKind", "backend", "model", "outPath", "verdictPath", "sessionId", "costUsd",
+      "tokens", "errors", "limitHit", "hitMaxTurns", "hitBudget", "fallbackFrom", "sameModelGrade",
+    ] as const satisfies readonly (keyof RoleRunResult)[];
+
+    const workerResult = { ...full, roleKind: "generator" as const, verdict: undefined };
+    const worker = buildRunRolePayload(workerResult, 75);
+    const evaluator = buildRunRolePayload(full, 75);
+    for (const key of directWorkerFields) expect(worker[key]).toBe(workerResult[key]);
+    for (const key of directEvaluatorFields) expect(evaluator[key]).toBe(full[key]);
+    expect(evaluator).toMatchObject({ verdict: "fail", weightedTotal: 41, blocking: full.verdict!.blocking });
+    expect(evaluator.failedAssertions).toEqual(full.verdict!.assertions);
+    expect(evaluator.passThreshold).toBe(75);
+    expect(evaluator).not.toHaveProperty("traceDir");
+    expect(evaluator).not.toHaveProperty("resultText");
+    expect(worker).not.toHaveProperty("resultDigest");
+
+    const accounted = new Set<keyof RoleRunResult>([
+      ...directWorkerFields, ...directEvaluatorFields, "verdict", "verdictPath", "traceDir",
+      "resultText", "noProgress", "emptyCompletion", "filesChanged", "unitWorktree", "verifyGateWarning",
+    ]);
+    expect(Object.keys(resultFields).filter((key) => !accounted.has(key as keyof RoleRunResult))).toEqual([]);
+  });
+
   it("the EVALUATOR payload OMITS traceDir (its trace is holdout-bearing) and carries the verdict", () => {
     const r = baseResult({
       roleKind: "evaluator",
