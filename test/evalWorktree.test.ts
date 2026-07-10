@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, runRoleInTempWorktree, type RoleRunRequest, type RoleRunResult } from "../src/build/roleRun.ts";
+import {
+  defaultTempWorktreeDir,
+  runRole,
+  runRoleInTempWorktree,
+  type RoleRunRequest,
+  type RoleRunResult,
+} from "../src/build/roleRun.ts";
 import { isLinkedWorktree, listWorktrees } from "../src/util/git.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
@@ -78,6 +84,11 @@ function fakeResult(over: Partial<RoleRunResult> = {}): RoleRunResult {
     ...over,
   };
 }
+
+it("creates distinct temp-worktree snapshot dirs for concurrent judges of the same workspace", () => {
+  const source = path.join(os.tmpdir(), "same-workspace");
+  expect(defaultTempWorktreeDir(source)).not.toBe(defaultTempWorktreeDir(source));
+});
 
 /** What the injected inner runner observes INSIDE the temp worktree, while it exists. */
 interface Seen {

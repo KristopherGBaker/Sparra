@@ -1121,7 +1121,7 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
 }
 
 /** Unique sibling dir for the temp worktree (same volume as the source, so COW dep copies stay cheap). */
-function defaultTempWorktreeDir(src: string): string {
+export function defaultTempWorktreeDir(src: string): string {
   return path.join(path.dirname(src), `${path.basename(src)}-eval-${stampFromDate(new Date())}-${randomUUID().slice(0, 6)}`);
 }
 

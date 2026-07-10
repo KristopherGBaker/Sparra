@@ -23,11 +23,12 @@ sparra role run --kind generator --brief brief.md --contract contract.md --backe
 sparra eval . --worktree --contract contract.md --backend codex --json > eval-envelope.json &
 ```
 
-Queue conservatively, launch independent safe calls together, and refill the queue as processes
-finish. Wait for a process to complete before reading and parsing its JSON envelope. Do not import
-raw transcripts or evaluator traces into conductor context. Use the fresh-process CLI when
-dogfooding runner changes so every call executes current code rather than a stale persistent MCP
-server.
+Use the conservative bound of **3 simultaneous processes**: launch matrix-safe runnable roles up
+to the bound, queue the rest, and refill open slots as processes complete. More runnable roles than
+the bound are queued, never dropped. Wait for a process to complete before reading and parsing its
+JSON envelope. Do not import raw transcripts or evaluator traces into conductor context. Use the
+fresh-process CLI when dogfooding runner changes so every call executes current code rather than a
+stale persistent MCP server.
 
 Resume a stopped call using the prior envelope's backend and session ID:
 
@@ -45,7 +46,8 @@ safety tradeoff.
 Use direct MCP only when neither delegated workers nor background processes are available. Discover
 capabilities named `run_role` and `remove_unit_worktree` at runtime; never hard-code their fully
 qualified names because plugin namespaces can change them. Persist the canonical, holdout-safe
-summary immediately, run calls sequentially, and state that execution is blocking and
+summary immediately. With no concurrency, run blocking direct MCP roles sequentially with the
+configured multi-minute `tool_timeout_sec` (`1800`). State that execution is blocking and
 capacity-limited. Never request raw output or expose verbose traces.
 
 The codex-cli 0.144.1 spike found three requirements and limitations:
