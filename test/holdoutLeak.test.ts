@@ -108,9 +108,9 @@ describe("Item C — the guard/permission mechanisms the contract/decompose/reco
     const { ctx, dir } = await makeCtx();
     const canUse = plannerWriteScope(ctx.paths.plan, [], makeHoldoutReadDecider(ctx, ctx.root));
     const readHoldout = await canUse("Read", { file_path: ctx.paths.holdout } as any, {} as any);
-    expect(readHoldout.behavior).toBe("deny");
+    expect(readHoldout?.behavior).toBe("deny");
     const readSrc = await canUse("Read", { file_path: path.join(dir, "src/a.ts") } as any, {} as any);
-    expect(readSrc.behavior).toBe("allow");
+    expect(readSrc?.behavior).toBe("allow");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
