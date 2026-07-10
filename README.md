@@ -19,32 +19,58 @@ Works on new and existing codebases, over pluggable agent backends (**Claude and
 
 > **Status:** young and still finding its form, but already earning its keep on real projects (and on Sparra itself). Inspired by the Anthropic workshop [Build Agents That Run for Hours](https://youtu.be/mR-WAvEPRwE).
 
-## Quick start: drive it from Claude Code
+## Quick start: drive it from Claude Code or Codex
 
-The most common way to use Sparra: the **`/sparra-loop`** skill runs the loop above *inside an interactive Claude Code session*, with you on the wheel — steer every step, or let it run in auto mode and step in only when needed.
+The **`sparra-loop`** skill runs the loop above inside either interactive host, with you on the
+wheel — steer every step, or let it run in auto mode and step in only when needed. Claude Code and
+Codex are equal conductors; the generator and evaluator backends remain independently configurable.
 
-One-time setup, from a clone of this repo:
+First install Sparra from a clone of this repo. `npm link` is required for both hosts because it
+puts the `sparra` and `sparra-run-mcp` package bins on `PATH`:
 
 ```bash
 npm install && npm link           # puts `sparra` + `sparra-run-mcp` on your PATH
 npm i @openai/codex-sdk           # optional: only for a Codex backend (also needs the `codex` CLI authed)
+```
 
+### Claude Code
+
+```bash
 claude mcp add sparra-run --scope user -- sparra-run-mcp   # the role-runner MCP tool
 claude plugin marketplace add "$PWD"
 claude plugin install sparra@sparra-skills                 # gives you /sparra-loop and /sparra
 ```
 
-Then open Claude Code **in your project** and type `/sparra-loop`. It sets the project up (`sparra init`, per-role backend/model split, optional holdout) and drives the loop:
+Open Claude Code **in your project** and type `/sparra-loop`.
+
+### Codex
+
+Open an interactive Codex session in the Sparra clone and ask:
+
+```text
+Install the local Sparra plugin from this checkout using .codex-plugin/plugin.json.
+```
+
+After installation, start a **fresh Codex thread in your project** so the plugin's skills and MCP
+tools load, then ask `Use sparra-loop to add feature X`. Codex primarily launches the installed
+`sparra` CLI as background JSON processes, keeping the conductor responsive; direct MCP is an
+approval-gated fallback. The packaged MCP declaration uses `sparra-run-mcp` from `PATH` and raises
+Codex's 60-second default `tool_timeout_sec` to `1800` for multi-minute role calls. See the
+[role-runner guide](docs/role-runner.md#codex-install-and-run) for the exact CLI, resume, manual MCP,
+and reinstall paths.
+
+Either host sets the project up (`sparra init`, per-role backend/model split, optional holdout) and
+drives the loop:
 
 ```mermaid
 sequenceDiagram
     participant You
-    participant CC as Claude Code<br>(/sparra-loop)
+    participant CC as Claude Code or Codex<br>(sparra-loop)
     participant R as Sparra role-runner
-    You->>CC: /sparra-loop "add feature X"
-    CC->>R: run_role contract-generator
-    CC->>R: run_role generator (e.g. Claude)
-    CC->>R: run_role evaluator (e.g. Codex) — sees the holdout, exercises the work
+    You->>CC: sparra-loop "add feature X"
+    CC->>R: launch contract-generator
+    CC->>R: launch generator (e.g. Claude)
+    CC->>R: launch evaluator (e.g. Codex) — sees the holdout, exercises the work
     R-->>CC: verdict only (holdout stays redacted)
     CC->>You: round summary — accept, iterate, or pivot?
 ```
@@ -106,8 +132,10 @@ Sparra is a harness, not a fixed pipeline. The [iOS/macOS support](docs/ios.md) 
 
 ## Requirements
 
-- **Node 20+** and an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code login).
-- Optional **Codex** backend: `npm i @openai/codex-sdk` + the `codex` CLI. → [docs/backends.md](docs/backends.md)
+- **Node 20+** and `npm install`. Interactive-host setup also requires `npm link` so both `sparra`
+  and `sparra-run-mcp` are on `PATH`.
+- At least one agent backend: an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code
+  login), or `npm i @openai/codex-sdk` plus an authenticated **Codex CLI**. → [docs/backends.md](docs/backends.md)
 - Optional **iOS/macOS** exercising: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`. → [docs/ios.md](docs/ios.md)
 
 No build step — the bins run the TypeScript directly via `tsx`, so a `git pull` takes effect immediately.

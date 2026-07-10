@@ -42,6 +42,24 @@ ls "$SPARRA_REPO/docs"   # phases.md build-loop.md backends.md configuration.md 
 
 If `sparra` isn't on PATH, run via `node "$SPARRA_REPO/bin/sparra.mjs"`.
 
+## Installing the interactive conductor
+
+Both hosts require `npm install && npm link` in the Sparra checkout; the link exposes the `sparra`
+and `sparra-run-mcp` package bins on `PATH`.
+
+- **Claude Code:** register `sparra-run-mcp`, add the repo marketplace, install
+  `sparra@sparra-skills`, then invoke `/sparra-loop` in the target project.
+- **Codex:** in an interactive session rooted at the Sparra checkout, ask it to install the local
+  plugin using `.codex-plugin/plugin.json`. Start a fresh thread in the target project and ask it to
+  use `sparra-loop`. Reinstall and start another fresh thread whenever the plugin cachebuster
+  changes.
+
+On Codex, prefer background CLI calls: `sparra role run … --json --out <file>` and
+`sparra eval … --json`, with each stdout envelope redirected to its own file. Resume with
+`--resume-session <id> --resume-backend <backend>`. Blocking MCP `run_role` is last-resort: its
+server needs `tool_timeout_sec >= 1800` instead of Codex's 60-second default, and headless
+`codex exec` cannot approve the data-export gate.
+
 ## Driving a run
 
 The commands, in order. Nothing advances toward building except the human-run `freeze`.

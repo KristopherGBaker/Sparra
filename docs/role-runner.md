@@ -1,7 +1,7 @@
-# The role-runner: Sparra's roles in interactive Claude Code
+# The role-runner: Sparra's roles in interactive hosts
 
-Driving Sparra **interactively from a Claude Code session** is a first-class way to use
-it. Instead of handing off to the autonomous `sparra build` loop, *you* run the same
+Driving Sparra **interactively from Claude Code or Codex** is a first-class way to use it.
+Instead of handing off to the autonomous `sparra build` loop, *you* run the same
 adversarial, cross-model rigor one step at a time: **contract → generate → cross-model
 evaluate → pivot/accept**, steering between every step, with the holdout wall enforced
 for you. The **role-runner** is the seam that makes this possible, exposing Sparra's
@@ -14,8 +14,10 @@ It reuses Sparra's existing `runSession`/`AgentBackend` seam, guards, exerciser,
 verdict logic. The policy (which backend/guard/tools a role gets, and the **holdout
 wall**) lives in `src/build/roleRun.ts` — above the backend, below the conductor.
 
-## Install (for general use in Claude Code)
+## Claude Code: install and run
+
 One-time, from the Sparra repo:
+
 ```bash
 npm install
 npm link                       # puts `sparra` + `sparra-run-mcp` on PATH
@@ -45,6 +47,76 @@ After committing them (on the branch the marketplace resolves, i.e. `main`), run
 `make update-plugin` (≡ `claude plugin marketplace update sparra-skills && claude
 plugin update sparra@sparra-skills`) and start a fresh session. For rapid skill-only
 iteration, symlink instead: `ln -s "$PWD/skills/sparra-loop" ~/.claude/skills/sparra-loop`.
+
+## Codex: install and run
+
+One-time, install dependencies from the Sparra clone and expose both package bins on `PATH`:
+
+```bash
+npm install
+npm link                       # required: provides `sparra` + `sparra-run-mcp`
+```
+
+Open an interactive Codex session in that clone and ask it to install the local plugin declared by
+[`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json):
+
+```text
+Install the local Sparra plugin from this checkout using .codex-plugin/plugin.json.
+```
+
+Start a **fresh Codex thread in the project you want to build**, then ask `Use sparra-loop to add
+feature X`. The installed skill uses [the Codex adapter](../skills/sparra-loop/references/codex.md):
+background CLI first, and blocking direct MCP only as a last resort. The backend used for each
+Sparra role is still selected independently from the Codex conductor host.
+
+### Background JSON CLI (primary)
+
+Codex should keep its conductor responsive by launching the installed `sparra` PATH command in the
+background. Each process writes one holdout-safe JSON envelope; use a distinct file per call:
+
+```bash
+sparra role run --kind generator --brief brief.md --contract contract.md \
+  --backend claude --json --out generator-result.md > generator-envelope.json &
+sparra eval . --worktree --contract contract.md --backend codex \
+  --json > evaluator-envelope.json &
+```
+
+Resume a stopped role with the `sessionId` and `backend` from its prior envelope:
+
+```bash
+sparra role run --kind generator --brief brief.md --contract contract.md --json \
+  --resume-session <id> --resume-backend <backend> > resumed-envelope.json &
+```
+
+Wait for a process to finish before parsing its JSON. `--out <file>` is the caller-selected role
+artifact; redirected stdout is the separate JSON envelope. Evaluator envelopes remain
+holdout-redacted.
+
+### Direct MCP (approval-gated fallback)
+
+The plugin's [`.codex-plugin/mcp.json`](../.codex-plugin/mcp.json) registers the
+`sparra-run-mcp` PATH bin with
+`tool_timeout_sec: 1800`. Codex defaults MCP tools to **60 seconds**, which kills a real
+multi-minute `run_role`; every manual registration must therefore set `tool_timeout_sec` to at
+least `1800`. Put the equivalent registration in the target project's `.codex/config.toml` or
+your user-level `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.sparra-run]
+command = "sparra-run-mcp"
+tool_timeout_sec = 1800
+startup_timeout_sec = 30
+```
+
+Headless `codex exec` treats a direct `run_role` call as a potential **data export** and cannot
+satisfy its approval gate. Approve the call in an interactive Codex session, or use the background
+JSON CLI path above. If the server cannot start or `sparra-run-mcp` is missing, return to the
+Sparra clone and run `npm link`.
+
+**Picking up plugin edits.** A Codex plugin install is a cached snapshot. After its
+`.codex-plugin/plugin.json` semver/cachebuster changes, open a Codex session in the updated checkout
+and ask `Reinstall the local Sparra plugin from this checkout using .codex-plugin/plugin.json.`
+Then start a fresh thread; an existing thread keeps the old skills and MCP tools loaded.
 
 ## Two surfaces, one runner
 

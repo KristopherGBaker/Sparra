@@ -50,6 +50,6 @@ Do feature work on a `sparra/<topic>` branch, then fast-forward merge to `main` 
 
 1. **`README.md`** — the on-ramp: the loop diagram, the "How it works" bullets, requirements. Update when a headline capability changes.
 2. **`docs/`** — the detail: `configuration.md` (every knob + the `.sparra/` layout), `build-loop.md`, `backends.md`, `phases.md`, `ios.md`. A new config field belongs in `configuration.md`; new loop behavior in `build-loop.md`; backend changes in `backends.md`.
-3. **`skills/sparra/`** — the operational skill: `SKILL.md` (driving/configuring/diagnosing) and `subskills/diagnose.md` (the failure-signature table + artifact list). Update when behavior, knobs, or failure modes change, and bump the plugin version in `.claude-plugin/marketplace.json`.
+3. **`skills/sparra/`** — the operational skill: `SKILL.md` (driving/configuring/diagnosing) and `subskills/diagnose.md` (the failure-signature table + artifact list). Update when behavior, knobs, or failure modes change, and bump the plugin version in `.claude-plugin/marketplace.json`. When `.codex-plugin` content changes, refresh `plugin.json`'s semver-plus-cachebuster version and use the Codex reinstall + fresh-thread flow; leave that version unchanged when no Codex plugin content changed.
 
 A feature isn't done until typecheck + tests pass **and** these reflect it. When in doubt, grep the docs/skill for the old behavior and fix every hit.
