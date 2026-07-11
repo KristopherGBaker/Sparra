@@ -25,10 +25,11 @@ export {
 } from "./piConductor.ts";
 
 export {
-  buildLoopConfig,
+  buildRunUnitConfig,
   parseLoopCommandArgs,
   registerSparraLoopCommand,
   renderLoopReport,
+  renderUnitReport,
 } from "./loopCommand.ts";
 
 export type { ParentSummary, RunRolePayload, RunRoleSpec } from "../core/index.ts";

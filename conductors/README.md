@@ -60,7 +60,7 @@ the tested logic stays free of them so `npm test` never loads Pi.
 | `roleRunner.ts` | **Pi-free** tool logic: `runSparraRoleForTool(input, deps?)` builds a `RunRoleSpec`, calls the core `runRole`, and returns `{ summary, text }` — a `ParentSummary` plus a compact holdout-safe rendering. `holdoutPath` is forwarded as `--holdout <path>` (never read). |
 | `extension.ts` | The real Pi extension: `pi.registerTool(defineTool({ name: "sparra_role", … }))` (TypeBox params); `execute` → `runSparraRoleForTool`. The only file importing Pi/typebox at the top level; never imported by a test. |
 | `piConductor.ts` | `runIsolatedRoleViaPiSdk(...)` — lazy-imports Pi, spawns an isolated Codex-backed child session (`openai-codex`/`gpt-5.6-sol` by default) that runs the core `roleWorker` and returns only the summary. Live-only. |
-| `loopCommand.ts` | `registerSparraLoopCommand(pi, deps?)` — registers the `/sparra-loop` Pi command that wires the core `runBuildCycle` to a cross-model config and reports each round's summary. Pi **type-only** (no runtime Pi/typebox import). |
+| `loopCommand.ts` | `registerSparraLoopCommand(pi, deps?)` — registers the `/sparra-loop` Pi command that now drives the FULL unit over the core `runUnit`: negotiate the contract (adversarial `contract-evaluator`, on the evaluator model) → generate → cross-model evaluate → decide, and reports each contract + build-cycle round's summary. `--contract-rounds n` / `--proceed-if-not-agreed` control the contract phase. Pi **type-only** (no runtime Pi/typebox import; `node:os`/`node:path` built-ins only). |
 | `index.ts` | The Pi-free barrel (never loads Pi/typebox on import). |
 
 ## Status
@@ -72,8 +72,10 @@ Codex (`gpt-5.6-sol`) sessions:
 - `runBuildCycle` drove a full generate→evaluate→decide cycle over two live child sessions and reached
   `accepted` with no raw leak.
 
-The Pi conductor is functionally complete for a single-unit cycle, and `conductors/core/contract.ts`
-now folds contract negotiation (`contract-evaluator` until AGREED, detected from the structured
-`contractAgreed` field) into a full `runUnit` (contract → generate → evaluate → decide). Next
-candidates: wiring `runUnit` into the Pi `/sparra-loop` command, a multi-unit scheduler over the
-bounded `pool`, and packaging the extension/command as an installable Pi package.
+The Pi conductor is functionally complete for a single-unit cycle: `conductors/core/contract.ts`
+folds contract negotiation (`contract-evaluator` until AGREED, detected from the structured
+`contractAgreed` field) into a full `runUnit` (contract → generate → evaluate → decide), and
+`conductors/pi/loopCommand.ts`'s `/sparra-loop` command now drives that full `runUnit` — not just the
+build cycle — so a single command invocation negotiates the contract before ever generating. Next
+candidates: a multi-unit scheduler over the bounded `pool`, and packaging the extension/command as an
+installable Pi package.
