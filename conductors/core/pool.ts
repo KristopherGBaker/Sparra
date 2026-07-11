@@ -1,3 +1,4 @@
+import { mapBounded, type BoundedOptions, type BoundedResults } from "./bounded.ts";
 import { type RunRoleSpec, runRole } from "./roleClient.ts";
 import type { ParentSummary } from "./summary.ts";
 
@@ -12,15 +13,11 @@ export type RoleJobResult =
   | { id: string; summary: ParentSummary }
   | { id: string; error: string };
 
-export interface PoolOptions {
-  /** Max role-runs in flight at once. Excess jobs QUEUE (FIFO), never drop. Default 3. */
-  concurrency?: number;
-  /** Optional observer of live pool state, fired on every spawn and completion. */
-  onState?: (state: { active: number; peak: number; completed: number; total: number }) => void;
-}
+/** Same shape as {@link BoundedOptions} — kept as this module's own name since it's its public API. */
+export type PoolOptions = BoundedOptions;
 
 /** Ordered results plus the maximum number of role-runs that were ever in flight at once. */
-export type PoolResults = RoleJobResult[] & { peakConcurrency: number };
+export type PoolResults = BoundedResults<RoleJobResult>;
 
 /**
  * Run `jobs` through {@link runRole}, at most `concurrency` at a time.
@@ -32,57 +29,24 @@ export type PoolResults = RoleJobResult[] & { peakConcurrency: number };
  * raw envelope is ever retained across jobs, and one job's holdout-bearing output can never reach
  * another's result.
  *
- * Results preserve input order (not completion order). A failing job resolves to `{ id, error }`
- * and never rejects the whole batch. The returned array also carries a non-enumerable
- * `peakConcurrency` recording the max role-runs ever in flight, so a caller can assert the bound.
+ * Implemented via the shared {@link mapBounded} pump (`bounded.ts`) — the queueing/ordering/peak
+ * bookkeeping lives in exactly one place, shared with `scheduler.ts`. Results preserve input order
+ * (not completion order). A failing job resolves to `{ id, error }` and never rejects the whole
+ * batch: the worker below catches `runRole`'s rejection itself before `mapBounded` ever sees it. The
+ * returned array also carries a non-enumerable `peakConcurrency` recording the max role-runs ever in
+ * flight, so a caller can assert the bound.
  */
 export function runRolesConcurrently(jobs: RoleJob[], options: PoolOptions = {}): Promise<PoolResults> {
-  const bound = Math.max(1, options.concurrency ?? 3);
-  const onState = options.onState;
-  const results = new Array<RoleJobResult>(jobs.length);
-
-  const withPeak = (peak: number): PoolResults => {
-    Object.defineProperty(results, "peakConcurrency", { value: peak, enumerable: false });
-    return results as PoolResults;
-  };
-
-  if (jobs.length === 0) return Promise.resolve(withPeak(0));
-
-  return new Promise<PoolResults>((resolve) => {
-    let active = 0;
-    let peak = 0;
-    let nextIndex = 0;
-    let completed = 0;
-
-    const report = () => onState?.({ active, peak, completed, total: jobs.length });
-
-    const pump = (): void => {
-      while (active < bound && nextIndex < jobs.length) {
-        const index = nextIndex++;
-        const job = jobs[index]!;
-        active++;
-        peak = Math.max(peak, active);
-        report();
-
-        runRole(job.spec)
-          .then(
-            (summary) => {
-              results[index] = { id: job.id, summary };
-            },
-            (err: unknown) => {
-              results[index] = { id: job.id, error: err instanceof Error ? err.message : String(err) };
-            },
-          )
-          .finally(() => {
-            active--;
-            completed++;
-            report();
-            if (completed === jobs.length) resolve(withPeak(peak));
-            else pump();
-          });
-      }
-    };
-
-    pump();
-  });
+  return mapBounded<RoleJob, RoleJobResult>(
+    jobs,
+    (job) =>
+      runRole(job.spec).then(
+        (summary): RoleJobResult => ({ id: job.id, summary }),
+        (err: unknown): RoleJobResult => ({
+          id: job.id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      ),
+    options,
+  );
 }

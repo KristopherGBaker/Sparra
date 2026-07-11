@@ -9,6 +9,8 @@
  *   - {@link ./roleClient.ts} — `runRole` / `runRoleRaw`: run one role via `sparra … --json` and
  *                             get back the redacted summary.
  *   - {@link ./roleWorker.ts} — a spawnable process boundary for model-driven hosts.
+ *   - {@link ./bounded.ts}  — `mapBounded`: the generic bounded-concurrency pump shared by `pool.ts`
+ *                             and `scheduler.ts`.
  *   - {@link ./pool.ts}     — `runRolesConcurrently`: bounded-concurrent isolated role-runs, since
  *                             not every host offers them natively.
  *   - {@link ./loop.ts}     — `runBuildCycle` / `decideFromEvaluation`: the generate → cross-model
@@ -16,6 +18,8 @@
  *   - {@link ./contract.ts} — `negotiateContract` / `runUnit`: the CONTRACT phase (run a
  *                             `contract-evaluator` until it agrees) composed with `runBuildCycle`
  *                             into a full contract → generate → evaluate → decide unit.
+ *   - {@link ./scheduler.ts} — `runUnitsConcurrently`: the multi-unit scheduler — runs several
+ *                             independent `runUnit`s bounded-concurrently over the same pump.
  *
  * The canonical envelope itself lives in `src/roleEnvelope.ts` (the runner↔conductor contract);
  * these types re-export it so a host imports one place.
@@ -35,6 +39,13 @@ export {
 export { runRole, runRoleRaw, type RunRoleSpec } from "./roleClient.ts";
 
 export { roleWorkerMain } from "./roleWorker.ts";
+
+export {
+  mapBounded,
+  type BoundedOptions,
+  type BoundedResults,
+  type BoundedState,
+} from "./bounded.ts";
 
 export {
   runRolesConcurrently,
@@ -67,3 +78,10 @@ export {
   type RunUnitResult,
   type UnitOutcome,
 } from "./contract.ts";
+
+export {
+  runUnitsConcurrently,
+  type SchedulerResults,
+  type UnitJob,
+  type UnitJobResult,
+} from "./scheduler.ts";
