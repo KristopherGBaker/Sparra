@@ -9,46 +9,11 @@ import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
-/** Holdout-safe prompt-drift note for the MCP payload: role names + the one-line note ONLY (never a
- *  prompt body, never holdout). `null` when there's nothing actionable to surface. */
-export interface PromptDriftNote {
-  stale: string[];
-  conflict: string[];
-  note: string;
-}
-
-/** Canonical, holdout-safe result envelope shared by MCP and JSON CLI callers. */
-export interface RunRolePayload {
-  roleKind: RoleKind;
-  backend: string;
-  model: string;
-  sessionId?: string;
-  ok: boolean;
-  verdict?: NonNullable<RoleRunResult["verdict"]>["verdict"] | null;
-  weightedTotal?: number;
-  passThreshold?: number;
-  blocking?: NonNullable<RoleRunResult["verdict"]>["blocking"];
-  failedAssertions?: NonNullable<RoleRunResult["verdict"]>["assertions"];
-  resultText?: string;
-  resultDigest?: string;
-  verdictPath?: string;
-  outPath?: string;
-  traceDir?: string;
-  filesChanged?: number;
-  sameModelGrade?: boolean;
-  fallbackFrom?: RoleRunResult["fallbackFrom"];
-  limitHit?: RoleRunResult["limitHit"];
-  hitBudget?: boolean;
-  hitMaxTurns?: boolean;
-  emptyCompletion?: boolean;
-  noProgress?: boolean;
-  verifyGateWarning?: string;
-  unitWorktree?: RoleRunResult["unitWorktree"];
-  promptDrift?: PromptDriftNote;
-  errors: string[];
-  tokens: number;
-  costUsd: number;
-}
+// The canonical runner↔conductor envelope now lives in `src/roleEnvelope.ts` (a neutral module both
+// the MCP server and conductor hosts can import without pulling in the MCP server itself). Re-exported
+// here for back-compat with existing importers (`phases/role.ts`, tests).
+export type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
+import type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
 
 /** The `run_role` tool's argument shape (mirrors the zod schema below). */
 export interface RunRoleToolArgs {
