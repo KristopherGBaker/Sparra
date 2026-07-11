@@ -133,6 +133,10 @@ The few that matter most:
   `maxTokensPerItem` is off. The standalone role surfaces override the USD cap per call:
   `run_role`'s `maxBudgetUsd` / `role run`/`eval`'s `--budget <usd>` (omit = config cap;
   `0` = unlimited).
+- **`build.maxTurnsPerSession`** — the per-session turn cap (default 80). `role run`/`eval`'s
+  `--max-turns <n>` overrides it per call (positive integer; omit/invalid = config default — no
+  `0` = unlimited). CLI/JSON surface only; MCP `run_role` sizes turns via config, so a
+  verify-heavy role driven over MCP still relies on the default plus resume-on-`hitMaxTurns`.
 - **eval provenance (`expectedHead` / `evalBaseRef`, judge roles only)** — `run_role`'s
   `expectedHead`/`evalBaseRef` (CLI `role run`/`eval`'s `--expected-head <sha>` / `--eval-base <ref>`)
   make a judge deterministic about *what* it grades, verified **before any tokens are spent**.
