@@ -5,7 +5,8 @@
   "description": "Pi conductor for Sparra — a sparra_role tool + /sparra-loop command that drive Sparra's holdout-safe contract → generate → cross-model evaluate → decide loop from a Pi host.",
   "keywords": ["pi-package", "sparra", "conductor"],
   "pi": {
-    "extensions": ["./extension.ts"]
+    "extensions": ["./extension.ts"],
+    "skills": ["./skills"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

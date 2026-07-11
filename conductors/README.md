@@ -64,7 +64,8 @@ the tested logic stays free of them so `npm test` never loads Pi.
 | `piConductor.ts` | `runIsolatedRoleViaPiSdk(...)` — lazy-imports Pi, spawns an isolated Codex-backed child session (`openai-codex`/`gpt-5.6-sol` by default) that runs the core `roleWorker` and returns only the summary. Live-only. |
 | `loopCommand.ts` | `registerSparraLoopCommand(pi, deps?)` — registers the `/sparra-loop` Pi command that now drives the FULL unit over the core `runUnit`: negotiate the contract (adversarial `contract-evaluator`, on the evaluator model) → generate → cross-model evaluate → decide, and reports each contract + build-cycle round's summary. `--contract-rounds n` / `--proceed-if-not-agreed` control the contract phase. Pi **type-only** (no runtime Pi/typebox import; `node:os`/`node:path` built-ins only). |
 | `index.ts` | The Pi-free barrel (never loads Pi/typebox on import). |
-| `package.json` | The **Pi package manifest** (`keywords:["pi-package"]`, `pi.extensions:["./extension.ts"]`, Pi/`typebox` as `"*"` peerDependencies, `type:module`). Makes `conductors/pi` a `pi install`-able package. |
+| `package.json` | The **Pi package manifest** (`keywords:["pi-package"]`, `pi.extensions:["./extension.ts"]`, `pi.skills:["./skills"]`, Pi/`typebox` as `"*"` peerDependencies, `type:module`). Makes `conductors/pi` a `pi install`-able package. |
+| `skills/sparra-loop/SKILL.md` | The **conductor skill** (Agent Skills standard). Loads into Pi's system prompt so you can say *"conduct a Sparra loop on X"* instead of hand-wiring flags — it drafts the contract, sets the cross-model split, drives contract → generate → evaluate → decide via the `sparra_role` tool / `/sparra-loop` command, and enforces the one holdout rule. Analogue of Claude Code's `skills/sparra-loop`. |
 
 ### Install into Pi
 
@@ -79,8 +80,15 @@ registers the `sparra_role` tool and the `/sparra-loop` command. Publishing to n
 bundling `conductors/core` + the `src/roleEnvelope.ts` contract into the tarball (relative imports
 can't escape a published package) — future work.
 
-Then, inside Pi: `/sparra-loop --brief <path> --contract <path> [--holdout <path>] [--contract-rounds
-n] [--proceed-if-not-agreed]`, or call the `sparra_role` tool directly.
+Then, three ways to use it inside Pi:
+- **Conversational (skill):** just ask — *"conduct a Sparra loop to build X against this contract"* —
+  and the `sparra-loop` skill drives the whole thing (drafts/negotiates the contract, picks the
+  cross-model split, generates, evaluates, decides), so you don't supply every flag. Force-load it
+  with `/skill:sparra-loop`.
+- **One command:** `/sparra-loop --brief <path> --contract <path> [--holdout <path>] [--contract-rounds
+  n] [--proceed-if-not-agreed]` — the full cycle when you already have a brief + contract.
+- **One role:** call the `sparra_role` tool directly for a single role-run / a cross-model second
+  opinion.
 
 ## Status
 
