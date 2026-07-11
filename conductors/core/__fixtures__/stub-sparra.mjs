@@ -13,6 +13,32 @@ const CANARY = "SPARRA_HOLDOUT_CANARY_DO_NOT_LEAK";
 const stubId = process.env.STUB_ID || null;
 const delayMs = Number(process.env.STUB_DELAY_MS) || 0;
 
+// Role-kind-aware: a `contract-evaluator` invocation returns the structured AGREED signal (the
+// runner sets `contractAgreed` from the critique marker) so a conductor's negotiateContract can
+// reach agreement deterministically. Any other invocation returns the artifact-evaluator envelope
+// below. Existing callers pass "--kind evaluator" / "eval" (no "contract-evaluator"), so they are
+// unaffected. STUB_CONTRACT_DISAGREE=1 forces a non-agreed contract critique (for a short-circuit test).
+if (process.argv.includes("contract-evaluator")) {
+  const agreed = process.env.STUB_CONTRACT_DISAGREE !== "1";
+  const critique = {
+    roleKind: "contract-evaluator",
+    backend: "stub",
+    model: stubId ? `stub-model-${stubId}` : "stub-model-1",
+    ok: true,
+    contractAgreed: agreed,
+    outPath: "/tmp/sparra-stub/critique.md",
+    errors: [],
+    tokens: 500,
+    costUsd: 0.005,
+    // holdout-free critique prose (contract-evaluator is holdout-free); still carries the canary so
+    // a leak probe stays non-vacuous — the summary allowlist must drop resultText regardless.
+    resultText: `Contract critique (raw): ${agreed ? "CONTRACT: AGREED" : "needs work"}. marker ${CANARY}.`,
+    traceDir: "/tmp/sparra-stub/contract-trace",
+  };
+  process.stdout.write(JSON.stringify(critique) + "\n");
+  process.exit(0);
+}
+
 function verdictFor(id) {
   if (id == null) return { verdict: "pass", weightedTotal: 88.5 };
   const match = /\d+/.exec(String(id));
