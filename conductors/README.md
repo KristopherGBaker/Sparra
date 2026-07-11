@@ -46,7 +46,22 @@ re-introduce raw role output, full verdicts, or evaluator traces into its contex
 holdout guard, the process boundary via a stub `sparra`, and the bounded pool (peak==bound, no
 cross-talk). No live model/network. `npm run typecheck && npm test` must stay green.
 
+## `conductors/pi` — the Pi adapter
+
+Exposes the core to a **Pi** host. Pi + `typebox` are optional peer deps (installed here as devDeps);
+the tested logic stays free of them so `npm test` never loads Pi.
+
+| Module | Purpose |
+| --- | --- |
+| `roleRunner.ts` | **Pi-free** tool logic: `runSparraRoleForTool(input, deps?)` builds a `RunRoleSpec`, calls the core `runRole`, and returns `{ summary, text }` — a `ParentSummary` plus a compact holdout-safe rendering. `holdoutPath` is forwarded as `--holdout <path>` (never read). |
+| `extension.ts` | The real Pi extension: `pi.registerTool(defineTool({ name: "sparra_role", … }))` (TypeBox params); `execute` → `runSparraRoleForTool`. The only file importing Pi/typebox at the top level; never imported by a test. |
+| `piConductor.ts` | `runIsolatedRoleViaPiSdk(...)` — lazy-imports Pi, spawns an isolated Codex-backed child session (`openai-codex`/`gpt-5.6-sol` by default) that runs the core `roleWorker` and returns only the summary. Live-only. |
+| `index.ts` | The Pi-free barrel (never loads Pi/typebox on import). |
+
 ## Status
 
-`conductors/core` is built and tested. Next: the **Pi adapter** (`conductors/pi/`) exposing the core
-as Pi tools/commands + an SDK/RPC-driven loop.
+`conductors/core` and `conductors/pi` are built and tested (`npm run typecheck` + `npx vitest run
+conductors/`). The Pi adapter is also **live-verified**: `runIsolatedRoleViaPiSdk` drove a real Codex
+`gpt-5.6-sol` session → core `roleWorker` → summary-only, holdout intact. Next: a Pi-hosted
+**loop conductor** (contract → generate → cross-model evaluate → decide) driven as a program over
+these pieces, plus a `/sparra-loop` Pi command.

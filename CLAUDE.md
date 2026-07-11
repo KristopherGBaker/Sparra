@@ -24,7 +24,7 @@ No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.
 - `src/sdk/` — the agent seam. `backend.ts` (the `AgentBackend` interface + `AgentRequest`/`AgentResult` + registry), `session.ts` (the single choke point: `runSession` → `getBackend().runTask`), `backends/{claude,codex}.ts`, plus `skills`, `hooks`, `guard`, `exercise`, `scoping`, `permissions`, `format`, `trace`.
 - `src/` core: `config.ts` (all knobs + `defaultConfig`), `prompts.ts` (role system prompts + `DEFAULT_PROMPTS`), `paths.ts` (`.sparra/` layout), `state.ts`, `context.ts`, `memory.ts`, `detect.ts`. `roleEnvelope.ts` is the canonical runner↔conductor contract (`RunRolePayload`), emitted by both the MCP `run_role` tool and the `--json` CLI.
 - `src/util/` — `git`, `io`, `log`, `extract`.
-- `conductors/` — building blocks for interactive **conductor hosts** (the host that drives the loop, vs a backend that plays a role). `conductors/core` is the host-agnostic core (holdout-safe `toParentSummary` allowlist, `runRole`, `roleWorker`, bounded `pool`) consuming `src/roleEnvelope.ts`; `conductors/pi/` is the Pi adapter (WIP). See `conductors/README.md`.
+- `conductors/` — building blocks for interactive **conductor hosts** (the host that drives the loop, vs a backend that plays a role). `conductors/core` is the host-agnostic core (holdout-safe `toParentSummary` allowlist, `runRole`, `roleWorker`, bounded `pool`) consuming `src/roleEnvelope.ts`; `conductors/pi/` is the Pi adapter (`sparra_role` tool + `runIsolatedRoleViaPiSdk`, Pi/typebox are optional peer deps — kept out of the tested path). See `conductors/README.md`.
 
 ## Conventions & invariants (don't break these)
 
