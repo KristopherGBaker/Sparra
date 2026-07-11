@@ -120,6 +120,24 @@ sequential conductor (a day) as the baseline, and a Pi SDK-driven conductor spik
 "mold the harness" thesis produces a *better* seam than adapting to opencode. Decide from the spikes,
 not from the feature lists.
 
+## Decision & status (2026-07-11)
+
+Both were spiked and driven LIVE (spike repo: `~/code/experiments/pi-sparra-conductor`). Findings:
+
+- The load-bearing capabilities **#1 (isolated summary-only child)** and **#2 (bounded concurrency)**
+  are **host-agnostic** — a subprocess boundary + a deterministic allowlist redaction + a plain
+  `node` pool ran unchanged under both a Pi SDK child session and an opencode subagent. So neither
+  host's built-in subagent is load-bearing for the holdout wall.
+- Pi was proven end-to-end: a Codex (`gpt-5.6-sol`) child session drove the real `sparra eval`
+  (Claude) and returned only the redacted summary; 3 concurrent live sessions ran isolated with no
+  cross-talk. opencode's native subagent was also confirmed live on its free model.
+
+**Decision: build the Pi conductor** (its SDK/RPC lets the loop be driven as a *program*, the cleaner
+fit for Sparra's opinionated loop), keeping **opencode as a future option** that would reuse the same
+core. Work now lives in this repo under **[`../../conductors/`](../../conductors/)**: the host-agnostic
+`conductors/core` (built + tested) consumes the canonical envelope `src/roleEnvelope.ts`; the Pi
+adapter (`conductors/pi/`) is next.
+
 ## Sources
 
 - opencode: [repo](https://github.com/sst/opencode) · [agents](https://opencode.ai/docs/agents/) ·

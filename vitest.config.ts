@@ -25,7 +25,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["test/**/*.test.ts"],
+          include: ["test/**/*.test.ts", "conductors/**/*.test.ts"],
           exclude: ["test/unitWorktree.test.ts", "node_modules/**"],
           environment: "node",
           sequence: { groupOrder: 0 },
