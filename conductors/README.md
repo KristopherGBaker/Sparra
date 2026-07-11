@@ -21,6 +21,7 @@ The parts that are identical no matter which host conducts:
 | `roleWorker.ts` | A spawnable process boundary (`tsx roleWorker.ts -- <sparra args>`) that prints only the summary — for MODEL-driven hosts where even the parent process must not parse the raw envelope. |
 | `pool.ts` | `runRolesConcurrently(jobs, {concurrency})` — bounded-concurrent isolated role-runs, since not every host offers them natively. Returns summaries only (raw payloads never retained), preserves input order, exposes `peakConcurrency`. |
 | `loop.ts` | `runBuildCycle({ runRole }, config)` + `decideFromEvaluation` — the generate → cross-model evaluate → decide orchestrator, driven over an injected `RoleRunner`. Bounded by `maxRounds`; threads `evaluator.blocking` as next-round feedback; pivots after N fails; **rejects a `sameModelGrade` pass** as non-independent. Pure decision fn + host-agnostic loop; only `ParentSummary` flows through. |
+| `contract.ts` | `negotiateContract({ runRole }, config)` — the CONTRACT phase: runs a `contract-evaluator` up to `maxRounds` (default 3), detecting agreement SOLELY from the structured `evaluator.contractAgreed` boolean (the critique prose is never read). A non-agreed round's `outPath` is threaded forward, by path only, as the next round's `ContractRoundContext.priorCritiquePaths`. `runUnit({ runRole }, config)` composes it with `runBuildCycle`: negotiates the contract, then — only if agreed (or `proceedIfNotAgreed`) — runs the existing build cycle, reusing it rather than reimplementing generate → evaluate → decide. |
 
 The canonical envelope type is **`src/roleEnvelope.ts`** (`RunRolePayload`) — the single runner↔conductor
 contract emitted by both the MCP `run_role` tool and the `--json` CLI. The core imports it so its
@@ -44,8 +45,10 @@ re-introduce raw role output, full verdicts, or evaluator traces into its contex
 ## Tests
 
 `conductors/core/*.test.ts` (vitest, in the `unit` project) — allowlist correctness incl. the
-holdout guard, the process boundary via a stub `sparra`, and the bounded pool (peak==bound, no
-cross-talk). No live model/network. `npm run typecheck && npm test` must stay green.
+holdout guard, the process boundary via a stub `sparra`, the bounded pool (peak==bound, no
+cross-talk), and the CONTRACT phase (`contract.test.ts`: agreement detection, prior-critique
+path-threading, bounded exhaustion, `runUnit` composition). No live model/network. `npm run
+typecheck && npm test` must stay green.
 
 ## `conductors/pi` — the Pi adapter
 
@@ -69,7 +72,8 @@ Codex (`gpt-5.6-sol`) sessions:
 - `runBuildCycle` drove a full generate→evaluate→decide cycle over two live child sessions and reached
   `accepted` with no raw leak.
 
-The Pi conductor is functionally complete for a single-unit cycle. Next candidates: contract
-negotiation (`contract-generator`/`contract-evaluator` until AGREED) folded into the cycle, a
-multi-unit scheduler over the bounded `pool`, and packaging the extension/command as an installable
-Pi package.
+The Pi conductor is functionally complete for a single-unit cycle, and `conductors/core/contract.ts`
+now folds contract negotiation (`contract-evaluator` until AGREED, detected from the structured
+`contractAgreed` field) into a full `runUnit` (contract → generate → evaluate → decide). Next
+candidates: wiring `runUnit` into the Pi `/sparra-loop` command, a multi-unit scheduler over the
+bounded `pool`, and packaging the extension/command as an installable Pi package.

@@ -13,6 +13,9 @@
  *                             not every host offers them natively.
  *   - {@link ./loop.ts}     — `runBuildCycle` / `decideFromEvaluation`: the generate → cross-model
  *                             evaluate → decide orchestrator, driven over an injected `RoleRunner`.
+ *   - {@link ./contract.ts} — `negotiateContract` / `runUnit`: the CONTRACT phase (run a
+ *                             `contract-evaluator` until it agrees) composed with `runBuildCycle`
+ *                             into a full contract → generate → evaluate → decide unit.
  *
  * The canonical envelope itself lives in `src/roleEnvelope.ts` (the runner↔conductor contract);
  * these types re-export it so a host imports one place.
@@ -52,3 +55,15 @@ export {
   type RoundContext,
   type RoundRecord,
 } from "./loop.ts";
+
+export {
+  negotiateContract,
+  runUnit,
+  type ContractNegotiationConfig,
+  type ContractNegotiationResult,
+  type ContractRoundContext,
+  type ContractRoundRecord,
+  type RunUnitConfig,
+  type RunUnitResult,
+  type UnitOutcome,
+} from "./contract.ts";
