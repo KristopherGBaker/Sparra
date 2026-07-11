@@ -19,21 +19,22 @@ Works on new and existing codebases, over pluggable agent backends (**Claude and
 
 > **Status:** young and still finding its form, but already earning its keep on real projects (and on Sparra itself). Inspired by the Anthropic workshop [Build Agents That Run for Hours](https://youtu.be/mR-WAvEPRwE).
 
-## Quick start: drive it from Claude Code or Codex
+## Quick start: drive it from Claude Code
 
-The **`sparra-loop`** skill runs the loop above inside either interactive host, with you on the
-wheel — steer every step, or let it run in auto mode and step in only when needed. Claude Code and
-Codex are equal conductors; the generator and evaluator backends remain independently configurable.
+The **`sparra-loop`** skill runs the loop above inside Claude Code, with you on the wheel — steer
+every step, or let it run in auto mode and step in only when needed. The generator and evaluator
+backends remain independently configurable (so **Codex still judges what Claude builds**, and vice
+versa — that cross-model seam is separate from who conducts the loop).
 
-First install Sparra from a clone of this repo. `npm link` is required for both hosts because it
-puts the `sparra` and `sparra-run-mcp` package bins on `PATH`:
+First install Sparra from a clone of this repo. `npm link` puts the `sparra` and `sparra-run-mcp`
+package bins on `PATH`:
 
 ```bash
 npm install && npm link           # puts `sparra` + `sparra-run-mcp` on your PATH
 npm i @openai/codex-sdk           # optional: only for a Codex backend (also needs the `codex` CLI authed)
 ```
 
-### Claude Code
+Then register the role-runner MCP tool and the plugin with Claude Code:
 
 ```bash
 claude mcp add sparra-run --scope user -- sparra-run-mcp   # the role-runner MCP tool
@@ -41,31 +42,13 @@ claude plugin marketplace add "$PWD"
 claude plugin install sparra@sparra-skills                 # gives you /sparra-loop and /sparra
 ```
 
-Open Claude Code **in your project** and type `/sparra-loop`.
-
-### Codex
-
-Open an interactive Codex session in the Sparra clone and ask:
-
-```text
-Install the local Sparra plugin from this checkout using .codex-plugin/plugin.json.
-```
-
-After installation, start a **fresh Codex thread in your project** so the plugin's skills and MCP
-tools load, then ask `Use sparra-loop to add feature X`. Codex primarily launches the installed
-`sparra` CLI as background JSON processes, keeping the conductor responsive; direct MCP is an
-approval-gated fallback. The packaged MCP declaration uses `sparra-run-mcp` from `PATH` and raises
-Codex's 60-second default `tool_timeout_sec` to `1800` for multi-minute role calls. See the
-[role-runner guide](docs/role-runner.md#codex-install-and-run) for the exact CLI, resume, manual MCP,
-and reinstall paths.
-
-Either host sets the project up (`sparra init`, per-role backend/model split, optional holdout) and
-drives the loop:
+Open Claude Code **in your project** and type `/sparra-loop`. The conductor sets the project up
+(`sparra init`, per-role backend/model split, optional holdout) and drives the loop:
 
 ```mermaid
 sequenceDiagram
     participant You
-    participant CC as Claude Code or Codex<br>(sparra-loop)
+    participant CC as Claude Code<br>(sparra-loop)
     participant R as Sparra role-runner
     You->>CC: sparra-loop "add feature X"
     CC->>R: launch contract-generator
@@ -76,6 +59,8 @@ sequenceDiagram
 ```
 
 The holdout is passed **by path** and only the evaluator ever sees it; the runner returns the parsed verdict, never raw output. Details, guarantees, and the CLI equivalents (`sparra role run`, `sparra eval`): **[docs/role-runner.md](docs/role-runner.md)**.
+
+> **Codex as conductor is experimental (WIP).** Codex can also drive `/sparra-loop`, but that host path lags Claude Code's and is gated on better Codex capabilities (or an alternative host harness able to run Codex/OpenAI models). Codex as a *backend* — building or judging individual roles — is fully supported. Setup and current limits: [docs/role-runner.md#codex-install-and-run](docs/role-runner.md#codex-install-and-run).
 
 **Just want a second opinion?** `sparra eval <dir> --contract contract.md --backend codex` grades any work-in-progress tree against a contract — no `.sparra/` setup required. Add `--worktree` to evaluate a snapshot without touching your tree.
 

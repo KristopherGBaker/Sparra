@@ -50,6 +50,11 @@ iteration, symlink instead: `ln -s "$PWD/skills/sparra-loop" ~/.claude/skills/sp
 
 ## Codex: install and run
 
+> **Experimental / WIP.** Codex as an interactive *conductor* lags the Claude Code path and may stay
+> that way until Codex exposes better host capabilities for what the loop needs. Codex as a
+> *backend* — building or judging a role, the cross-model seam — is fully supported and unaffected
+> by this caveat.
+
 One-time, install dependencies from the Sparra clone and expose both package bins on `PATH`:
 
 ```bash
