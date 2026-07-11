@@ -8,6 +8,7 @@ import {
   deleteBranch,
   isBranchMerged,
   isDirty,
+  listWorktrees,
   removeWorktree,
 } from "../util/git.ts";
 
@@ -68,6 +69,7 @@ export interface UnitWorktreeDeps {
   branchExistsFn?: typeof branchExists;
   existsFn?: (p: string) => boolean;
   worktreeDirFn?: (src: string, name: string) => string;
+  listWorktreesFn?: typeof listWorktrees;
 }
 
 export interface EnsureUnitWorktreeResult {
@@ -89,6 +91,16 @@ export interface EnsureUnitWorktreeResult {
  * build store (persisted so reuse survives a restart). Dep provisioning is NOT done here — the
  * delegate (`runRoleInPlace`) provisions the linked worktree via the existing path. Never mutates
  * unrelated build state (branch/workspaceDir/etc.).
+ *
+ * SELF-HEAL: when the target dir already exists but `name` isn't in the registry (the registry
+ * write is a full `state.json` read-modify-write, so concurrent `--unit-worktree` generators can
+ * race and the last writer's save clobbers an earlier writer's entry — see the module doc), we
+ * don't blindly refuse. We ask git ground truth (`listWorktreesFn`, default `listWorktrees`)
+ * whether the dir is a LIVE linked worktree checked out on EXACTLY `sparra/<name>`. If so, the dir
+ * is unambiguously ours — a registry entry a racing writer dropped, not foreign state — so we
+ * ADOPT it: repair the registry entry, persist, and return `{ created: false }` instead of
+ * throwing. Anything short of that exact match (a plain directory, or a worktree on some OTHER
+ * branch) still throws — the refuse-to-adopt-foreign-state guard is narrowed, never removed.
  */
 export async function ensureUnitWorktree(
   ctx: Ctx,
@@ -110,10 +122,21 @@ export async function ensureUnitWorktree(
   const existsFn = deps.existsFn ?? exists;
   const branchExistsFn = deps.branchExistsFn ?? branchExists;
   const addWorktreeFn = deps.addWorktreeFn ?? addNamedWorktree;
+  const listWorktreesFn = deps.listWorktreesFn ?? listWorktrees;
   const wtDir = (deps.worktreeDirFn ?? defaultUnitWorktreeDir)(src, name);
 
-  // No adopting foreign state: a pre-existing dir or branch not in OUR registry is someone else's.
+  // No adopting foreign state: a pre-existing dir not in OUR registry is someone else's — UNLESS
+  // git ground truth confirms it's a live worktree on EXACTLY our branch, in which case it's OUR
+  // own tree whose registry entry a racing writer dropped (see the doc comment above). Self-heal by
+  // adopting: repair + persist the entry, return created:false. Anything less exact (no worktree at
+  // that path, or a worktree on some other branch) falls through to the original refusal.
   if (existsFn(wtDir)) {
+    const match = listWorktreesFn(src).find((w) => path.resolve(w.path) === path.resolve(wtDir));
+    if (match && match.branch === branch) {
+      ctx.store.data.build.unitWorktrees = { ...registry, [name]: { dir: wtDir, branch, src } };
+      await ctx.store.save();
+      return { dir: wtDir, branch, src, created: false };
+    }
     throw new Error(
       `unitWorktree ${JSON.stringify(name)}: target path already exists and is not a registered unit worktree: ${wtDir}. ` +
         `Refusing to adopt it — remove it, or pick another name.`

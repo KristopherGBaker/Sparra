@@ -188,6 +188,125 @@ describe("ensureUnitWorktree — create / reuse / restart / foreign guard", () =
   });
 });
 
+describe("ensureUnitWorktree — self-heal (registry-race adoption)", () => {
+  const wtDir = "/x/proj-unit-u1"; // fixed, fake path — the fakes below mean no real fs/git touches it
+
+  // These cases exercise the adopt/reconcile DECISION only (pure fakes for the git/fs seams); the
+  // ctx just needs a real, writable `.sparra` scaffold for `store.save()` to land in — a throwaway
+  // temp dir, not the fake `wtDir` above, which is never actually created on disk.
+  async function makeSelfHealCtx(): Promise<{ ctx: Ctx; root: string }> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-unitwt-selfheal-"));
+    return { ctx: await makeCtx(root), root };
+  }
+
+  it("SELF-HEALS: adopts a dir git confirms is a live worktree on exactly sparra/<name>", async () => {
+    const { ctx, root } = await makeSelfHealCtx();
+    try {
+      const listCalls: string[] = [];
+      const wt = await ensureUnitWorktree(ctx, "u1", root, {
+        existsFn: (p) => p === wtDir,
+        worktreeDirFn: () => wtDir,
+        listWorktreesFn: (src) => {
+          listCalls.push(src);
+          return [{ path: wtDir, branch: "sparra/u1" }];
+        },
+        // If adoption were reached without repairing the state, these would blow up the test —
+        // neither should ever be called on the adopt path.
+        addWorktreeFn: () => {
+          throw new Error("must not create — should adopt instead");
+        },
+        branchExistsFn: () => {
+          throw new Error("must not probe branchExists on the adopt path");
+        },
+      });
+      expect(wt).toEqual({ dir: wtDir, branch: "sparra/u1", src: root, created: false });
+      expect(listCalls).toEqual([root]); // git ground truth WAS consulted
+      // Registry entry repaired + persisted (this is the self-heal).
+      expect(ctx.store.data.build.unitWorktrees!.u1).toEqual({ dir: wtDir, branch: "sparra/u1", src: root });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is IDEMPOTENT after a self-heal: the next call hits the registry fast-path, no second git probe", async () => {
+    const { ctx, root } = await makeSelfHealCtx();
+    try {
+      const first = await ensureUnitWorktree(ctx, "u1", root, {
+        existsFn: (p) => p === wtDir,
+        worktreeDirFn: () => wtDir,
+        listWorktreesFn: () => [{ path: wtDir, branch: "sparra/u1" }],
+      });
+      expect(first.created).toBe(false);
+
+      const second = await ensureUnitWorktree(ctx, "u1", root, {
+        existsFn: () => {
+          throw new Error("fast-path must not touch fs");
+        },
+        listWorktreesFn: () => {
+          throw new Error("fast-path must not re-probe git after a self-heal");
+        },
+      });
+      expect(second).toEqual({ dir: wtDir, branch: "sparra/u1", src: root, created: false });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("MUTATION GUARD — still THROWS when the dir is a worktree but on the WRONG branch (not sparra/u1)", async () => {
+    const { ctx, root } = await makeSelfHealCtx();
+    try {
+      await expect(
+        ensureUnitWorktree(ctx, "u1", root, {
+          existsFn: (p) => p === wtDir,
+          worktreeDirFn: () => wtDir,
+          // Same dir IS a live worktree — but checked out on a DIFFERENT branch. A guard loosened to
+          // "any worktree at that path" (dropping the exact-branch check) would wrongly adopt this.
+          listWorktreesFn: () => [{ path: wtDir, branch: "sparra/some-other-unit" }],
+        })
+      ).rejects.toThrow(/already exists and is not a registered unit worktree/i);
+      expect(ctx.store.data.build.unitWorktrees).toBeUndefined(); // nothing adopted/registered
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("MUTATION GUARD — still THROWS when the dir exists but git reports NO worktree there (plain dir)", async () => {
+    const { ctx, root } = await makeSelfHealCtx();
+    try {
+      await expect(
+        ensureUnitWorktree(ctx, "u1", root, {
+          existsFn: (p) => p === wtDir,
+          worktreeDirFn: () => wtDir,
+          // git ground truth has NOTHING at this path — a guard loosened to "existsFn alone is enough
+          // to adopt" (dropping the git-confirmation check entirely) would wrongly adopt this.
+          listWorktreesFn: () => [],
+        })
+      ).rejects.toThrow(/already exists and is not a registered unit worktree/i);
+      expect(ctx.store.data.build.unitWorktrees).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still THROWS the branch-collision error when branchExists is true but there's no worktree at the target dir", async () => {
+    const { ctx, root } = await makeSelfHealCtx();
+    try {
+      await expect(
+        ensureUnitWorktree(ctx, "u1", root, {
+          existsFn: () => false, // no dir at the target path
+          branchExistsFn: () => true, // but the branch exists, unregistered
+          listWorktreesFn: () => {
+            throw new Error("must not probe git worktree list when the dir doesn't even exist");
+          },
+        })
+      ).rejects.toThrow(/branch sparra\/u1 already exists and is not a registered/i);
+      expect(ctx.store.data.build.unitWorktrees).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("removeUnitWorktree — WIP-safe teardown", () => {
   it("refuses a DIRTY tree by default, force removes it, deregisters", GIT_IT, async () => {
     const repo = makeRepo();

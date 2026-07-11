@@ -154,7 +154,11 @@ so the conductor knows where the WIP lives; tear it down explicitly on accept/ab
 `remove_unit_worktree` MCP tool or `sparra role rm-worktree --name <name> [--force]` (WIP-safe —
 refuses a dirty tree / unmerged branch unless forced). This makes **parallel generators run iff they
 use distinct `unitWorktree` names / workspaces**, so conductors no longer hand-roll `git worktree
-add` + dep provisioning or serialize. Pass it whenever the
+add` + dep provisioning or serialize. The registry (`state.json`'s `build.unitWorktrees`) is
+**self-healing**: if a registry entry for a name is missing but its worktree already exists on disk
+on exactly `sparra/<name>` (e.g. a registry write raced with another writer's `state.json` save), the
+next `ensureUnitWorktree` for that name **adopts** it back into the registry from git ground truth
+instead of failing — no manual `--workspace` resume needed to recover a dropped entry. Pass it whenever the
 evaluator will **exercise** the tree (run `npm test`/builds), or a **contract-evaluator** will run
 the contract's verify commands to prove they're runnable: it gives the exercise/probe writable
 scratch + provisioned deps, whereas an in-place `run_role` eval stays read-only and false-blocks on
