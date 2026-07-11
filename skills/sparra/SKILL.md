@@ -53,6 +53,9 @@ and `sparra-run-mcp` package bins on `PATH`.
   plugin using `.codex-plugin/plugin.json`. Start a fresh thread in the target project and ask it to
   use `sparra-loop`. Reinstall and start another fresh thread whenever the plugin cachebuster
   changes.
+- **Pi:** `pi install ./conductors/pi` (from the Sparra checkout) — the package ships the Pi-native
+  `sparra-loop` conductor skill + `sparra_role` tool + `/sparra-loop` command, and references this
+  `sparra` skill. Then say "conduct a Sparra loop …" or `/skill:sparra-loop`.
 
 On Codex, prefer background CLI calls: `sparra role run … --json --out <file>` and
 `sparra eval … --json`, with each stdout envelope redirected to its own file. Resume with

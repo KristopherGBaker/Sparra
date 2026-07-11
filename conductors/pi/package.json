@@ -6,7 +6,7 @@
   "keywords": ["pi-package", "sparra", "conductor"],
   "pi": {
     "extensions": ["./extension.ts"],
-    "skills": ["./skills"]
+    "skills": ["./skills", "../../skills/sparra"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

@@ -67,6 +67,11 @@ the tested logic stays free of them so `npm test` never loads Pi.
 | `package.json` | The **Pi package manifest** (`keywords:["pi-package"]`, `pi.extensions:["./extension.ts"]`, `pi.skills:["./skills"]`, Pi/`typebox` as `"*"` peerDependencies, `type:module`). Makes `conductors/pi` a `pi install`-able package. |
 | `skills/sparra-loop/SKILL.md` | The **conductor skill** (Agent Skills standard). Loads into Pi's system prompt so you can say *"conduct a Sparra loop on X"* instead of hand-wiring flags — it drafts the contract, sets the cross-model split, drives contract → generate → evaluate → decide via the `sparra_role` tool / `/sparra-loop` command, and enforces the one holdout rule. Analogue of Claude Code's `skills/sparra-loop`. |
 
+The manifest's `pi.skills` also references the repo's canonical **`sparra`** skill (`../../skills/sparra`
+— the broader "drive & debug the whole harness" skill: `sparra build`, `.sparra/config.yaml`, per-role
+backends, diagnosing runs from artifacts, the iOS exerciser). So a local-path install exposes **both**
+skills in Pi with zero copy/drift — `sparra-loop` (Pi-native) and `sparra` (shared, host-agnostic).
+
 ### Install into Pi
 
 ```bash
