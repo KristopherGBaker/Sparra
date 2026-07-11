@@ -174,6 +174,7 @@ export function roleRequestFromFlags(
     model: typeof flags.model === "string" ? (flags.model as string) : undefined,
     effort: parseEffort(flags.effort),
     maxBudgetUsd: parseBudget(flags.budget),
+    maxTurns: parseMaxTurns(flags["max-turns"]),
     // `--verify` (a bare boolean flag) opts the GENERATOR into in-place self-verify of
     // build.verifyCommands. Parsed as a real boolean (`=== true`), never a stray "true" string;
     // a no-op on the `eval` alias (the evaluator isn't a writer, so verifyInPlace is unused).
@@ -214,6 +215,17 @@ function parseBudget(flag: string | boolean | string[] | undefined): number | un
   if (typeof flag !== "string") return undefined;
   const n = Number(flag);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+/** Parse a `--max-turns <n>` flag into a per-call turn cap, or undefined (use the config default).
+ *  DIVERGES from `parseBudget`: only a POSITIVE INTEGER (n >= 1) is accepted — `0`, negative,
+ *  fractional, and non-numeric input all fall back to `build.maxTurnsPerSession` rather than being
+ *  preserved as a sentinel, because an unbounded turn cap (budget's `0 = unlimited`) is a footgun
+ *  here: a runaway session with no turn ceiling has no natural stopping point. */
+export function parseMaxTurns(flag: string | boolean | string[] | undefined): number | undefined {
+  if (typeof flag !== "string") return undefined;
+  const n = Number(flag);
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;

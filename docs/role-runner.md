@@ -388,6 +388,9 @@ Flags: `--kind` (generator | contract-generator | contract-evaluator | evaluator
 reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--brief <file>` |
 `--brief-text "…"`, `--contract <file>`, `--holdout <file>`, `--workspace <dir>`, `--out <file>`,
 `--budget <usd>` (overrides `build.maxBudgetUsdPerItem` for this run; `0` = unlimited),
+`--max-turns <n>` (overrides `build.maxTurnsPerSession` for this run — a positive integer only;
+`0`, negative, fractional, or non-numeric falls back to the config default, unlike `--budget`'s
+`0` = unlimited, since an unbounded turn cap is a footgun),
 `--json` (one machine-readable payload on stdout; human logs move to stderr),
 `--resume-session <id>` and `--resume-backend <backend>` (resume a prior backend session),
 `--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
@@ -403,7 +406,8 @@ whipsaw-bounce an already-accepted fix or reverse an accepted out-of-scope carve
 `.sparra/` work).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
-[--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>] [--json]` (alias for `role run --kind
+[--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>] [--max-turns <n>]
+[--json]` (alias for `role run --kind
 evaluator`, with the brief defaulted) — to grade whatever you've been building, no full
 plan→freeze→build.
 

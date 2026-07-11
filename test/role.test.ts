@@ -7,7 +7,7 @@ import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
-import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags } from "../src/phases/role.ts";
+import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags, parseMaxTurns } from "../src/phases/role.ts";
 import { buildRunRolePayload } from "../src/mcp/runRoleServer.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
@@ -72,6 +72,69 @@ describe("roleRequestFromFlags — CLI --unit-worktree → unitWorktree (U-W)", 
     expect(roleRequestFromFlags(ctx, "generator", {}, { briefText: "build" }).unitWorktree).toBeUndefined();
     expect(roleRequestFromFlags(ctx, "generator", { "unit-worktree": true }, { briefText: "build" }).unitWorktree).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Unit B: `--max-turns <n>` → maxTurns (parity with `--budget` → maxBudgetUsd), but diverging on
+// `0`/invalid semantics — an unbounded turn cap is a footgun, so it falls back to the config
+// default instead of being preserved as a sentinel.
+describe("roleRequestFromFlags — CLI --max-turns → maxTurns (Unit B)", () => {
+  it("--max-turns <n> (a positive integer string) → maxTurns: n", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "generator", { "max-turns": "120" }, { briefText: "build" });
+    expect(req.maxTurns).toBe(120);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent --max-turns → maxTurns: undefined (config default applies downstream)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "generator", {}, { briefText: "build" });
+    expect(req.maxTurns).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("threads through the eval alias's flag shape the same way", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { "max-turns": "5" }, {});
+    expect(req.maxTurns).toBe(5);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("parseMaxTurns — direct unit coverage (Unit B assertion 4)", () => {
+  it("a positive integer string is accepted verbatim", () => {
+    expect(parseMaxTurns("1")).toBe(1);
+    expect(parseMaxTurns("120")).toBe(120);
+  });
+
+  it("0 is dropped to undefined — DIVERGES from parseBudget's 0=unlimited", () => {
+    expect(parseMaxTurns("0")).toBeUndefined();
+  });
+
+  it("a negative value is dropped to undefined", () => {
+    expect(parseMaxTurns("-5")).toBeUndefined();
+  });
+
+  it("a fractional value is dropped to undefined", () => {
+    expect(parseMaxTurns("2.5")).toBeUndefined();
+  });
+
+  it("a non-numeric value is dropped to undefined", () => {
+    expect(parseMaxTurns("abc")).toBeUndefined();
+    expect(parseMaxTurns("")).toBeUndefined();
+  });
+
+  it("a bare boolean flag (value-less) is dropped to undefined", () => {
+    expect(parseMaxTurns(true)).toBeUndefined();
+    expect(parseMaxTurns(false)).toBeUndefined();
+  });
+
+  it("an array (repeated flag) is dropped to undefined", () => {
+    expect(parseMaxTurns(["1", "2"])).toBeUndefined();
+  });
+
+  it("undefined is dropped to undefined", () => {
+    expect(parseMaxTurns(undefined)).toBeUndefined();
   });
 });
 

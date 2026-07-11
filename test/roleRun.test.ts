@@ -450,6 +450,26 @@ describe("runRole — safety intent + wiring", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("maxTurns override reaches the session request; omission falls back to config (Unit B)", async () => {
+    const { ctx, dir } = await makeCtx();
+
+    // (a) a supplied override reaches the session's per-call turn cap verbatim, chosen distinct
+    //     from the config default so the assertion can't pass by coincidence.
+    expect(ctx.config.build.maxTurnsPerSession).not.toBe(37);
+    const supplied = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", maxTurns: 37, runSessionFn: supplied.fn });
+    expect(supplied.calls[0]!.maxTurns).toBe(37);
+
+    // (b) omission falls back to build.maxTurnsPerSession — asserted by VARYING the config value
+    //     (not matching a hardcoded constant), so the fallback is genuinely the config seam.
+    ctx.config.build.maxTurnsPerSession = 41;
+    const omitted = recorder();
+    await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: omitted.fn });
+    expect(omitted.calls[0]!.maxTurns).toBe(41);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("warns when an active USD cap cannot bind because role-run cost is zero or unknown", async () => {
     const { ctx, dir } = await makeCtx();
     ctx.config.build.maxTokensPerItem = 1234;

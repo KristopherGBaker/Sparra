@@ -384,6 +384,11 @@ export interface RoleRunRequest {
    *  `build.maxBudgetUsdPerItem` (behavior unchanged). `0` means unlimited (see budget.ts) —
    *  threaded with nullish-coalescing so a supplied `0` is preserved, not dropped. */
   maxBudgetUsd?: number;
+  /** Per-call turn cap override (the per-session cap). When omitted, falls back to
+   *  `build.maxTurnsPerSession` (behavior unchanged). Unlike `maxBudgetUsd`, `0`/invalid is NOT a
+   *  sentinel — an unbounded turn cap is a footgun, so `parseMaxTurns` drops it to undefined and the
+   *  config default applies. Threaded with nullish-coalescing at the session-build site. */
+  maxTurns?: number;
   /** Opt the writer/generator role into the `allowVerifyBash` allow-hook even on an in-place run
    *  that has no `build.branch` — so an interactive `run_role` (the `/sparra-loop` path) can auto-run
    *  its project's `build.verifyCommands` (typecheck/test/build) on a hooks-only backend without each
@@ -1388,7 +1393,8 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // on the attempt backend's `inProcessMcp` capability (a fallback may switch backends), so a
     // no-in-process-MCP backend (Codex) never gets a server that would be silently dropped.
     ...guard,
-    maxTurns: ctx.config.build.maxTurnsPerSession,
+    // Per-call override (--max-turns); else the per-session default.
+    maxTurns: req.maxTurns ?? ctx.config.build.maxTurnsPerSession,
     // Per-call override (nullish-coalesce so a supplied `0` = unlimited survives); else the per-item cap.
     maxBudgetUsd: req.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,
     traceDir,
