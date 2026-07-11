@@ -64,6 +64,23 @@ the tested logic stays free of them so `npm test` never loads Pi.
 | `piConductor.ts` | `runIsolatedRoleViaPiSdk(...)` — lazy-imports Pi, spawns an isolated Codex-backed child session (`openai-codex`/`gpt-5.6-sol` by default) that runs the core `roleWorker` and returns only the summary. Live-only. |
 | `loopCommand.ts` | `registerSparraLoopCommand(pi, deps?)` — registers the `/sparra-loop` Pi command that now drives the FULL unit over the core `runUnit`: negotiate the contract (adversarial `contract-evaluator`, on the evaluator model) → generate → cross-model evaluate → decide, and reports each contract + build-cycle round's summary. `--contract-rounds n` / `--proceed-if-not-agreed` control the contract phase. Pi **type-only** (no runtime Pi/typebox import; `node:os`/`node:path` built-ins only). |
 | `index.ts` | The Pi-free barrel (never loads Pi/typebox on import). |
+| `package.json` | The **Pi package manifest** (`keywords:["pi-package"]`, `pi.extensions:["./extension.ts"]`, Pi/`typebox` as `"*"` peerDependencies, `type:module`). Makes `conductors/pi` a `pi install`-able package. |
+
+### Install into Pi
+
+```bash
+pi install ./conductors/pi     # from the Sparra repo root (writes to ~/.pi settings; -l for project)
+pi -e ./conductors/pi          # temp, current run only (no settings write)
+```
+
+A **local-path install loads in place** — the extension's `../core` / `../../src` relative imports
+resolve against the Sparra repo, so the repo must be present (this is the dev/self-host path). It
+registers the `sparra_role` tool and the `/sparra-loop` command. Publishing to npm/git would require
+bundling `conductors/core` + the `src/roleEnvelope.ts` contract into the tarball (relative imports
+can't escape a published package) — future work.
+
+Then, inside Pi: `/sparra-loop --brief <path> --contract <path> [--holdout <path>] [--contract-rounds
+n] [--proceed-if-not-agreed]`, or call the `sparra_role` tool directly.
 
 ## Status
 
@@ -78,6 +95,12 @@ The Pi conductor is functionally complete for a single-unit cycle: `conductors/c
 folds contract negotiation (`contract-evaluator` until AGREED, detected from the structured
 `contractAgreed` field) into a full `runUnit` (contract → generate → evaluate → decide), and
 `conductors/pi/loopCommand.ts`'s `/sparra-loop` command now drives that full `runUnit` — not just the
-build cycle — so a single command invocation negotiates the contract before ever generating. Next
-candidates: a multi-unit scheduler over the bounded `pool`, and packaging the extension/command as an
-installable Pi package.
+build cycle — so a single command invocation negotiates the contract before ever generating.
+
+`conductors/core/scheduler.ts` (`runUnitsConcurrently`, over the shared `bounded.ts` pump) runs
+several full units concurrently, and `conductors/pi/package.json` makes the adapter a `pi install`-able
+package. Both are verified: the package is **live-loaded by Pi** (`pi -e ./conductors/pi` starts clean
+and its `extension.ts` registers `sparra_role` + `/sparra-loop`), and the full single-unit loop was
+**live-driven** over three real Codex sessions (contract-evaluator → generator → evaluator → `accepted`,
+no raw leak). Next candidates: a live run on real Claude roles (not the stub), npm/git publish
+(bundling the core), and a multi-unit live drive.

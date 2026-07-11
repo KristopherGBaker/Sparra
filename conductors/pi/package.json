@@ -1,0 +1,14 @@
+{
+  "name": "sparra-pi-conductor",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi conductor for Sparra — a sparra_role tool + /sparra-loop command that drive Sparra's holdout-safe contract → generate → cross-model evaluate → decide loop from a Pi host.",
+  "keywords": ["pi-package", "sparra", "conductor"],
+  "pi": {
+    "extensions": ["./extension.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
