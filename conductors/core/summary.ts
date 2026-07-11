@@ -48,6 +48,7 @@ export const PARENT_SAFE_FIELDS = [
   "emptyCompletion",
   "noProgress",
   "verifyGateWarning",
+  "contractAgreed",
   "unitWorktree",
   "promptDrift",
   "errors",

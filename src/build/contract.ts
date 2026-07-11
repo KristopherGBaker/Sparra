@@ -19,7 +19,7 @@ import { getBackend } from "../sdk/session.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText } from "./judgeScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 
-const AGREED = "CONTRACT: AGREED";
+import { CONTRACT_AGREED_MARKER as AGREED } from "../roleEnvelope.ts";
 const SECTION = "## AGREED CONTRACT";
 
 // Delta instruction injected on round>1 evaluator calls (alongside the prior critiques). A fresh

@@ -127,6 +127,27 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
     expect("verdict" in p).toBe(false);
   });
 
+  it("surfaces contractAgreed for a contract-evaluator (structured AGREED signal), absent for other roles", () => {
+    const agreed = buildRunRolePayload(
+      baseResult({ roleKind: "contract-evaluator", resultText: "looks good.\nCONTRACT: AGREED\n" }),
+      75,
+    );
+    expect(agreed.contractAgreed).toBe(true);
+
+    const notAgreed = buildRunRolePayload(
+      baseResult({ roleKind: "contract-evaluator", resultText: "still needs work; blocking issues remain." }),
+      75,
+    );
+    expect(notAgreed.contractAgreed).toBe(false);
+
+    // Not a contract-evaluator → field absent (a generator's prose is never scanned for the marker).
+    const generator = buildRunRolePayload(
+      baseResult({ roleKind: "generator", resultText: "CONTRACT: AGREED" }),
+      75,
+    );
+    expect(generator.contractAgreed).toBeUndefined();
+  });
+
   it("preserves recovered resultText together with its recovery errors", () => {
     const p: RunRolePayload = buildRunRolePayload(
       baseResult({ resultText: "recovered report", errors: ["Recovered completion report after one-shot re-ask"] }),

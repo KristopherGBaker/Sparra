@@ -1,5 +1,11 @@
 import type { RoleKind, RoleRunResult } from "./build/roleRun.ts";
 
+/** The line-anchored marker a `contract-evaluator` emits in its critique to signal the contract is
+ *  agreed. Single source of truth: the build-loop negotiator and the envelope builder both use it,
+ *  so a conductor reads the structured {@link RunRolePayload.contractAgreed} boolean instead of
+ *  re-parsing prose. */
+export const CONTRACT_AGREED_MARKER = "CONTRACT: AGREED";
+
 /**
  * The canonical, holdout-safe **runner ↔ conductor contract**.
  *
@@ -41,6 +47,10 @@ export interface RunRolePayload {
   emptyCompletion?: boolean;
   noProgress?: boolean;
   verifyGateWarning?: string;
+  /** `contract-evaluator` role only: true when the critique carried {@link CONTRACT_AGREED_MARKER}
+   *  (the contract is agreed), false when it did not, absent for every other role. Lets a conductor
+   *  detect agreement from a structured field instead of the holdout-dropped `resultText`. */
+  contractAgreed?: boolean;
   unitWorktree?: RoleRunResult["unitWorktree"];
   promptDrift?: PromptDriftNote;
   errors: string[];
