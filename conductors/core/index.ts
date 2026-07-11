@@ -11,6 +11,8 @@
  *   - {@link ./roleWorker.ts} — a spawnable process boundary for model-driven hosts.
  *   - {@link ./pool.ts}     — `runRolesConcurrently`: bounded-concurrent isolated role-runs, since
  *                             not every host offers them natively.
+ *   - {@link ./loop.ts}     — `runBuildCycle` / `decideFromEvaluation`: the generate → cross-model
+ *                             evaluate → decide orchestrator, driven over an injected `RoleRunner`.
  *
  * The canonical envelope itself lives in `src/roleEnvelope.ts` (the runner↔conductor contract);
  * these types re-export it so a host imports one place.
@@ -38,3 +40,15 @@ export {
   type RoleJob,
   type RoleJobResult,
 } from "./pool.ts";
+
+export {
+  decideFromEvaluation,
+  runBuildCycle,
+  type BuildCycleConfig,
+  type BuildCycleResult,
+  type CycleOutcome,
+  type Decision,
+  type RoleRunner,
+  type RoundContext,
+  type RoundRecord,
+} from "./loop.ts";

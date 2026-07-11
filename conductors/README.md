@@ -20,6 +20,7 @@ The parts that are identical no matter which host conducts:
 | `roleClient.ts` | `runRole(spec)` runs one role via `sparra … --json` and returns ONLY the redacted summary. `runRoleRaw` is a flagged escape hatch returning the full payload for code that stays inside the boundary. |
 | `roleWorker.ts` | A spawnable process boundary (`tsx roleWorker.ts -- <sparra args>`) that prints only the summary — for MODEL-driven hosts where even the parent process must not parse the raw envelope. |
 | `pool.ts` | `runRolesConcurrently(jobs, {concurrency})` — bounded-concurrent isolated role-runs, since not every host offers them natively. Returns summaries only (raw payloads never retained), preserves input order, exposes `peakConcurrency`. |
+| `loop.ts` | `runBuildCycle({ runRole }, config)` + `decideFromEvaluation` — the generate → cross-model evaluate → decide orchestrator, driven over an injected `RoleRunner`. Bounded by `maxRounds`; threads `evaluator.blocking` as next-round feedback; pivots after N fails; **rejects a `sameModelGrade` pass** as non-independent. Pure decision fn + host-agnostic loop; only `ParentSummary` flows through. |
 
 The canonical envelope type is **`src/roleEnvelope.ts`** (`RunRolePayload`) — the single runner↔conductor
 contract emitted by both the MCP `run_role` tool and the `--json` CLI. The core imports it so its
@@ -56,12 +57,19 @@ the tested logic stays free of them so `npm test` never loads Pi.
 | `roleRunner.ts` | **Pi-free** tool logic: `runSparraRoleForTool(input, deps?)` builds a `RunRoleSpec`, calls the core `runRole`, and returns `{ summary, text }` — a `ParentSummary` plus a compact holdout-safe rendering. `holdoutPath` is forwarded as `--holdout <path>` (never read). |
 | `extension.ts` | The real Pi extension: `pi.registerTool(defineTool({ name: "sparra_role", … }))` (TypeBox params); `execute` → `runSparraRoleForTool`. The only file importing Pi/typebox at the top level; never imported by a test. |
 | `piConductor.ts` | `runIsolatedRoleViaPiSdk(...)` — lazy-imports Pi, spawns an isolated Codex-backed child session (`openai-codex`/`gpt-5.6-sol` by default) that runs the core `roleWorker` and returns only the summary. Live-only. |
+| `loopCommand.ts` | `registerSparraLoopCommand(pi, deps?)` — registers the `/sparra-loop` Pi command that wires the core `runBuildCycle` to a cross-model config and reports each round's summary. Pi **type-only** (no runtime Pi/typebox import). |
 | `index.ts` | The Pi-free barrel (never loads Pi/typebox on import). |
 
 ## Status
 
 `conductors/core` and `conductors/pi` are built and tested (`npm run typecheck` + `npx vitest run
-conductors/`). The Pi adapter is also **live-verified**: `runIsolatedRoleViaPiSdk` drove a real Codex
-`gpt-5.6-sol` session → core `roleWorker` → summary-only, holdout intact. Next: a Pi-hosted
-**loop conductor** (contract → generate → cross-model evaluate → decide) driven as a program over
-these pieces, plus a `/sparra-loop` Pi command.
+conductors/`, and the full `npm test` suite). Both are **live-verified** end-to-end against real
+Codex (`gpt-5.6-sol`) sessions:
+- `runIsolatedRoleViaPiSdk` drove an isolated session → core `roleWorker` → summary-only, holdout intact.
+- `runBuildCycle` drove a full generate→evaluate→decide cycle over two live child sessions and reached
+  `accepted` with no raw leak.
+
+The Pi conductor is functionally complete for a single-unit cycle. Next candidates: contract
+negotiation (`contract-generator`/`contract-evaluator` until AGREED) folded into the cycle, a
+multi-unit scheduler over the bounded `pool`, and packaging the extension/command as an installable
+Pi package.
