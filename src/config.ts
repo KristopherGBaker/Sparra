@@ -93,6 +93,10 @@ export interface SparraConfig {
      *  PLAN; the harness executes it. */
     committer: RoleConfig;
     reflector: RoleConfig;
+    /** The CONDUCTOR brain (`sparra conduct` hybrid/llm modes): consulted at judgment points and,
+     *  in `llm` mode, drives the run turn-by-turn. Sees ONLY holdout-safe `ParentSummary`-derived
+     *  material. Default claude/sonnet/medium; user-overridable like any role. */
+    conductor: RoleConfig;
   };
 
   permission: {
@@ -487,6 +491,35 @@ export interface SparraConfig {
   };
 
   batch: { K: number };
+
+  /**
+   * The `sparra conduct` conductor-intelligence knobs (U2): the brain mode + the decision engine.
+   */
+  conduct: {
+    /**
+     * Conductor brain mode:
+     *   hybrid → the deterministic loop runs, and the LLM conductor (`roles.conductor`) is consulted
+     *            at the five judgment points (contract non-convergence, unit exhaustion, cross-model
+     *            gate collapse, budget/limit recovery, borderline accept). (default)
+     *   llm    → the conductor brain drives turn-by-turn (run role / revise / pivot / escalate /
+     *            finalize / accept / abandon / surface-to-human) until the run completes or budgets
+     *            exhaust.
+     * CLI `--brain <hybrid|llm>` overrides this per run.
+     */
+    brain: "hybrid" | "llm";
+    /** The decision engine: how a judgment point surfaces to a human (or resolves itself). */
+    decisions: {
+      /**
+       * park         → write `<seq>.request.json` and WAIT for `<seq>.decision.json` (or a TTY answer).
+       * park-timeout → park, but after `timeoutSec` the brain (or the deterministic policy when the
+       *                brain is unavailable) decides and records the rationale. (default)
+       * auto         → never park; the brain decides everything (CLI `--auto` forces this per run).
+       */
+      surface: "park" | "park-timeout" | "auto";
+      /** Seconds a parked decision waits before auto-resolving under `park-timeout`. Default 1800. */
+      timeoutSec: number;
+    };
+  };
   /**
    * Subfolder (relative to the project root) for the human-facing docs Sparra
    * manages — PLAN.md, CODEBASE_MAP.md, CHANGELOG.md, HOLDOUT.md. "" keeps them
@@ -515,6 +548,7 @@ export function defaultConfig(): SparraConfig {
       reviewer: role("opus", "high"),
       committer: role("haiku", "low"),
       reflector: role("opus", "high"),
+      conductor: role("sonnet", "medium"),
     },
     permission: {
       mode: "auto",
@@ -597,6 +631,10 @@ export function defaultConfig(): SparraConfig {
     // Off by default: opting in re-grades a PASS with a second evaluator on a different backend/model.
     evaluator: { secondOpinion: { enabled: false } },
     batch: { K: 3 },
+    conduct: {
+      brain: "hybrid",
+      decisions: { surface: "park-timeout", timeoutSec: 1800 },
+    },
     docsDir: "",
   };
 }

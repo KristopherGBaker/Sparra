@@ -1,13 +1,18 @@
 import { autoProbeCtx, type Ctx } from "../context.ts";
-import { banner, detail, err, info } from "../util/log.ts";
+import { banner, detail, err, info, ok } from "../util/log.ts";
+import { exists } from "../util/io.ts";
 import { runConduct, type ConductDeps, type ConductOptions, type ConductResult } from "../conduct/run.ts";
+import { conductRunDir, runStatePath } from "../conduct/runState.ts";
+import { requestExists, writeDecisionAnswer } from "../conduct/decisionEngine.ts";
 
 /**
  * `sparra conduct "<prompt>"` — the headless conductor: from ONE prompt, decompose into 1..N units
  * and per unit negotiate a contract → generate → cross-model evaluate → decide, all through the
- * existing isolated role-run machinery (`conductors/core`). Deterministic decision strategy only;
- * an LLM conductor brain / interactive decision surface are follow-up units (the strategy seam is
- * already injectable). Nothing lands on the user's branch — units generate on their own worktrees.
+ * existing isolated role-run machinery (`conductors/core`). Two brain modes: `hybrid` (deterministic
+ * loop + an LLM conductor consulted at the five judgment points) and `llm` (the brain drives
+ * turn-by-turn); a decision engine surfaces important decisions to a human (park / park-timeout /
+ * auto) via file + TTY channels, answerable from another terminal with `conduct --decide`. Nothing
+ * lands on the user's branch — units generate on their own worktrees.
  */
 
 const DEFAULT_MAX_UNITS = 4;
@@ -45,6 +50,11 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
   const budget = parseOptionalBudget(flags["budget"]);
   if (typeof budget === "string") return { ok: false, error: budget };
 
+  const brain = parseBrain(flags["brain"]);
+  if (typeof brain === "string" && brain !== "hybrid" && brain !== "llm") {
+    return { ok: false, error: brain };
+  }
+
   const opts: ConductOptions = {
     prompt: trimmed,
     maxUnits,
@@ -53,7 +63,20 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
   };
   if (maxTurns !== undefined) opts.maxTurns = maxTurns;
   if (budget !== undefined) opts.budget = budget;
+  if (brain === "hybrid" || brain === "llm") opts.brain = brain;
+  // `--auto` forces the never-park surface for this run.
+  if (flags["auto"] === true) opts.surface = "auto";
   return { ok: true, opts };
+}
+
+/** Validate `--brain`: `undefined` when absent, `"hybrid"`/`"llm"` when valid, an error string when
+ *  present-but-invalid (missing value / unknown mode). */
+function parseBrain(v: Flags[string] | undefined): "hybrid" | "llm" | undefined | string {
+  if (v === undefined) return undefined;
+  if (v !== "hybrid" && v !== "llm") {
+    return `conduct: --brain must be "hybrid" or "llm" (got "${typeof v === "string" ? v : ""}")`;
+  }
+  return v;
 }
 
 /** Required positive-integer flag with a default when absent. Returns the number, or an error string. */
@@ -117,17 +140,27 @@ export async function cmdConduct(
   // zero model tokens; the probe is a live SDK query).
   await (deps.autoProbe ?? autoProbeCtx)(ctx);
 
+  // Apply config defaults for the brain mode + decision surface (a run always has a brain mode —
+  // `hybrid` by default; the flag/config selects it).
+  if (parsed.opts.brain === undefined) parsed.opts.brain = ctx.config.conduct.brain;
+  if (parsed.opts.surface === undefined) parsed.opts.surface = ctx.config.conduct.decisions.surface;
+  if (parsed.opts.timeoutSec === undefined) parsed.opts.timeoutSec = ctx.config.conduct.decisions.timeoutSec;
+
   const runConductFn = deps.runConductFn ?? runConduct;
   const conductDeps: ConductDeps = {
     ...(deps.runRole ? { runRole: deps.runRole } : {}),
     ...(deps.runSessionFn ? { runSessionFn: deps.runSessionFn } : {}),
     ...(deps.strategy ? { strategy: deps.strategy } : {}),
     ...(deps.sparraBin ? { sparraBin: deps.sparraBin } : {}),
+    ...(deps.brain !== undefined ? { brain: deps.brain } : {}),
+    ...(deps.brainSessionFn ? { brainSessionFn: deps.brainSessionFn } : {}),
+    ...(deps.tty ? { tty: deps.tty } : {}),
   };
 
   info(
     `prompt="${parsed.opts.prompt.slice(0, 80)}${parsed.opts.prompt.length > 80 ? "…" : ""}" ` +
-      `max-units=${parsed.opts.maxUnits} concurrency=${parsed.opts.concurrency}` +
+      `max-units=${parsed.opts.maxUnits} concurrency=${parsed.opts.concurrency} ` +
+      `brain=${parsed.opts.brain} decisions=${parsed.opts.surface}` +
       (parsed.opts.dryRun ? " (dry-run)" : ""),
   );
   const result = await runConductFn(ctx, parsed.opts, conductDeps);
@@ -141,4 +174,56 @@ export async function cmdConduct(
     );
   }
   return result;
+}
+
+/**
+ * `sparra conduct --decide <runId> <seq> <answer> [--note …]` — answer a parked decision from another
+ * terminal (also the future call target of the U3 HTTP bridge). Writes `<seq>.decision.json` where
+ * the run's poller looks; an unknown run or unparked seq exits non-zero with a naming error and
+ * spends nothing (no model call, no run dir created).
+ */
+export async function cmdConductDecide(
+  ctx: Ctx,
+  runId: string,
+  seqStr: string,
+  answer: string,
+  note?: string,
+): Promise<void> {
+  banner("sparra conduct --decide");
+  if (!runId || !seqStr || !answer) {
+    err("conduct --decide: usage — sparra conduct --decide <runId> <seq> <answer> [--note …]");
+    process.exitCode = 1;
+    return;
+  }
+  const seq = Number(seqStr);
+  if (!Number.isInteger(seq) || seq <= 0) {
+    err(`conduct --decide: <seq> must be a positive integer (got "${seqStr}")`);
+    process.exitCode = 1;
+    return;
+  }
+  const runDir = conductRunDir(ctx.paths.dir, runId);
+  if (!exists(runDir) || !exists(runStatePath(runDir))) {
+    err(`conduct --decide: no such run "${runId}" (looked in ${runDir})`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!(await requestExists(runDir, seq))) {
+    err(`conduct --decide: no parked decision #${seq} in run "${runId}"`);
+    process.exitCode = 1;
+    return;
+  }
+  const res = await writeDecisionAnswer(runDir, seq, answer, note);
+  if (!res.ok) {
+    if (res.reason === "bad-option") {
+      err(
+        `conduct --decide: "${answer}" is not a valid answer for decision #${seq} — ` +
+          `choose one of: ${(res.validOptions ?? []).join(", ")}`,
+      );
+    } else {
+      err(`conduct --decide: decision #${seq} in run "${runId}" is already resolved (cannot overwrite)`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  ok(`conduct --decide: recorded answer "${answer}" for decision #${seq} → ${res.path} (run.json updated)`);
 }

@@ -229,7 +229,7 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     const roles = Object.keys(DEFAULT_PROMPTS).filter((r) => r !== "reflector").sort();
     const h = createHash("sha256");
     for (const r of roles) h.update(r + " " + DEFAULT_PROMPTS[r]! + " ");
-    expect(roles).toHaveLength(13);
+    expect(roles).toHaveLength(14);
     // Regenerated 2026-07-06 (capability-gap cycle): prompt-auditor now audits for READABILITY
     // (not just terseness); contract-generator gained the mandated-side-effects, monotonic-floor,
     // and reset/clear degenerate-test clauses; the generator gained the monotonic-floor + reset/clear
@@ -282,7 +282,10 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // broken is committed, is contract trivia — run the working form, don't fail the artifact).
     // Regenerated 2026-07-10 (holdout-safe root search): contract-evaluator guidance now permits
     // selective filename Globs while retaining the protected-target and unfiltered-root denials.
-    expect(h.digest("hex")).toBe("8ae9f7b877d838a49f2a19bcad6384c41c6b57cac3fa3f750db6d7a7c20b72f7");
+    // Regenerated 2026-07-13 (U2 conduct-brain): a NEW non-reflector prompt — `conductor` — was added
+    // to DEFAULT_PROMPTS (the `sparra conduct` hybrid/llm brain), so the sorted non-reflector set grew
+    // from 13 to 14 and this digest changed. No existing prompt was edited.
+    expect(h.digest("hex")).toBe("3825b76ba7ec3fab66c7b57d5d65b7c989fedc10eedab215ae9b625c5712250d");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

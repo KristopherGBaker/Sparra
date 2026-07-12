@@ -66,8 +66,10 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 > conductor pattern from ONE prompt with no `.sparra/` setup: decompose → per unit
 > contract-negotiate → generate → cross-model evaluate → decide, all through the isolated role-run
 > machinery, writing `.sparra/conduct/<runId>/` and generating each unit on its own worktree (nothing
-> lands on your branch). Deterministic decision core today; flags + artifacts + safety properties:
-> [docs/conduct.md](docs/conduct.md).
+> lands on your branch). Two brain modes (`--brain hybrid` = deterministic loop + an LLM conductor at
+> the judgment points, `--brain llm` = the brain drives turn-by-turn) plus a decision engine that
+> parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` to answer).
+> Flags + artifacts + safety properties: [docs/conduct.md](docs/conduct.md).
 
 > **Remote conductor (HTTP bridge).** Trigger `sparra` phases and role-runs on another Mac over
 > Tailscale — Bearer-token auth, a path allowlist, and the same holdout wall over HTTP. Setup +

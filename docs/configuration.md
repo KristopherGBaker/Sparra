@@ -17,6 +17,7 @@ roles:                        # per role: { backend?, model, effort?, baseUrl?, 
   reviewer:          { model: opus,   effort: high }   # code-review gate (opt-in; see `review`)
   committer:         { model: haiku,  effort: low }    # authors commit(s) when git.agentCommits=agent
   reflector:         { model: opus,   effort: high }
+  conductor:         { model: sonnet, effort: medium }  # `sparra conduct` brain (hybrid/llm); sees only holdout-safe summaries
   # Cross-backend example: generator: { backend: codex, model: gpt-5-codex }
   # Hybrid (local for trivial/sensitive items, cloud for the hard ones):
   #   generator:      { backend: codex, model: gpt-5-codex }
@@ -28,6 +29,15 @@ roles:                        # per role: { backend?, model, effort?, baseUrl?, 
   #   generator: { model: sonnet, escalation: { model: opus, effort: high } }
   # Widen a Codex WRITE role's native sandbox for toolchains the default profile blocks (xcodebuild):
   #   generator: { backend: codex, model: gpt-5-codex, sandbox: danger-full-access }  # needs a worktree
+
+conduct:                      # `sparra conduct` (headless conductor) intelligence
+  brain: hybrid               # hybrid (deterministic loop + LLM at judgment points) | llm (brain drives turn-by-turn)
+  decisions:
+    surface: park-timeout     # park (wait for a human) | park-timeout (auto-resolve after timeoutSec) | auto (never park; --auto)
+    timeoutSec: 1800          # seconds a parked decision waits before the brain/deterministic policy decides
+# The conductor brain uses `roles.conductor` (default claude/sonnet/medium) and sees ONLY holdout-safe
+# ParentSummary-derived material. Answer a parked decision from another terminal with
+# `sparra conduct --decide <runId> <seq> <answer> [--note "…"]`.
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions

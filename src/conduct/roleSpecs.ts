@@ -110,6 +110,9 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
   contractGeneratorSpec: (ctx: ContractRoundContext) => RunRoleSpec;
   contractEvaluatorSpec: (ctx: ContractRoundContext) => RunRoleSpec;
   generatorSpec: (ctx: RoundContext) => RunRoleSpec;
+  /** Like `generatorSpec` but with an explicit generator role (for 2nd-pivot ESCALATION) and an
+   *  optional brief-path override (for a GENERALIZED-spec revision — a NEW file, never edited). */
+  generatorSpecFor: (role: RoleConfig, ctx: RoundContext, briefPath?: string) => RunRoleSpec;
   evaluatorSpec: (ctx: RoundContext) => RunRoleSpec;
 } {
   const env = { SPARRA_CONDUCT_UNIT: p.unitId };
@@ -154,15 +157,15 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
       "--json",
     ]);
 
-  const generatorSpec = (ctx: RoundContext): RunRoleSpec => {
+  const generatorSpecFor = (role: RoleConfig, ctx: RoundContext, briefPath = p.briefPath): RunRoleSpec => {
     const args = [
       "role",
       "run",
       "--kind",
       "generator",
-      ...roleFlags(gen),
+      ...roleFlags(role),
       "--brief",
-      p.briefPath,
+      briefPath,
       "--contract",
       p.contractPath,
       "--unit-worktree",
@@ -173,6 +176,7 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
     args.push(...capFlags(p.budget, p.maxTurns), "--json");
     return base(args);
   };
+  const generatorSpec = (ctx: RoundContext): RunRoleSpec => generatorSpecFor(gen, ctx);
 
   const evaluatorSpec = (): RunRoleSpec => {
     const args = [
@@ -199,5 +203,8 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
     return base(args);
   };
 
-  return { contractGeneratorSpec, contractEvaluatorSpec, generatorSpec, evaluatorSpec };
+  return { contractGeneratorSpec, contractEvaluatorSpec, generatorSpec, generatorSpecFor, evaluatorSpec };
 }
+
+/** The spec-builder bundle returned by {@link buildUnitRoleSpecs}. */
+export type UnitRoleSpecs = ReturnType<typeof buildUnitRoleSpecs>;

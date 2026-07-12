@@ -105,8 +105,11 @@ evaluate → decide, all through the isolated `role run … --json` machinery. F
 `--max-turns <n>`, `--dry-run` (decompose + briefs only, no role spend beyond the decomposer). Writes
 `.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating each unit on
 its own `sparra/<name>` worktree — nothing lands on your branch, and `run.json` reports each accepted
-unit's branch/worktree. Deterministic decision core today (the strategy seam is injectable for a
-future LLM conductor brain). Full reference: **[docs/conduct.md](../../docs/conduct.md)**.
+unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
+conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
+decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from another
+terminal with `sparra conduct --decide <runId> <seq> <answer>`. Full reference:
+**[docs/conduct.md](../../docs/conduct.md)**.
 
 **Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives
 the finished cycle's working set (PLAN, frozen input, workitems, contracts, verdicts, reviews,

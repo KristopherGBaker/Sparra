@@ -10,6 +10,11 @@ import { deterministicStrategy, type JudgmentStrategy } from "../src/conduct/str
 import { resolveSparraBin } from "../src/conduct/roleSpecs.ts";
 import { decideFromEvaluation, type ParentSummary, type RunRoleSpec } from "../conductors/core/index.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
+import { makeBrain, type Brain, type DriveContext } from "../src/conduct/brain.ts";
+import { buildDecisionRequest, type BrainDecision, type DecisionRequest } from "../src/conduct/decision.ts";
+import { resolveDecision, type DecisionEngineDeps } from "../src/conduct/decisionEngine.ts";
+import { classifyRecovery, buildRecoverySpec } from "../src/conduct/recovery.ts";
+import type { RoleConfig } from "../src/config.ts";
 
 const noProbe = async (): Promise<void> => {};
 
@@ -607,6 +612,655 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
     } finally {
       if (prev === undefined) delete process.env.SPARRA_BIN;
       else process.env.SPARRA_BIN = prev;
+    }
+  });
+});
+
+// ─────────────────────────────── U2: conductor brain + decision engine ───────────────────────────
+
+function fakeBrain(
+  judgeFn: (r: DecisionRequest) => BrainDecision | undefined,
+  driveFn?: (c: DriveContext) => BrainDecision | undefined,
+): { brain: Brain; judgeCalls: DecisionRequest[]; driveCalls: DriveContext[] } {
+  const judgeCalls: DecisionRequest[] = [];
+  const driveCalls: DriveContext[] = [];
+  return {
+    judgeCalls,
+    driveCalls,
+    brain: {
+      async judge(r) {
+        judgeCalls.push(r);
+        return judgeFn(r);
+      },
+      async drive(c) {
+        driveCalls.push(c);
+        return driveFn ? driveFn(c) : undefined;
+      },
+    },
+  };
+}
+
+/** A RunResult carrying `text` as its resultText (for the brain-session fake). */
+function sess(text: string, sessionId = "brain-s"): RunResult {
+  return {
+    ok: true,
+    subtype: "success",
+    resultText: text,
+    sessionId,
+    costUsd: 0,
+    tokens: 1,
+    numTurns: 1,
+    hitMaxTurns: false,
+    hitBudget: false,
+    errors: [],
+    tracePath: "",
+  };
+}
+
+/** Contract phase: generator drafts, evaluator AGREES (round 1). Returns undefined for other kinds. */
+function contractAgree(kind: string, spec: RunRoleSpec): ParentSummary | undefined {
+  if (kind === "contract-generator") {
+    fs.writeFileSync(argVal(spec.args, "--out")!, "C");
+    return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+  }
+  if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
+  return undefined;
+}
+
+/** A hybrid fake runner: agreed contract, then per-round generator/evaluator behaviors. */
+function hybridRunner(
+  evalFn: (unit: string, round: number) => ParentSummary,
+  genFn?: (unit: string, round: number) => ParentSummary,
+): FakeRunner {
+  const evalRounds: Record<string, number> = {};
+  const genRounds: Record<string, number> = {};
+  return fakeRunner(({ kind, unit, spec }) => {
+    const c = contractAgree(kind, spec);
+    if (c) return c;
+    if (kind === "generator") {
+      const gr = (genRounds[unit!] = (genRounds[unit!] ?? 0) + 1);
+      return genFn ? genFn(unit!, gr) : summary({ roleKind: "generator", filesChanged: 1 });
+    }
+    const er = (evalRounds[unit!] = (evalRounds[unit!] ?? 0) + 1);
+    return evalFn(unit!, er);
+  });
+}
+
+const AUTO = (o: Partial<ConductOptions> = {}): ConductOptions =>
+  OPTS({ brain: "hybrid", surface: "auto", timeoutSec: 1800, ...o });
+
+describe("conduct brain — hybrid consults the brain at ALL five judgment points (assertion 1)", () => {
+  it("point 1 — contract non-convergence: brain consulted with kind, answer applied (abandon)", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      // contract-evaluator NEVER agrees → contract non-convergence judgment point.
+      const runner = fakeRunner(({ kind, spec }) => {
+        if (kind === "contract-generator") {
+          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+        }
+        if (kind === "contract-evaluator") {
+          fs.writeFileSync(argVal(spec.args, "--out")!, "no");
+          return summary({ roleKind: "contract-evaluator", contractAgreed: false, outPath: argVal(spec.args, "--out") });
+        }
+        if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
+        return summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: false });
+      });
+      const fb = fakeBrain(() => ({ answer: "abandon", rationale: "ill-posed" }));
+      const res = await runConduct(ctx, AUTO(), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: fb.brain,
+      });
+      expect(fb.judgeCalls.map((c) => c.kind)).toContain("contract-nonconvergence");
+      expect(res.state.units[0]!.outcome).toBe("abandoned"); // brain's answer changed the run path
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("point 2 — unit exhausted: brain consulted; abandon differs from deterministic pivot→exhausted (assertion 2)", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", blocking: ["nope"], sameModelGrade: false }));
+      const fb = fakeBrain(() => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(fb.judgeCalls.map((c) => c.kind)).toContain("unit-exhausted");
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+
+      // Contrast: deterministic (no brain) exhausts, not abandons.
+      const ctx2 = await makeCtx(tmpdir());
+      ctx2.config.build.maxRoundsPerItem = 2;
+      const runner2 = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", blocking: ["nope"], sameModelGrade: false }));
+      const res2 = await runConduct(ctx2, AUTO(), { runRole: runner2.runRole, runSessionFn: decomposerFn(1), brain: null });
+      expect(res2.state.units[0]!.outcome).toBe("exhausted");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("point 3 — gate collapse: brain consulted; accept-anyway differs from deterministic abandon", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: true }));
+      const fb = fakeBrain(() => ({ answer: "accept-anyway" }));
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(fb.judgeCalls.map((c) => c.kind)).toContain("gate-collapse");
+      expect(res.state.units[0]!.outcome).toBe("accepted");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("point 4 — budget/limit recovery ambiguity: brain consulted with kind recovery, answer applied", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      // Generator hits a provider limit with NO fallback configured → ambiguous recovery.
+      const runner = hybridRunner(
+        () => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: false }),
+        () => summary({ roleKind: "generator", limitHit: { kind: "usage", raw: "limited" } as never }),
+      );
+      const fb = fakeBrain(() => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(fb.judgeCalls.map((c) => c.kind)).toContain("recovery");
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("point 5 — borderline accept: brain consulted; abandon differs from deterministic accept", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir); // passThreshold default 75
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: false, weightedTotal: 77, passThreshold: 75 }));
+      const fb = fakeBrain(() => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(fb.judgeCalls.map((c) => c.kind)).toContain("borderline-accept");
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative — a clean, non-borderline PASS never consults the brain", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: false, weightedTotal: 95, passThreshold: 75 }));
+      const fb = fakeBrain(() => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(fb.judgeCalls).toHaveLength(0);
+      expect(res.state.units[0]!.outcome).toBe("accepted");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct brain — llm mode drives turn-by-turn, bounded (assertion 3)", () => {
+  it("scripted [run, revise(F), accept] → 2 gen + 2 eval, F in the revise generator spec, accepted", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const genBriefTexts: string[] = [];
+      const runner = fakeRunner(({ kind, spec }) => {
+        const c = contractAgree(kind, spec);
+        if (c) return c;
+        if (kind === "generator") {
+          const bt = argVal(spec.args, "--brief-text");
+          if (bt) genBriefTexts.push(bt);
+          return summary({ roleKind: "generator", filesChanged: 1 });
+        }
+        return summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false });
+      });
+      const script: BrainDecision[] = [{ answer: "run" }, { answer: "revise", feedback: "FEED-LLM-42" }, { answer: "accept" }];
+      let i = 0;
+      const fb = fakeBrain(
+        () => ({ answer: "abandon" }),
+        () => script[i++] ?? { answer: "accept" },
+      );
+      const res = await runConduct(ctx, OPTS({ brain: "llm", surface: "auto" }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: fb.brain,
+      });
+      const genCount = runner.specs.filter((s) => kindOf(s.args) === "generator").length;
+      const evalCount = runner.specs.filter((s) => kindOf(s.args) === "evaluator").length;
+      expect(genCount).toBe(2);
+      expect(evalCount).toBe(2);
+      expect(genBriefTexts.some((t) => t.includes("FEED-LLM-42"))).toBe(true);
+      expect(res.state.units[0]!.outcome).toBe("accepted");
+      expect(fb.driveCalls).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scripted abandon ends the unit non-accepted (contrasting terminal)", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      const fb = fakeBrain(() => ({ answer: "x" }), () => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, OPTS({ brain: "llm", surface: "auto" }), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("TERMINATION — an endlessly-driving brain stops at the round budget; zero calls after exhaustion", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 3;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      const fb = fakeBrain(() => ({ answer: "x" }), () => ({ answer: "run" })); // never terminates itself
+      const res = await runConduct(ctx, OPTS({ brain: "llm", surface: "auto" }), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: fb.brain });
+      expect(res.state.units[0]!.outcome).toBe("exhausted"); // terminal persisted despite endless brain
+      // Exactly maxRounds drive turns + maxRounds gen + maxRounds eval — no calls past exhaustion.
+      expect(fb.driveCalls).toHaveLength(3);
+      expect(runner.specs.filter((s) => kindOf(s.args) === "generator")).toHaveLength(3);
+      expect(runner.specs.filter((s) => kindOf(s.args) === "evaluator")).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct brain — strict JSON + reask + fallback (assertion 4)", () => {
+  const req = (): DecisionRequest => buildDecisionRequest({ seq: 1, unit: "unit-001", kind: "unit-exhausted", nowMs: 0, timeoutSec: 1800 });
+  function brainOver(texts: string[]): { brain: Brain; calls: number } {
+    let calls = 0;
+    const brain = makeBrain({
+      runSessionFn: async () => sess(texts[Math.min(calls++, texts.length - 1)]!),
+      role: { model: "sonnet" },
+      systemPrompt: "sys",
+      cwd: "/tmp",
+      traceDir: "/tmp",
+      jsonReask: true,
+    });
+    return { brain, get calls() { return calls; } };
+  }
+
+  it("malformed → exactly one reask (same session) → reask valid → answer applied", async () => {
+    const b = brainOver(["not json at all", '```json\n{"answer":"pivot"}\n```']);
+    const d = await b.brain.judge(req());
+    expect(d?.answer).toBe("pivot");
+    expect(b.calls).toBe(2); // one ask + one reask
+  });
+
+  it("malformed → reask also malformed → brain returns undefined (→ deterministic fallback upstream)", async () => {
+    const b = brainOver(["nope", "still nope"]);
+    const d = await b.brain.judge(req());
+    expect(d).toBeUndefined();
+    expect(b.calls).toBe(2);
+  });
+
+  it("run-level: brain invalid-after-reask records source 'brain-fallback' on the decision", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: true })); // gate collapse
+      const res = await runConduct(ctx, AUTO(), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brainSessionFn: async () => sess("never valid json"),
+      });
+      const decisions = res.state.units[0]!.decisions ?? [];
+      const gate = decisions.find((d) => d.kind === "gate-collapse");
+      expect(gate?.source).toBe("brain-fallback");
+      // deterministic default for gate-collapse is "abandon" → grade-not-independent outcome.
+      expect(res.state.units[0]!.outcome).toBe("grade-not-independent");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct decision engine — park / timeout / auto / tty (assertions 5–8)", () => {
+  function findRunDir(dir: string): string {
+    const base = path.join(dir, ".sparra", "conduct");
+    return path.join(base, fs.readdirSync(base)[0]!);
+  }
+
+  it("assertion 5: park → file answer wins over the default, recorded with source 'file' and note", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", blocking: ["x"], sameModelGrade: false }));
+      // The file answer appears when the poller first looks (written by the fake sleep).
+      let wrote = false;
+      const sleep = async () => {
+        if (!wrote) {
+          const rd = findRunDir(dir);
+          fs.mkdirSync(path.join(rd, "decisions"), { recursive: true });
+          fs.writeFileSync(path.join(rd, "decisions", "1.decision.json"), JSON.stringify({ answer: "abandon", note: "human says stop" }));
+          wrote = true;
+        }
+      };
+      const requests: string[] = [];
+      const res = await runConduct(ctx, OPTS({ brain: "hybrid", surface: "park", timeoutSec: 1800 }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: null,
+        now: () => 0,
+        sleep,
+        pollMs: 0,
+        onDecisionRequest: (p) => requests.push(p),
+      });
+      expect(requests.some((p) => p.endsWith("1.request.json"))).toBe(true);
+      const rd = findRunDir(dir);
+      const reqDoc = JSON.parse(fs.readFileSync(path.join(rd, "decisions", "1.request.json"), "utf8"));
+      for (const f of ["id", "unit", "kind", "question", "options", "default", "expiresAt"]) expect(reqDoc).toHaveProperty(f);
+      const d = (res.state.units[0]!.decisions ?? []).find((x) => x.kind === "unit-exhausted")!;
+      expect(d.chosen).toBe("abandon"); // not the default "pivot"
+      expect(d.source).toBe("file");
+      expect(d.note).toBe("human says stop");
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 6: park-timeout with no file → brain decides (source 'brain', via 'timeout'); brain unavailable → 'auto-deterministic'", async () => {
+    // Brain present:
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      let clock = 0;
+      const fb = fakeBrain(() => ({ answer: "abandon", rationale: "r" }));
+      const res = await runConduct(ctx, OPTS({ brain: "hybrid", surface: "park-timeout", timeoutSec: 10 }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: fb.brain,
+        now: () => clock,
+        sleep: async () => { clock += 1_000_000_000; },
+        pollMs: 0,
+      });
+      const d = (res.state.units[0]!.decisions ?? []).find((x) => x.kind === "unit-exhausted")!;
+      expect(d.source).toBe("brain");
+      expect(d.via).toBe("timeout");
+      expect(d.rationale).toBeTruthy();
+
+      // Brain UNAVAILABLE:
+      const ctx2 = await makeCtx(tmpdir());
+      ctx2.config.build.maxRoundsPerItem = 2;
+      const runner2 = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      let clock2 = 0;
+      const res2 = await runConduct(ctx2, OPTS({ brain: "hybrid", surface: "park-timeout", timeoutSec: 10 }), {
+        runRole: runner2.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: null,
+        now: () => clock2,
+        sleep: async () => { clock2 += 1_000_000_000; },
+        pollMs: 0,
+      });
+      const d2 = (res2.state.units[0]!.decisions ?? []).find((x) => x.kind === "unit-exhausted")!;
+      expect(d2.source).toBe("auto-deterministic");
+      expect(d2.via).toBe("timeout");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 6 (boundary): park-timeout does NOT resolve before expiresAt and DOES at/after it (kills a reversed >= comparison)", async () => {
+    // Drive resolveDecision directly with a step-advanced fake clock. STEP < timeout window, so the
+    // poller crosses several SUB-boundary ticks (each must NOT resolve) before the clock reaches
+    // expiresAt (which MUST resolve). This pins the production `nowMs() >= expiresAtMs` boundary:
+    // reversing it to `<=` makes t=0 satisfy the check, resolving at the first poll (brainCalledAt=0,
+    // zero sleeps) — which fails BOTH assertions below.
+    const dir = tmpdir();
+    try {
+      const runDir = path.join(dir, "run");
+      const STEP = 3000;
+      const req = buildDecisionRequest({ seq: 1, unit: "unit-001", kind: "unit-exhausted", nowMs: 0, timeoutSec: 10 });
+      const expiresAtMs = Date.parse(req.expiresAt); // 10_000 ms
+      let clock = 0;
+      let brainCalledAt = -1;
+      let brainCalls = 0;
+      let sleepsBeforeResolve = 0;
+      let done = false;
+      const engine: DecisionEngineDeps = {
+        surface: "park-timeout",
+        runDir,
+        nowMs: () => clock,
+        sleep: async () => {
+          if (!done) sleepsBeforeResolve++;
+          clock += STEP;
+        },
+        pollMs: 0,
+        brainJudge: async () => {
+          brainCalls++;
+          brainCalledAt = clock;
+          return { answer: "abandon", rationale: "r" };
+        },
+      };
+      const res = await resolveDecision(req, engine);
+      done = true;
+
+      expect(res.source).toBe("brain");
+      expect(res.via).toBe("timeout");
+      expect(brainCalls).toBe(1);
+      // (1) The brain was consulted ONLY at/after the boundary — never during a sub-boundary tick.
+      expect(brainCalledAt).toBeGreaterThanOrEqual(expiresAtMs);
+      // (2) It genuinely polled through the sub-boundary ticks first (0 sleeps ⇒ resolved at t=0).
+      expect(sleepsBeforeResolve).toBeGreaterThanOrEqual(Math.floor(expiresAtMs / STEP));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 7: TTY answer arriving before the file wins (source 'tty'); single decision record", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      const tty = { question: async () => "abandon", cancel: () => {} };
+      const res = await runConduct(ctx, OPTS({ brain: "hybrid", surface: "park", timeoutSec: 1800 }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: null,
+        now: () => 0,
+        sleep: async () => {},
+        pollMs: 0,
+        tty,
+      });
+      const decisions = (res.state.units[0]!.decisions ?? []).filter((x) => x.kind === "unit-exhausted");
+      expect(decisions).toHaveLength(1); // loser not double-applied
+      expect(decisions[0]!.source).toBe("tty");
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 7 (other direction): FILE answer arriving before the TTY wins (source 'file'); TTY loser not applied, single record", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false }));
+      // The FILE answer ('abandon') is present the instant the request is written — before the TTY
+      // question (a DIFFERENT valid option, 'pivot') is observed. File is checked first each poll.
+      const tty = { question: async () => "pivot", cancel: () => {} };
+      const res = await runConduct(ctx, OPTS({ brain: "hybrid", surface: "park", timeoutSec: 1800 }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brain: null,
+        now: () => 0,
+        sleep: async () => {},
+        pollMs: 0,
+        tty,
+        onDecisionRequest: (reqPath) => {
+          fs.writeFileSync(reqPath.replace(".request.json", ".decision.json"), JSON.stringify({ answer: "abandon" }));
+        },
+      });
+      const decisions = (res.state.units[0]!.decisions ?? []).filter((x) => x.kind === "unit-exhausted");
+      expect(decisions).toHaveLength(1); // exactly one recorded winner
+      expect(decisions[0]!.source).toBe("file"); // file beat the TTY
+      expect(decisions[0]!.chosen).toBe("abandon"); // NOT the TTY's 'pivot'
+      expect(res.state.units[0]!.outcome).toBe("abandoned");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 8: --auto never parks — no request files; sources ∈ {brain, brain-fallback, auto-deterministic}, via 'auto'", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      // Two judgment triggers across two units: unit-1 exhausts, unit-2 gate-collapse.
+      const runner = fakeRunner(({ kind, unit, spec }) => {
+        const c = contractAgree(kind, spec);
+        if (c) return c;
+        if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
+        if (unit === "unit-001") return summary({ roleKind: "evaluator", verdict: "fail", sameModelGrade: false });
+        return summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: true });
+      });
+      let requestFiles = 0;
+      const fb = fakeBrain(() => ({ answer: "abandon" }));
+      const res = await runConduct(ctx, OPTS({ brain: "hybrid", surface: "auto" }), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(2),
+        brain: fb.brain,
+        onDecisionRequest: () => { requestFiles++; },
+      });
+      expect(requestFiles).toBe(0);
+      expect(fs.existsSync(path.join(res.runDir, "decisions"))).toBe(false);
+      const all = res.state.units.flatMap((u) => u.decisions ?? []);
+      expect(all.length).toBeGreaterThan(0);
+      for (const d of all) {
+        expect(["brain", "brain-fallback", "auto-deterministic"]).toContain(d.source);
+        expect(d.via).toBe("auto");
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct brain — escalation on 2nd pivot (assertion 11)", () => {
+  it("2nd pivot switches the generator spec to roles.generator.escalation identity", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.pivot.N = 1; // every fail pivots → reach the 2nd pivot fast
+      ctx.config.build.maxRoundsPerItem = 4;
+      const esc: RoleConfig = { backend: "codex", model: "gpt-5-esc", effort: "high" };
+      ctx.config.roles.generator = { ...ctx.config.roles.generator, escalation: esc };
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "fail", blocking: ["x"], sameModelGrade: false }));
+      await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: null });
+      const genSpecs = runner.specs.filter((s) => kindOf(s.args) === "generator");
+      // After the 2nd pivot the generator identity switches to the escalation role.
+      const escalated = genSpecs.filter((s) => argVal(s.args, "--model") === "gpt-5-esc");
+      expect(escalated.length).toBeGreaterThan(0);
+      expect(argVal(escalated[0]!.args, "--backend")).toBe("codex");
+      // The ORIGINAL brief file is byte-unchanged (escalation path never rewrites history).
+      const briefPath = path.join(dir, ".sparra", "conduct");
+      const runDir = path.join(briefPath, fs.readdirSync(briefPath)[0]!);
+      expect(fs.readFileSync(path.join(runDir, "unit-001", "brief.md"), "utf8").length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct recovery map reaches execution (assertion 12)", () => {
+  const genRole: RoleConfig = { backend: "claude", model: "sonnet", fallback: { backend: "codex", model: "gpt-5-fb", effort: "high" } };
+  const spec: RunRoleSpec = { args: ["role", "run", "--kind", "generator", "--backend", "claude", "--model", "sonnet", "--budget", "3", "--max-turns", "12", "--json"], cwd: "/w", sparraBin: "b" };
+
+  it("(a) limitHit + non-default fallback → next argv carries the fallback identity BY VALUE; no FAIL feedback", () => {
+    const action = classifyRecovery(summary({ limitHit: { kind: "usage", raw: "x" } as never }), { role: genRole, budget: 3, maxTurns: 12 });
+    expect(action.kind).toBe("fallback");
+    const next = buildRecoverySpec(spec, action);
+    expect(argVal(next.args, "--backend")).toBe("codex");
+    expect(argVal(next.args, "--model")).toBe("gpt-5-fb");
+    expect(argVal(next.args, "--effort")).toBe("high");
+    // A limit is never turned into behavioral-FAIL feedback (no blocking string produced here).
+    expect(next.args).not.toContain("--brief-text");
+  });
+
+  it("(b) hitBudget/hitMaxTurns → resume argv has --resume-session (+ --resume-backend) and STRICTLY-raised caps", () => {
+    const action = classifyRecovery(summary({ hitBudget: true, sessionId: "sess-9" }), { role: genRole, budget: 3, maxTurns: 12 });
+    expect(action.kind).toBe("resume");
+    const next = buildRecoverySpec(spec, action);
+    expect(argVal(next.args, "--resume-session")).toBe("sess-9");
+    expect(argVal(next.args, "--resume-backend")).toBe("claude");
+    expect(Number(argVal(next.args, "--budget"))).toBeGreaterThan(3);
+    expect(Number(argVal(next.args, "--max-turns"))).toBeGreaterThan(12);
+  });
+
+  it("(c) emptyCompletion + filesChanged>0 → evaluate (no regenerate); spec unchanged", () => {
+    const action = classifyRecovery(summary({ emptyCompletion: true, filesChanged: 2 }), { role: genRole });
+    expect(action.kind).toBe("evaluate");
+    expect(buildRecoverySpec(spec, action)).toBe(spec); // no reshaping → straight to evaluate
+  });
+
+  it("hybrid: limitHit + fallback → the NEXT captured generator argv carries the fallback identity", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.roles.generator = { ...ctx.config.roles.generator, fallback: { backend: "codex", model: "gpt-5-fb" } };
+      let genCalls = 0;
+      const runner = fakeRunner(({ kind, spec: s }) => {
+        const c = contractAgree(kind, s);
+        if (c) return c;
+        if (kind === "generator") {
+          genCalls++;
+          if (genCalls === 1) return summary({ roleKind: "generator", limitHit: { kind: "usage", raw: "x" } as never });
+          return summary({ roleKind: "generator", filesChanged: 1 });
+        }
+        return summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: false, weightedTotal: 95, passThreshold: 75 });
+      });
+      await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: null });
+      const genSpecs = runner.specs.filter((s) => kindOf(s.args) === "generator");
+      expect(genSpecs.some((s) => argVal(s.args, "--model") === "gpt-5-fb")).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("conduct — roles.conductor config + prompt (assertion 13)", () => {
+  it("defaultConfig ships roles.conductor (claude/sonnet/medium) and DEFAULT_PROMPTS has a conductor prompt", async () => {
+    const { defaultConfig } = await import("../src/config.ts");
+    const { DEFAULT_PROMPTS } = await import("../src/prompts.ts");
+    const c = defaultConfig().roles.conductor;
+    expect(c.model).toBe("sonnet");
+    expect(c.effort).toBe("medium");
+    expect((DEFAULT_PROMPTS as Record<string, string>).conductor).toMatch(/CONDUCTOR/);
+  });
+
+  it("an overridden conductor model is used for the brain session", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.roles.conductor = { backend: "claude", model: "opus-override", effort: "high" };
+      const models: string[] = [];
+      const runner = hybridRunner(() => summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: true })); // gate collapse
+      await runConduct(ctx, AUTO(), {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brainSessionFn: async (pp: RunSessionParams) => {
+          models.push(pp.model);
+          return sess('```json\n{"answer":"abandon"}\n```');
+        },
+      });
+      expect(models).toContain("opus-override");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

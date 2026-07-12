@@ -1,4 +1,5 @@
 import type { RunUnitResult } from "../../conductors/core/index.ts";
+import type { DecisionRecord } from "./decision.ts";
 
 /**
  * `src/conduct/types.ts` — the on-disk shapes for a `sparra conduct` run.
@@ -21,7 +22,14 @@ export interface ConductUnit {
 
 /** Terminal-or-pending outcome recorded for one unit. Mirrors the core `RunUnitResult["outcome"]`
  *  plus the conduct-only lifecycle markers. */
-export type UnitOutcome = RunUnitResult["outcome"] | "pending" | "running" | "dry-run" | "error";
+export type UnitOutcome =
+  | RunUnitResult["outcome"]
+  | "pending"
+  | "running"
+  | "dry-run"
+  | "error"
+  /** A conductor decision (brain or human) ended the unit deliberately without acceptance. */
+  | "abandoned";
 
 /** One unit's persisted entry in `run.json`. Fields (score/cost/branch/worktree) are derived from
  *  the unit's role `ParentSummary`s — never hardcoded. */
@@ -45,6 +53,8 @@ export interface UnitStateEntry {
   worktree?: string;
   /** Set when the unit threw (scheduler `{ id, error }`). */
   error?: string;
+  /** Every judgment-point decision surfaced for this unit (park/timeout/auto), in order. */
+  decisions?: DecisionRecord[];
 }
 
 /** Overall run status. `running` and `pending` are NON-final; the rest are terminal. */
@@ -61,5 +71,10 @@ export interface ConductRunState {
   maxUnits: number;
   concurrency: number;
   dryRun: boolean;
+  /** The conductor brain mode for this run (`hybrid`/`llm`), or absent for the plain deterministic
+   *  path (no brain). */
+  brain?: "hybrid" | "llm";
+  /** How decisions surfaced for this run (`park`/`park-timeout`/`auto`). */
+  decisionSurface?: "park" | "park-timeout" | "auto";
   units: UnitStateEntry[];
 }

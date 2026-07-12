@@ -5,10 +5,9 @@ from a single prompt it decomposes into 1..N units, and per unit drives
 **contract-negotiate → generate → cross-model evaluate → decide**, running every role through Sparra's
 existing isolated role-run machinery (`conductors/core`).
 
-This is the **deterministic** conductor core. An LLM conductor brain and an interactive
-decision/parking surface are follow-up units — the decision seam (`src/conduct/strategy.ts`) is
-already injectable, but only the deterministic strategy (delegating to the core `decideFromEvaluation`)
-ships today.
+It runs in one of two **conductor-brain modes** and surfaces important decisions to a human through a
+**decision engine** (park / park-timeout / auto), so a run can be steered exactly as an experienced
+human steers /sparra-loop in auto mode.
 
 Like `sparra role run` / `sparra eval`, `conduct` works **without `sparra init`** — it resolves a
 config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` on demand.
@@ -16,7 +15,9 @@ config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` 
 ## Usage
 
 ```bash
-sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] [--dry-run]
+sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] \
+                          [--brain <hybrid|llm>] [--auto] [--dry-run]
+sparra conduct --decide <runId> <seq> <answer> [--note "…"]
 ```
 
 ### Flags
@@ -27,7 +28,64 @@ sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--
 | `--concurrency N` | `2` | Bounded number of units run at once (`runUnitsConcurrently`). Within a unit, roles stay sequential. Must be a positive integer. |
 | `--budget <usd>` | (config) | Per-role-run USD cap (`--budget` on each `role run`). `0` = unlimited, per the existing role-run convention. Negative/non-numeric is rejected. |
 | `--max-turns <n>` | (config) | Per-role-run turn cap. Must be a positive integer. |
+| `--brain <hybrid\|llm>` | `hybrid` | Conductor-brain mode (see below). `hybrid` = deterministic loop + LLM at judgment points; `llm` = the brain drives turn-by-turn. Invalid values are rejected before any spend. |
+| `--auto` | off | Never park a decision — the brain decides everything (`surface: "auto"` for the run). |
 | `--dry-run` | off | Decompose + write briefs only — **no role spend beyond the decomposer**. |
+
+## Conductor-brain modes
+
+- **`hybrid` (default).** The deterministic loop runs exactly as U1, but the LLM **conductor role**
+  (`roles.conductor`) is consulted at the five **judgment points** and its structured answer is
+  applied to the run path:
+  1. **contract non-convergence** — finalize as-is / revise-brief / abandon,
+  2. **unit exhausted rounds** — pivot / generalize-spec / abandon,
+  3. **cross-model gate collapse** (no distinct grader) — abandon / accept-anyway / retry,
+  4. **budget/limit recovery** ambiguity — wait / fallback / abandon,
+  5. **borderline final accept** (a pass within a few points of threshold) — accept / revise / abandon.
+
+  A clean, non-borderline pass never consults the brain.
+- **`llm`.** The brain drives turn-by-turn: given holdout-safe run state + the latest summaries it
+  chooses the next action (run role / revise-with-feedback / pivot / escalate / finalize / accept /
+  abandon / surface-to-human) until the run completes or the round budget exhausts (a hard bound — an
+  endlessly-driving brain still terminates with a persisted terminal outcome).
+
+The brain sees **only holdout-safe** material: `ParentSummary` control fields, the briefs/contracts it
+authored, and run state — never holdout text, evaluator traces, or raw verdicts. It runs in-process,
+answers strict JSON, and re-asks once on malformed output before the deterministic fallback kicks in.
+
+## Decision engine
+
+The decision engine surfaces a judgment point to a human. The **filesystem is the source of truth**:
+
+- `surface: "park"` — write `.sparra/conduct/<runId>/decisions/<seq>.request.json` (id, unit, kind,
+  question, options, default, expiresAt) and **wait** for `<seq>.decision.json` (answer + optional
+  note). When stdin is a TTY it ALSO prompts inline (readline) — **first answer wins** (file vs TTY).
+- `surface: "park-timeout"` (default) — park, but after `timeoutSec` (default 1800) the brain (or the
+  deterministic policy when no brain is available) decides and records the rationale.
+- `surface: "auto"` (or `--auto`) — never park; the brain decides everything.
+
+**Audit trail.** Each decision is a SINGLE `run.json` record per `<seq>` that transitions
+`status: "pending"` → `"resolved"`: the pending record is appended (and phase-logged) the moment the
+request is surfaced, then updated in place when answered — so a parked, in-flight decision is durably
+inspectable and one sequence never yields two records. A resolved record carries `kind`, `chosen`,
+`rationale`, optional `note`, `source` ∈ `file` / `tty` / `brain` / `auto-deterministic` /
+`brain-fallback`, and the trigger `via` ∈ `park` / `timeout` / `auto`. All payloads are
+**holdout-safe by construction** — built from `ParentSummary`-derived material only.
+
+### Answering a parked decision from another terminal
+
+```bash
+sparra conduct --decide <runId> <seq> <answer> [--note "why"]
+```
+
+The `<answer>` is **validated against the parked request's `options`** (an off-menu answer exits
+non-zero, naming the valid options). On success it atomically writes `<seq>.decision.json` where the
+run's poller looks **and** transitions that `<seq>`'s `run.json` record to `resolved` (`source: "file"`).
+The write is **exclusive** — an already-resolved decision cannot be overwritten (a second `--decide`
+for the same `<seq>` exits non-zero, the first answer stands), so one sequence yields exactly one
+durable resolution whether the running poller or `--decide` resolves it. An unknown run or unparked
+`<seq>` exits non-zero with a naming error and spends nothing. (This is also the call target of the U3
+HTTP bridge.)
 
 A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--concurrency`/`--max-turns`,
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the
