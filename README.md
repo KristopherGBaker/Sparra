@@ -62,6 +62,8 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 
 > **Codex as conductor is experimental (WIP).** Codex can also drive `/sparra-loop`, but that host path lags Claude Code's and is gated on better Codex capabilities (or an alternative host harness able to run Codex/OpenAI models). Codex as a *backend* — building or judging individual roles — is fully supported. Setup and current limits: [docs/role-runner.md#codex-install-and-run](docs/role-runner.md#codex-install-and-run).
 
+> **Pi as conductor is experimental (WIP).** A programmatic conductor for the [Pi](https://pi.dev) host — a `sparra_role` tool, a `/sparra-loop` command, and `sparra`/`sparra-loop` skills, so a Pi (e.g. OpenAI/Codex) session drives the same holdout-safe loop — lives in [`conductors/`](conductors/README.md). It's built and green with the same cross-model/holdout guarantees, but not yet published (a local-path `pi install ./conductors/pi` loads it in place).
+
 **Just want a second opinion?** `sparra eval <dir> --contract contract.md --backend codex` grades any work-in-progress tree against a contract — no `.sparra/` setup required. Add `--worktree` to evaluate a snapshot without touching your tree.
 
 ## Fully autonomous: the CLI phases
