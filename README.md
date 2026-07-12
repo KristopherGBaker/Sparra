@@ -62,6 +62,13 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 
 > **Codex as conductor is experimental (WIP).** Codex can also drive `/sparra-loop`, but that host path lags Claude Code's and is gated on better Codex capabilities (or an alternative host harness able to run Codex/OpenAI models). Codex as a *backend* — building or judging individual roles — is fully supported. Setup and current limits: [docs/role-runner.md#codex-install-and-run](docs/role-runner.md#codex-install-and-run).
 
+> **Headless conductor (`sparra conduct`).** `sparra conduct "<prompt>"` drives the whole
+> conductor pattern from ONE prompt with no `.sparra/` setup: decompose → per unit
+> contract-negotiate → generate → cross-model evaluate → decide, all through the isolated role-run
+> machinery, writing `.sparra/conduct/<runId>/` and generating each unit on its own worktree (nothing
+> lands on your branch). Deterministic decision core today; flags + artifacts + safety properties:
+> [docs/conduct.md](docs/conduct.md).
+
 > **Remote conductor (HTTP bridge).** Trigger `sparra` phases and role-runs on another Mac over
 > Tailscale — Bearer-token auth, a path allowlist, and the same holdout wall over HTTP. Setup +
 > endpoints: [docs/http-bridge.md](docs/http-bridge.md).
@@ -117,6 +124,7 @@ Sparra is a harness, not a fixed pipeline. The [iOS/macOS support](docs/ios.md) 
 | [Phases](docs/phases.md) | orient → plan ⇄ prototype → freeze → build → reflect; greenfield vs brownfield |
 | [The build loop](docs/build-loop.md) | contract negotiation, exercising, pivots, budgets, code review, measure, memory |
 | [Role-runner](docs/role-runner.md) | the interactive seam: `/sparra-loop`, MCP `run_role`, `sparra eval`, the holdout wall |
+| [Conduct](docs/conduct.md) | `sparra conduct "<prompt>"` — the headless conductor: decompose → per-unit negotiate/generate/evaluate/decide, run artifacts, safety |
 | [Agent backends](docs/backends.md) | Claude + Codex, per-role backends, OpenAI-compatible endpoints, skills |
 | [iOS / macOS](docs/ios.md) | Simulator builds, `xcodebuildmcp`, XcodeGen, multimodal UI grading |
 | [Configuration](docs/configuration.md) | every knob, the `.sparra/` on-disk layout, resuming |

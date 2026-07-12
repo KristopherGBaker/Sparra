@@ -98,6 +98,16 @@ and `traceDir`; non-evaluators use `resultText`, and both include `errors`.
 `--root <dir>` targets a project; otherwise the cwd is used. Re-running `sparra build`
 resumes — passed/abandoned/budget_exceeded items are skipped.
 
+**Headless conductor (`sparra conduct "<prompt>"`).** Drives the whole conductor pattern from ONE
+prompt (no `sparra init` needed): decompose → per unit contract-negotiate → generate → cross-model
+evaluate → decide, all through the isolated `role run … --json` machinery. Flags:
+`--max-units N` (default 4), `--concurrency N` (default 2), `--budget <usd>` (0 = unlimited),
+`--max-turns <n>`, `--dry-run` (decompose + briefs only, no role spend beyond the decomposer). Writes
+`.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating each unit on
+its own `sparra/<name>` worktree — nothing lands on your branch, and `run.json` reports each accepted
+unit's branch/worktree. Deterministic decision core today (the strategy seam is injectable for a
+future LLM conductor brain). Full reference: **[docs/conduct.md](../../docs/conduct.md)**.
+
 **Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives
 the finished cycle's working set (PLAN, frozen input, workitems, contracts, verdicts, reviews,
 the run's traces) to `.sparra/cycles/<NNNN>-<slug>/`, carries forward `memory.md` /

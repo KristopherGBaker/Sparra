@@ -197,7 +197,23 @@ export function roleRequestFromFlags(
     baselineCommand: typeof flags["baseline-command"] === "string" ? (flags["baseline-command"] as string) : undefined,
     resumeSessionId: typeof flags["resume-session"] === "string" ? (flags["resume-session"] as string) : undefined,
     resumeBackend: typeof flags["resume-backend"] === "string" ? (flags["resume-backend"] as string) : undefined,
+    // Cross-model gate (judge roles): `--baseline-backend`/`--baseline-model` carry the GENERATOR's
+    // identity so the runner sets `sameModelGrade` when the evaluator's post-fallback identity
+    // collapses onto it. Absent → no baseline (unchanged behavior). A headless conductor (`sparra
+    // conduct`) threads these onto its evaluator specs to keep the cross-model gate effective.
+    crossModelBaseline: crossModelBaselineFromFlags(flags),
   };
+}
+
+/** Build a `crossModelBaseline` from `--baseline-backend`/`--baseline-model`, or undefined when
+ *  neither is supplied (fully backwards-compatible). */
+function crossModelBaselineFromFlags(
+  flags: Record<string, string | boolean | string[]>
+): { backend?: string; model?: string } | undefined {
+  const backend = typeof flags["baseline-backend"] === "string" ? (flags["baseline-backend"] as string) : undefined;
+  const model = typeof flags["baseline-model"] === "string" ? (flags["baseline-model"] as string) : undefined;
+  if (backend === undefined && model === undefined) return undefined;
+  return { ...(backend !== undefined ? { backend } : {}), ...(model !== undefined ? { model } : {}) };
 }
 
 /** Normalize the repeatable `--prior-critique` flag into a `priorCritiquePaths` array (given order

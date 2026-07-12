@@ -61,6 +61,7 @@ export {
   type BuildCycleConfig,
   type BuildCycleResult,
   type CycleOutcome,
+  type DecideFn,
   type Decision,
   type RoleRunner,
   type RoundContext,

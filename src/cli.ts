@@ -17,6 +17,7 @@ import { cmdFinish } from "./phases/finish.ts";
 import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
 import { cmdRoleRun, cmdRoleRemoveWorktree } from "./phases/role.ts";
+import { cmdConduct } from "./phases/conduct.ts";
 import { cmdMeasure } from "./phases/measure.ts";
 import { promptDrift, summarizePromptDrift } from "./prompts.ts";
 import { parse } from "./util/args.ts";
@@ -56,6 +57,8 @@ ${color.bold("Commands")}
                                                 grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator; --worktree gives the exercise writable scratch in a temp worktree that mirrors your WIP; --max-turns overrides build.maxTurnsPerSession for this call, positive integers only; --expected-head <sha> aborts before launch if the graded HEAD isn't the one cited; --eval-base <ref> scopes scope/deviation judgment to <ref>..HEAD + WIP so foreign uncommitted WIP doesn't fail assertions; --baseline-command <cmd> injects a runner-owned [VERIFIED BASELINE] block at --eval-base's SHA, non-gameable)
   measure [dir] [--worktree [--keep-worktree]] [--set-baseline] [--out f]
                                                 run the project's own measure.command on a tree, parse its JSON metrics, diff against the baseline (in .sparra/measure/), flag regressions — a signal, never a gate (default compare-only; --set-baseline updates the baseline; --worktree mirrors your WIP)
+  conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] [--dry-run]
+                                                headless conductor: decompose a prompt into 1..N units, then per unit negotiate contract → generate → cross-model evaluate → decide, all through the isolated role-run machinery (works without 'sparra init'). Writes .sparra/conduct/<runId>/ (run.json + per-unit briefs/contracts); each unit generates on its own sparra/<name> worktree — nothing lands on your branch. --max-units clamps the decomposition (default 4); --concurrency bounds units run at once (default 2); --budget/--max-turns cap each role-run (--budget 0 = unlimited); --dry-run decomposes + writes briefs only (no role spend beyond the decomposer)
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 
@@ -129,6 +132,16 @@ async function main(): Promise<void> {
       if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
       await cmdRoleRun(roleCtx, evalFlags);
     }
+    return;
+  }
+
+  // `conduct` is a STANDALONE conductor surface — like `role`/`eval` it works WITHOUT `sparra init`,
+  // resolving a config-less, default-backed context. Route through `loadCtxForRole` (deferring the
+  // live-SDK auto-permission probe until AFTER flag validation, inside `cmdConduct`, so a malformed
+  // invocation spends zero tokens and creates no run dir).
+  if (cmd === "conduct") {
+    const conductCtx = await loadCtxForRole(root, { deferAutoProbe: true });
+    await cmdConduct(conductCtx, positionals.slice(1).join(" "), flags);
     return;
   }
 

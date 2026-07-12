@@ -31,6 +31,11 @@ export interface ContractRoundContext {
  *  the loop's stopping threshold. */
 export interface ContractNegotiationConfig {
   contractEvaluatorSpec: (ctx: ContractRoundContext) => RunRoleSpec;
+  /** OPTIONAL `contract-generator` spec. When present, each round FIRST drafts/revises the proposed
+   *  contract via this spec (threading the same `priorCritiquePaths` so a round>1 revision sees the
+   *  prior rounds' critiques), THEN critiques it with `contractEvaluatorSpec`. When omitted the
+   *  behavior is unchanged — the evaluator critiques a pre-existing contract file, as before. */
+  contractGeneratorSpec?: (ctx: ContractRoundContext) => RunRoleSpec;
   /** Max rounds before giving up. Default 3. */
   maxRounds?: number;
 }
@@ -38,6 +43,9 @@ export interface ContractNegotiationConfig {
 /** One round's contract-evaluator summary and whether it signalled agreement. */
 export interface ContractRoundRecord {
   round: number;
+  /** The round's `contract-generator` summary, when a `contractGeneratorSpec` was configured. Its
+   *  `outPath` (never contents) locates the drafted proposal the host may finalize. */
+  generator?: ParentSummary;
   evaluator: ParentSummary;
   agreed: boolean;
 }
@@ -69,14 +77,18 @@ export async function negotiateContract(
 
   for (let round = 1; round <= maxRounds; round++) {
     const ctx: ContractRoundContext = { round, priorCritiquePaths: [...priorCritiquePaths] };
-    const spec = config.contractEvaluatorSpec(ctx);
-    const evaluator = await deps.runRole(spec);
+    // Optional generator phase: draft/revise the proposal FIRST, threading the same prior critiques.
+    const generator = config.contractGeneratorSpec
+      ? await deps.runRole(config.contractGeneratorSpec(ctx))
+      : undefined;
+    const evaluator = await deps.runRole(config.contractEvaluatorSpec(ctx));
     const agreed = evaluator.contractAgreed === true;
-    rounds.push({ round, evaluator, agreed });
+    rounds.push({ round, ...(generator ? { generator } : {}), evaluator, agreed });
 
     if (agreed) {
       return { agreed: true, rounds, critiquePaths: priorCritiquePaths };
     }
+    // Only the EVALUATOR's critique path threads forward — never the generator's proposal path.
     if (evaluator.outPath) {
       priorCritiquePaths.push(evaluator.outPath);
     }

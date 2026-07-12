@@ -26,6 +26,15 @@ export interface RoundContext {
   pivoting: boolean;
 }
 
+/** A per-round decision function: the SAME signature as {@link decideFromEvaluation}. Injecting one
+ *  lets a host (e.g. `sparra conduct`'s judgment-strategy seam) consult a pluggable strategy at the
+ *  judgment point without reimplementing the round loop. Defaults to {@link decideFromEvaluation}. */
+export type DecideFn = (
+  evaluator: ParentSummary,
+  state: { consecutiveFailures: number },
+  config: { pivotAfterFailures: number; requireCrossModel: boolean },
+) => Decision;
+
 /** Config for one build cycle: how to build each round's generator/evaluator spec, and the loop's
  *  stopping/pivoting thresholds. */
 export interface BuildCycleConfig {
@@ -37,6 +46,9 @@ export interface BuildCycleConfig {
   pivotAfterFailures?: number;
   /** Reject a same-model "pass" as acceptance evidence. Default true. */
   requireCrossModel?: boolean;
+  /** Injected per-round decision strategy. Defaults to {@link decideFromEvaluation} (identical
+   *  behavior when omitted), so a host can supply a judgment strategy at the decision point. */
+  decide?: DecideFn;
 }
 
 /** The decision made after one round's evaluation. */
@@ -102,6 +114,7 @@ export async function runBuildCycle(
   const maxRounds = config.maxRounds ?? DEFAULT_MAX_ROUNDS;
   const pivotAfterFailures = config.pivotAfterFailures ?? DEFAULT_PIVOT_AFTER_FAILURES;
   const requireCrossModel = config.requireCrossModel ?? DEFAULT_REQUIRE_CROSS_MODEL;
+  const decide = config.decide ?? decideFromEvaluation;
 
   const rounds: RoundRecord[] = [];
   let round = 1;
@@ -116,7 +129,7 @@ export async function runBuildCycle(
     const evaluator = await deps.runRole(config.evaluatorSpec(ctx));
     lastEvaluator = evaluator;
 
-    const decision = decideFromEvaluation(
+    const decision = decide(
       evaluator,
       { consecutiveFailures },
       { pivotAfterFailures, requireCrossModel },
