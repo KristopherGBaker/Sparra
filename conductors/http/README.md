@@ -65,12 +65,18 @@ $EDITOR ~/.sparra/bridge.yaml   # set `roots` to your real project directories
 ```
 
 `$SPARRA_BRIDGE_CONFIG` overrides the path if you'd rather keep it elsewhere. Every field
-(`roots`, `port`, `bind`, `lastNJobs`, `auditLogPath`, `allowRemotePlan`, `dashboard`) is commented in
-the example; the two most worth knowing about beyond `roots`/`port`: `lastNJobs` bounds how many jobs
-the in-memory store retains (oldest evicted first), and `auditLogPath` is where the append-only
-request audit log lands (default `~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls
-whether `GET /` serves the web console below — set it `false` for zero unauthenticated HTTP surface
-beyond `GET /health`.
+(`roots`, `port`, `bind`, `lastNJobs`, `auditLogPath`, `allowRemotePlan`, `dashboard`,
+`discoverProjects`, `discoverDepth`) is commented in the example; the two most worth knowing about
+beyond `roots`/`port`: `lastNJobs` bounds how many jobs the in-memory store retains (oldest evicted
+first), and `auditLogPath` is where the append-only request audit log lands (default
+`~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls whether `GET /` serves the web
+console below — set it `false` for zero unauthenticated HTTP surface beyond `GET /health`.
+`discoverProjects` (default `false`) turns `GET /projects` from "one entry per allowlisted root" into
+a recursive walk that reports every Sparra project FOUND under each root (useful when a root like
+`~/code` is a parent of many projects, not a project itself); `discoverDepth` (default `3`; validated
+to `0`–`8` at config load — a negative, non-integer, or out-of-range value is REJECTED, never clamped)
+bounds how deep that walk goes. See [`docs/http-bridge.md`](../../docs/http-bridge.md) for
+the full discovery semantics (skip-list, symlink handling, result cap).
 
 ### 3. Install the launchd agent
 

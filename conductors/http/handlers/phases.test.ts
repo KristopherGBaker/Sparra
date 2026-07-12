@@ -1,5 +1,14 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -258,6 +267,90 @@ describe("phases — GET /projects (read-only)", () => {
       { root: rootB, phase: "plan", next: "n" },
     ]);
     expect(calls).toHaveLength(0); // read-only: no spawn
+  });
+
+  it("REGRESSION: discoverProjects unset (the default) is byte-for-byte today's behavior, even when a root is itself a nested tree of projects", async () => {
+    const rootA = tmpRoot();
+    const rootB = tmpRoot();
+    // Plant a NESTED project under rootA — if discovery ever ran by default, this would change the
+    // response shape. It must not: unset discoverProjects means "one entry per allowlisted root".
+    mkdirSync(join(rootA, "nestedProject", ".sparra"), { recursive: true });
+    writeFileSync(join(rootA, "nestedProject", ".sparra", "state.json"), JSON.stringify({ phase: "done" }), "utf8");
+    const statusSource = (root: string) => ({ phase: root === rootA ? "build" : "plan", next: "n" });
+    const { spawn } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([rootA, rootB]), { lock: new TargetLock(), spawn, statusSource });
+    const res = await dispatch(listener, { method: "GET", url: "/projects" });
+    expect(res.status).toBe(200);
+    expect(res.json.projects).toEqual([
+      { root: rootA, phase: "build", next: "n" },
+      { root: rootB, phase: "plan", next: "n" },
+    ]);
+  });
+
+  it("REGRESSION: discoverProjects:false explicitly is also unchanged", async () => {
+    const root = tmpRoot();
+    const statusSource = () => ({ phase: "build", next: "n" });
+    const { spawn } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root], { discoverProjects: false }), {
+      lock: new TargetLock(),
+      spawn,
+      statusSource,
+    });
+    const res = await dispatch(listener, { method: "GET", url: "/projects" });
+    expect(res.json.projects).toEqual([{ root, phase: "build", next: "n" }]);
+  });
+
+  it("discoverProjects:true walks the allowlisted root and reports every nested Sparra project found", async () => {
+    const root = tmpRoot();
+    mkdirSync(join(root, "projA", ".sparra"), { recursive: true });
+    writeFileSync(join(root, "projA", ".sparra", "state.json"), JSON.stringify({ phase: "build" }), "utf8");
+    mkdirSync(join(root, "sub", "projB", ".sparra"), { recursive: true });
+    writeFileSync(join(root, "sub", "projB", ".sparra", "state.json"), JSON.stringify({ phase: "done" }), "utf8");
+    // Skip-list dir: a .sparra planted under node_modules must NOT be discovered.
+    mkdirSync(join(root, "node_modules", "someLib", ".sparra"), { recursive: true });
+    writeFileSync(
+      join(root, "node_modules", "someLib", ".sparra", "state.json"),
+      JSON.stringify({ phase: "build" }),
+      "utf8",
+    );
+
+    const { spawn, calls } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root], { discoverProjects: true, discoverDepth: 3 }), {
+      lock: new TargetLock(),
+      spawn,
+    });
+    const res = await dispatch(listener, { method: "GET", url: "/projects" });
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(0); // still read-only
+    const roots = (res.json.projects as Array<{ root: string }>).map((p) => p.root).sort();
+    expect(roots).toEqual([join(root, "projA"), join(root, "sub", "projB")].sort());
+    expect(roots).not.toContain(join(root, "node_modules", "someLib"));
+    const byRoot = new Map((res.json.projects as Array<{ root: string; phase: string; next: string }>).map((p) => [p.root, p]));
+    expect(byRoot.get(join(root, "projA"))?.phase).toBe("build");
+    expect(byRoot.get(join(root, "sub", "projB"))?.phase).toBe("done");
+  });
+
+  it("discoverProjects:true never follows a symlink out of the allowlisted root", async () => {
+    const root = tmpRoot();
+    const outside = tmpRoot();
+    mkdirSync(join(outside, "secretProject", ".sparra"), { recursive: true });
+    writeFileSync(
+      join(outside, "secretProject", ".sparra", "state.json"),
+      JSON.stringify({ phase: "build" }),
+      "utf8",
+    );
+    symlinkSync(outside, join(root, "escapeLink"));
+
+    const { spawn } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root], { discoverProjects: true }), {
+      lock: new TargetLock(),
+      spawn,
+    });
+    const res = await dispatch(listener, { method: "GET", url: "/projects" });
+    expect(res.status).toBe(200);
+    const roots = (res.json.projects as Array<{ root: string }>).map((p) => p.root);
+    expect(roots.some((r) => r.includes("secretProject"))).toBe(false);
+    expect(roots.some((r) => r.includes("escapeLink"))).toBe(false);
   });
 });
 

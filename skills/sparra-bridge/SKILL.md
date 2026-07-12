@@ -65,7 +65,8 @@ The essentials:
 ```bash
 curl -s "$SPARRA_BRIDGE_URL/health"                                   # {ok:true}
 curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" \
-  "$SPARRA_BRIDGE_URL/projects"     # {projects:[{root, phase, next}]} — one per allowlisted root
+  "$SPARRA_BRIDGE_URL/projects"
+# {projects:[{root, phase, next}]} — one per allowlisted root unless discoverProjects:true (discovery)
 ```
 
 **Trigger a phase (async → {jobId})** — `root` must be an allowlisted absolute path:

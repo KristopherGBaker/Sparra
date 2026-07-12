@@ -22,8 +22,10 @@ curl -s "$SPARRA_BRIDGE_URL/health"        # -> {"ok":true}
 curl -s $H "$SPARRA_BRIDGE_URL/projects"
 # -> {"projects":[{"root":"/abs/path","phase":"build","next":"sparra build"}, …]}
 ```
-One entry per allowlisted root. `phase` is that project's `.sparra/state.json` phase; `next` is a
-static hint string. No other state content is exposed.
+One entry per allowlisted root, UNLESS the target's `bridge.yaml` sets `discoverProjects: true` — then
+each root is walked (up to `discoverDepth`, default 3) and every Sparra project found under it (a dir
+containing `.sparra/`) is its own entry instead. `phase` is that project's `.sparra/state.json` phase;
+`next` is a static hint string. No other state content is exposed.
 
 ## POST /init — scaffold `.sparra/` (async)
 Body: `{ root, mode?, docs? }` — `mode` ∈ `greenfield|existing`; `docs` = docs subfolder.

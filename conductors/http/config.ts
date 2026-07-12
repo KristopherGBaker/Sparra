@@ -33,6 +33,15 @@ export interface BridgeConfig {
   /** Whether `GET /` serves the Sparra Bridge Console dashboard. Default `true`; an operator who
    *  wants zero unauthenticated HTTP surface beyond `/health` can set this `false` (→ 404). */
   dashboard: boolean;
+  /** Opt-in recursive Sparra-project discovery for `GET /projects`: when `true`, each allowlisted
+   *  root is WALKED (up to {@link BridgeConfig.discoverDepth}) and every project dir found (one
+   *  containing a `.sparra/`) is reported as its own entry, instead of one bare entry per root.
+   *  Default `false` — preserves today's `/projects` behavior exactly. */
+  discoverProjects?: boolean;
+  /** Max depth the discovery walk descends below an allowlisted root (root itself = depth `0`).
+   *  Only consulted when `discoverProjects` is `true`. Validated to a safe `0`–`8` range at load —
+   *  never accepted unbounded. Default `3`. */
+  discoverDepth?: number;
 }
 
 const bridgeConfigSchema = z.object({
@@ -45,6 +54,10 @@ const bridgeConfigSchema = z.object({
   auditLogPath: z.string().optional(),
   allowRemotePlan: z.boolean().default(false),
   dashboard: z.boolean().default(true),
+  discoverProjects: z.boolean().default(false),
+  // A negative, non-integer, or absurdly large depth (e.g. `1e9`) must never be accepted as an
+  // unbounded walk — reject it at load rather than silently clamping a hostile/typo'd value.
+  discoverDepth: z.number().int().min(0).max(8).default(3),
 });
 
 const DEFAULT_CONFIG_REL = join(".sparra", "bridge.yaml");
@@ -123,6 +136,8 @@ export function loadBridgeConfig(deps: LoadBridgeConfigDeps = {}): BridgeConfig 
     auditLogPath,
     allowRemotePlan: data.allowRemotePlan,
     dashboard: data.dashboard,
+    discoverProjects: data.discoverProjects,
+    discoverDepth: data.discoverDepth,
   };
   if (data.bind !== undefined) config.bind = data.bind;
   return config;

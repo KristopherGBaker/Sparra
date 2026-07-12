@@ -20,6 +20,7 @@ import type { Job } from "../jobs.ts";
 import { resolveWithinAllowlist } from "../paths.ts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../server.ts";
 import { spawnPhase, TargetLock, type SpawnFn } from "../spawn.ts";
+import { discoverAllProjects } from "./discovery.ts";
 
 /** A holdout-safe project status line for `GET /projects`. */
 export interface ProjectStatus {
@@ -241,8 +242,13 @@ export function createPhaseRoutes(deps: PhaseRouteDeps): RouteDefinition[] {
       method: "GET",
       path: "/projects",
       // READ-ONLY: no mutation, no lock, synchronous. Reports only the `phase` control field + a
-      // static hint per allowlisted root — never any holdout-bearing state content.
+      // static hint per allowlisted root (or per DISCOVERED project, when `discoverProjects` is on)
+      // — never any holdout-bearing state content.
       handler: (ctx) => {
+        if (ctx.config.discoverProjects) {
+          const projects = discoverAllProjects(ctx.config, { statusSource });
+          return { status: 200, body: { projects } };
+        }
         const projects = ctx.config.roots.map((root) => {
           const status = statusSource(root, ctx.config);
           return { root, phase: status.phase, next: status.next };

@@ -35,3 +35,17 @@ allowRemotePlan: false
 # dashboard for driving + monitoring the bridge). Default: true. Set false for zero unauthenticated
 # HTTP surface beyond GET /health — every other route already requires a token.
 dashboard: true
+
+# Optional. Opt-in recursive Sparra-project discovery for GET /projects. Default: false, which
+# preserves today's behavior exactly (one entry per allowlisted root, that root's own phase) — useful
+# when `roots` really do point at individual projects. Set true when a root is instead a PARENT
+# directory of many projects (e.g. ~/code): each root is then walked (up to discoverDepth) and every
+# directory containing a .sparra/ is reported as its own project entry. The walk stops at a found
+# project, skips common noise dirs (node_modules, .git, dist, …), NEVER follows a symlinked
+# directory, and caps results at 500. See docs/http-bridge.md for full semantics.
+discoverProjects: false
+
+# Optional. Max depth the discovery walk descends below an allowlisted root (root itself = depth 0).
+# Only consulted when discoverProjects is true. Validated to a safe 0-8 range at load — a negative,
+# non-integer, or absurd value is rejected rather than ever producing an unbounded walk. Default: 3.
+discoverDepth: 3

@@ -31,7 +31,7 @@ duplicated there.
 | --- | --- | --- |
 | `GET /` | — (unauthenticated) | `200 text/html; charset=utf-8` (the dashboard) or `404` when `dashboard: false` |
 | `GET /health` | — (unauthenticated) | `200 { ok: true }` |
-| `GET /projects` | — | `200 { projects: [{ root, phase, next }] }` — one entry per allowlisted root |
+| `GET /projects` | — | `200 { projects: [{ root, phase, next }] }` — one entry per allowlisted root, unless `discoverProjects:true` (see below) |
 | `POST /init` | `{ root, mode?, docs? }` | `202 { jobId }` |
 | `POST /freeze` | `{ root }` | `202 { jobId }` |
 | `POST /plan` | `{ root, content }` | `200 { ok: true }` (403 unless `allowRemotePlan: true`) |
@@ -64,6 +64,21 @@ naming the holder's `jobId`.
 | `auditLogPath` | no (default `~/.sparra/bridge-audit.log`) | Where the append-only request audit log is written. |
 | `allowRemotePlan` | no (default `false`) | Whether `POST /plan` is permitted at all. |
 | `dashboard` | no (default `true`) | Whether `GET /` serves the Sparra Bridge Console; `false` → `404`. |
+| `discoverProjects` | no (default `false`) | Opt-in recursive project discovery for `GET /projects` (see below). |
+| `discoverDepth` | no (default `3`) | Max depth the discovery walk descends below a root (root itself = `0`); validated to `0`–`8`. |
+
+## `GET /projects` discovery
+
+By default (`discoverProjects` unset or `false`) `GET /projects` reports exactly one entry per
+allowlisted root — that root's OWN `phase`, unchanged from before this feature existed. Set
+`discoverProjects: true` to instead WALK each allowlisted root (up to `discoverDepth` levels, root =
+depth `0`) and report every directory that contains a `.sparra/` as its own project entry
+(`{root, phase, next}`), which is useful when a root (e.g. `~/code`) is a parent of many projects
+rather than a project itself. The walk stops descending once it finds a project (a nested `.sparra/`
+below an already-found project is not a second entry), skips common noise directories
+(`node_modules`, `.git`, `.hg`, `.svn`, `dist`, `build`, `.next`, `target`, `.venv`, `venv`,
+`__pycache__`, `.cache`, `DerivedData`), NEVER follows a symlinked directory (so it can't cycle or
+escape the allowlist), and caps total results at 500 for a deterministic, sorted response.
 
 ## Safety invariants
 

@@ -21,6 +21,43 @@ describe("loadBridgeConfig", () => {
     expect(cfg.auditLogPath).toBe("/home/tester/.sparra/bridge-audit.log");
     expect(cfg.allowRemotePlan).toBe(false);
     expect(cfg.bind).toBeUndefined();
+    expect(cfg.discoverProjects).toBe(false);
+    expect(cfg.discoverDepth).toBe(3);
+  });
+
+  it("parses discoverProjects/discoverDepth from YAML", () => {
+    const cfg = withYaml(`roots:\n  - /home/tester/proj\ndiscoverProjects: true\ndiscoverDepth: 5\n`);
+    expect(cfg.discoverProjects).toBe(true);
+    expect(cfg.discoverDepth).toBe(5);
+  });
+
+  it("THROWS when discoverDepth is negative", () => {
+    expect(() => withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: -1\n`)).toThrow(
+      /discoverDepth/,
+    );
+  });
+
+  it("THROWS when discoverDepth is not an integer", () => {
+    expect(() => withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: 1.5\n`)).toThrow(
+      /discoverDepth/,
+    );
+  });
+
+  it("THROWS when discoverDepth is absurdly large (never accepted as unbounded)", () => {
+    expect(() => withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: 1e9\n`)).toThrow(
+      /discoverDepth/,
+    );
+  });
+
+  it("THROWS when discoverDepth exceeds the safe max of 8", () => {
+    expect(() => withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: 9\n`)).toThrow(
+      /discoverDepth/,
+    );
+  });
+
+  it("accepts discoverDepth at the boundary (0 and 8)", () => {
+    expect(withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: 0\n`).discoverDepth).toBe(0);
+    expect(withYaml(`roots:\n  - /home/tester/proj\ndiscoverDepth: 8\n`).discoverDepth).toBe(8);
   });
 
   it("honors overrides and expands ~ in roots and auditLogPath", () => {
