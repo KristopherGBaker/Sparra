@@ -57,3 +57,23 @@ export {
   type ServerDeps,
   type StartBridgeDeps,
 } from "./server.ts";
+
+export {
+  spawnPhase,
+  TargetLock,
+  type SpawnFn,
+  type SpawnedChild,
+  type SpawnPhaseOptions,
+  type SpawnPhaseDeps,
+} from "./spawn.ts";
+
+export { createPhaseRoutes, type PhaseRouteDeps, type ProjectStatus } from "./handlers/phases.ts";
+export {
+  createConductorRoutes,
+  projectRunUnit,
+  type ConductorRouteDeps,
+  type RunRoleFn,
+  type RunUnitFn,
+  type UnitProjection,
+} from "./handlers/conductor.ts";
+export { registerBridgeRoutes, type BridgeRouteDeps } from "./register.ts";

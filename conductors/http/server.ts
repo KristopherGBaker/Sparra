@@ -16,6 +16,7 @@ import { checkBearer, requireBridgeToken } from "./auth.ts";
 import { loadBridgeConfig, resolveBind, type BridgeConfig } from "./config.ts";
 import { JobStore } from "./jobs.ts";
 import { matchedAllowlistRoot, PathGuardError } from "./paths.ts";
+import { registerBridgeRoutes, type BridgeRouteDeps } from "./register.ts";
 
 /** Default request body cap (1 MiB) — a remote trigger payload is tiny; anything larger is refused. */
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
@@ -349,7 +350,12 @@ export interface StartBridgeDeps {
   env?: NodeJS.ProcessEnv;
   loadConfig?: () => BridgeConfig;
   audit?: (entry: AuditEntry) => void;
+  /** Explicit route table override. When omitted, the full bridge surface is built via
+   *  {@link registerBridgeRoutes} using {@link StartBridgeDeps.bridge}. */
   routes?: RouteDefinition[];
+  /** Injectable seams (spawner, core runners, status source) for the trigger endpoints — lets a test
+   *  build the running server without a real `sparra` spawn or model call. */
+  bridge?: BridgeRouteDeps;
   /** Bind seam — defaults to `server.listen(port, host)`. */
   listen?: (server: http.Server, port: number, host: string) => void;
 }
@@ -370,12 +376,17 @@ export function startBridge(deps: StartBridgeDeps = {}): http.Server {
     deps.audit ??
     ((entry: AuditEntry) => appendAudit(entry, createFileAuditSink(config.auditLogPath)));
 
+  // Trigger endpoints are added through the registration seam — NOT by editing core routing above.
+  // When a caller doesn't pass an explicit `routes` table, build the full bridge surface here so the
+  // live server exposes every phase + conductor endpoint.
+  const routes = deps.routes ?? registerBridgeRoutes(deps.bridge ?? {});
+
   const server = createServer({
     config,
     token,
     jobs,
     audit,
-    ...(deps.routes ? { routes: deps.routes } : {}),
+    routes,
   });
 
   const listen = deps.listen ?? ((s, port, host) => s.listen(port, host));
