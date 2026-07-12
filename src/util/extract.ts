@@ -79,7 +79,19 @@ export function extractJsonWhere<T = unknown>(text: string, pred: (v: any) => bo
   return null;
 }
 
-/** Does the model output contain an explicit agreement marker (on its own line)? */
+/**
+ * Does the model output contain an explicit agreement marker on its OWN line?
+ *
+ * Line-anchored, so the marker embedded in a sentence ("not CONTRACT: AGREED yet")
+ * does NOT match — but tolerant of decoration an evaluator commonly adds around an
+ * otherwise-clean marker line: leading list/quote/emphasis prefixes and trailing
+ * whitespace / terminal punctuation / emphasis. This is why "CONTRACT: AGREED." (a
+ * stray trailing period — a recurring false-negative) and "**CONTRACT: AGREED**"
+ * both count, while "CONTRACT: AGREED, pending fixes" (trailing words) still does not.
+ */
 export function hasMarker(text: string, marker: string): boolean {
-  return new RegExp(`^\\s*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m").test(text);
+  const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const lead = "[\\s>#*_`-]*"; // leading whitespace / list / quote / emphasis decoration
+  const trail = "[\\s.!?,;:*_`)\\]]*"; // trailing whitespace / punctuation / closing emphasis
+  return new RegExp("^" + lead + esc + trail + "$", "m").test(text);
 }

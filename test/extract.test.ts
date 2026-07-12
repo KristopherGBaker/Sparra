@@ -52,4 +52,23 @@ describe("hasMarker", () => {
     const text = "some preamble\nCONTRACT: AGREED\ntrailing text";
     expect(hasMarker(text, "CONTRACT: AGREED")).toBe(true);
   });
+
+  it("tolerates a stray trailing period (the recurring evaluator false-negative)", () => {
+    expect(hasMarker("CONTRACT: AGREED.", "CONTRACT: AGREED")).toBe(true);
+    expect(hasMarker("preamble\nCONTRACT: AGREED.\nmore", "CONTRACT: AGREED")).toBe(true);
+  });
+
+  it("tolerates trailing punctuation and leading/closing markdown decoration", () => {
+    expect(hasMarker("CONTRACT: AGREED!", "CONTRACT: AGREED")).toBe(true);
+    expect(hasMarker("**CONTRACT: AGREED**", "CONTRACT: AGREED")).toBe(true);
+    expect(hasMarker("- CONTRACT: AGREED", "CONTRACT: AGREED")).toBe(true);
+    expect(hasMarker("> CONTRACT: AGREED.", "CONTRACT: AGREED")).toBe(true);
+  });
+
+  it("still rejects trailing WORDS or a leading negation (no false positive on 'not agreed')", () => {
+    expect(hasMarker("CONTRACT: AGREED, pending fixes", "CONTRACT: AGREED")).toBe(false);
+    expect(hasMarker("CONTRACT: AGREED (with caveats)", "CONTRACT: AGREED")).toBe(false);
+    expect(hasMarker("not CONTRACT: AGREED", "CONTRACT: AGREED")).toBe(false);
+    expect(hasMarker("NOT CONTRACT: AGREED yet", "CONTRACT: AGREED")).toBe(false);
+  });
 });
