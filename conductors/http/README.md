@@ -7,6 +7,10 @@ opening it to the public internet. Built entirely on `conductors/core` (the same
 `runRole`/`runUnit` used by the Pi conductor); this package is just the HTTP transport + safety spine
 around it.
 
+**Driving it from an agent?** The caller side is packaged as the **`sparra-bridge` skill**
+(`skills/sparra-bridge/`) — an operational guide over every endpoint plus a `scripts/bridge.sh`
+client (auth + JSON + poll-until-done). This README is the operator/service side.
+
 ## The safety model
 
 One rule, four layers — every layer must hold for a request to do anything:
