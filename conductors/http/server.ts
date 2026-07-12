@@ -10,6 +10,8 @@
 
 import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { appendAudit, createFileAuditSink, UNMATCHED_ROUTE, type AuditEntry } from "./audit.ts";
 import { checkBearer, requireBridgeToken } from "./auth.ts";
@@ -358,16 +360,53 @@ export interface StartBridgeDeps {
   bridge?: BridgeRouteDeps;
   /** Bind seam — defaults to `server.listen(port, host)`. */
   listen?: (server: http.Server, port: number, host: string) => void;
+  /** Raw CLI argv (e.g. `process.argv.slice(2)`) — honors `--config <path>` / `--port <n>` as
+   *  overrides on top of the env-derived config; unknown flags are ignored gracefully. Env
+   *  (`$SPARRA_BRIDGE_CONFIG` → `bridge.yaml`) remains the primary config source. */
+  argv?: string[];
+}
+
+/** Parsed `--config`/`--port` CLI overrides. Unrecognized flags are silently ignored — this is a
+ *  convenience layer over the env-driven config, not a full CLI parser. */
+export interface ArgvOverrides {
+  config?: string;
+  port?: number;
 }
 
 /**
- * Real entry point: assemble deps from env/config, FAIL CLOSED on an empty token, resolve a
- * non-wildcard bind, and listen. `createServer` stays the pure tested unit; this wires the world to
- * it.
+ * Extract `--config <path>` / `--port <n>` from a raw argv array. A `--port` that doesn't parse as
+ * a finite number is ignored (env/`bridge.yaml`'s `port` still applies). PURE — no disk/env/socket
+ * access — exported so its parsing logic is directly unit-testable without going through
+ * `startBridge` (which does real config-loading + bind-resolution side effects).
+ */
+export function parseArgvOverrides(argv: string[]): ArgvOverrides {
+  const overrides: ArgvOverrides = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--config" && argv[i + 1] !== undefined) {
+      overrides.config = argv[i + 1];
+      i++;
+    } else if (argv[i] === "--port" && argv[i + 1] !== undefined) {
+      const port = Number(argv[i + 1]);
+      if (Number.isFinite(port)) overrides.port = port;
+      i++;
+    }
+  }
+  return overrides;
+}
+
+/**
+ * Real entry point: assemble deps from env/config (+ optional CLI overrides), FAIL CLOSED on an
+ * empty token, resolve a non-wildcard bind, and listen. `createServer` stays the pure tested unit;
+ * this wires the world to it.
  */
 export function startBridge(deps: StartBridgeDeps = {}): http.Server {
-  const env = deps.env ?? process.env;
+  const { config: configOverride, port: portOverride } = parseArgvOverrides(deps.argv ?? []);
+  const env =
+    configOverride !== undefined
+      ? { ...(deps.env ?? process.env), SPARRA_BRIDGE_CONFIG: configOverride }
+      : (deps.env ?? process.env);
   const config = deps.loadConfig ? deps.loadConfig() : loadBridgeConfig({ env });
+  if (portOverride !== undefined) config.port = portOverride;
   // Fail-closed: throws on unset/empty SPARRA_BRIDGE_TOKEN before anything binds.
   const token = requireBridgeToken(env);
   const bindAddr = resolveBind(config, { env });
@@ -392,4 +431,20 @@ export function startBridge(deps: StartBridgeDeps = {}): http.Server {
   const listen = deps.listen ?? ((s, port, host) => s.listen(port, host));
   listen(server, config.port, bindAddr);
   return server;
+}
+
+/**
+ * CLI entry point: runs ONLY when this file is invoked as the entry script (via the `sparra-bridge`
+ * bin, which shells out to tsx) — never on a plain `import`, so every test in this directory that
+ * imports `server.ts` never binds a socket. Mirrors `src/mcp/runRoleServer.ts`'s `isEntry` guard.
+ */
+const isEntry =
+  !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isEntry) {
+  try {
+    startBridge({ argv: process.argv.slice(2) });
+  } catch (e) {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
 }

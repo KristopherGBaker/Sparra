@@ -1,0 +1,32 @@
+# Sample config for the Sparra HTTP bridge (conductors/http). Copy to ~/.sparra/bridge.yaml (or
+# point $SPARRA_BRIDGE_CONFIG at a copy elsewhere) and edit the placeholders below — every path here
+# is a FAKE example, not a real machine's layout. See conductors/http/README.md for full setup.
+
+# REQUIRED. Allowlist of absolute project roots the bridge is permitted to touch. Every request-
+# supplied `root`/`workspace` (and every path field it implies) must resolve INSIDE one of these —
+# anything else is refused before any spawn/read/write. At least one entry is required; the bridge
+# refuses to start with an empty or missing list.
+roots:
+  - /Users/example/code/my-app
+  - /Users/example/code/another-project
+
+# Optional. TCP port to listen on. Default: 8787.
+port: 8787
+
+# Optional. Explicit bind address override. Still refused if it resolves to a wildcard
+# (0.0.0.0 / ::) — the bridge is Tailscale-only by design. Leave unset to auto-resolve this host's
+# Tailscale IPv4 (falls back to 127.0.0.1 when Tailscale isn't running). Override per-run with
+# $SPARRA_BRIDGE_BIND instead of editing this file.
+# bind: 100.64.1.23
+
+# Optional. Max jobs kept in the in-memory job store (oldest evicted first). Default: 50.
+lastNJobs: 50
+
+# Optional. Where the append-only request audit log is written (route template + result + matched
+# root only — never the raw request path or any file content). Default: ~/.sparra/bridge-audit.log.
+auditLogPath: ~/.sparra/bridge-audit.log
+
+# Optional. Whether the remote `/plan` endpoint is allowed to write PLAN.md at all. Off by default —
+# `/plan` is a human-freeze-gated write, so a remote agent can only propose plan content once an
+# operator explicitly opts a target machine in.
+allowRemotePlan: false

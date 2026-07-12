@@ -9,6 +9,7 @@ import { PathGuardError } from "./paths.ts";
 import {
   createRequestListener,
   createServer,
+  parseArgvOverrides,
   startBridge,
   type RouteDefinition,
   type ServerDeps,
@@ -499,5 +500,126 @@ describe("startBridge — fail-closed + bind", () => {
       }),
     ).toThrow(/wildcard/);
     expect(listen).not.toHaveBeenCalled();
+  });
+
+  // U3 fix round: `argv` (as forwarded by the tiny `bin/sparra-bridge.mjs` launcher) honors
+  // `--config <path>` / `--port <n>` as convenience overrides on top of the env-derived config.
+  // Every test below injects `bind` (never the tailscale-probing default) and an in-memory `audit`
+  // sink (never `appendAudit`'s real-file default) — no test here may touch a real socket or write
+  // under `~/.sparra`.
+  it("--port argv override wins over the loaded config's port", () => {
+    const listen = vi.fn();
+    startBridge({
+      env: { SPARRA_BRIDGE_TOKEN: TOKEN },
+      loadConfig: () => baseConfig({ port: 8080, bind: "127.0.0.1" }),
+      audit: () => {},
+      argv: ["--port", "9999"],
+      listen,
+    });
+    expect(listen).toHaveBeenCalledOnce();
+    const [, port] = listen.mock.calls[0]!;
+    expect(port).toBe(9999);
+  });
+
+  it("--config argv override selects the NAMED bridge.yaml over $SPARRA_BRIDGE_CONFIG", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-bridge-argv-config-"));
+    try {
+      const defaultPath = path.join(dir, "default.yaml");
+      const overridePath = path.join(dir, "override.yaml");
+      // Both temp configs set `bind`/`auditLogPath` explicitly too, so even loading the WRONG one
+      // (were the override to fail) could never reach a real socket or `~/.sparra` write.
+      fs.writeFileSync(
+        defaultPath,
+        `roots:\n  - /tmp/default-root\nbind: 127.0.0.1\nauditLogPath: ${path.join(dir, "default-audit.log")}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        overridePath,
+        `roots:\n  - /tmp/override-root\nbind: 127.0.0.1\nauditLogPath: ${path.join(dir, "override-audit.log")}\n`,
+        "utf8",
+      );
+
+      const listen = vi.fn();
+      const auditLines: unknown[] = [];
+      // No `loadConfig` injected — this exercises the REAL `loadBridgeConfig` (reads the real fs),
+      // proving the argv override actually changes which file is read, not just a fake seam. `audit`
+      // IS injected (in-memory only) so the request dispatched below never hits a real file sink.
+      const server = startBridge({
+        env: { SPARRA_BRIDGE_TOKEN: TOKEN, SPARRA_BRIDGE_CONFIG: defaultPath },
+        argv: ["--config", overridePath],
+        audit: (entry) => auditLines.push(entry),
+        listen,
+      });
+      expect(listen).toHaveBeenCalledOnce();
+
+      // Dispatch a real GET /projects through the returned server (no socket — `server.emit` drives
+      // the same 'request' listener `http.createServer` would) to prove the OVERRIDE root (not the
+      // env-named default) is what the running bridge actually loaded.
+      const res = await dispatch((req, resp) => server.emit("request", req, resp), {
+        url: "/projects",
+        headers: authHeaders(),
+      });
+      expect(res.status).toBe(200);
+      expect(res.json.projects).toEqual([{ root: "/tmp/override-root", phase: "uninitialized", next: "sparra init" }]);
+      // The request's audit line landed in the injected in-memory sink, never a real file.
+      expect(auditLines).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a malformed/unknown --port is ignored gracefully (env/config port still applies)", () => {
+    const listen = vi.fn();
+    startBridge({
+      env: { SPARRA_BRIDGE_TOKEN: TOKEN },
+      loadConfig: () => baseConfig({ port: 8787, bind: "127.0.0.1" }),
+      audit: () => {},
+      argv: ["--port", "not-a-number", "--unknown-flag", "value"],
+      listen,
+    });
+    expect(listen).toHaveBeenCalledOnce();
+    const [, port] = listen.mock.calls[0]!;
+    expect(port).toBe(8787);
+  });
+});
+
+// PURE unit coverage for the argv-parsing logic itself — no `startBridge`, no config loading, no
+// disk/socket I/O of any kind. This is the primary, hermetic proof that `--config`/`--port` parsing
+// (and graceful ignoring of malformed/unknown flags) behaves correctly; the `startBridge`-level tests
+// above additionally prove it's actually WIRED IN (env/loadConfig/port precedence), fully sandboxed.
+describe("parseArgvOverrides — pure argv parsing (no I/O)", () => {
+  it("parses both --config and --port", () => {
+    expect(parseArgvOverrides(["--config", "/tmp/x.yaml", "--port", "9191"])).toEqual({
+      config: "/tmp/x.yaml",
+      port: 9191,
+    });
+  });
+
+  it("parses --config alone", () => {
+    expect(parseArgvOverrides(["--config", "/tmp/x.yaml"])).toEqual({ config: "/tmp/x.yaml" });
+  });
+
+  it("parses --port alone", () => {
+    expect(parseArgvOverrides(["--port", "1234"])).toEqual({ port: 1234 });
+  });
+
+  it("ignores a non-numeric --port value (config/env port still applies)", () => {
+    expect(parseArgvOverrides(["--port", "not-a-number"])).toEqual({});
+  });
+
+  it("ignores unknown flags entirely", () => {
+    expect(parseArgvOverrides(["--unknown-flag", "value", "--another"])).toEqual({});
+  });
+
+  it("ignores a flag missing its value (end of argv)", () => {
+    expect(parseArgvOverrides(["--config"])).toEqual({});
+    expect(parseArgvOverrides(["--port"])).toEqual({});
+  });
+
+  it("returns {} for empty argv", () => {
+    expect(parseArgvOverrides([])).toEqual({});
   });
 });

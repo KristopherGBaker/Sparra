@@ -15,7 +15,8 @@
   },
   "bin": {
     "sparra": "./bin/sparra.mjs",
-    "sparra-run-mcp": "./bin/sparra-run-mcp.mjs"
+    "sparra-run-mcp": "./bin/sparra-run-mcp.mjs",
+    "sparra-bridge": "./bin/sparra-bridge.mjs"
   },
   "scripts": {
     "sparra": "tsx src/cli.ts",

@@ -95,6 +95,14 @@ Then, three ways to use it inside Pi:
 - **One role:** call the `sparra_role` tool directly for a single role-run / a cross-model second
   opinion.
 
+## `conductors/http` — the HTTP bridge (remote conductor host)
+
+An HTTP transport for the same `conductors/core`: a `node:http` service (Tailscale-only bind, Bearer
+token, path allowlist, holdout wall preserved over `/role`/`/unit`) so a remote agent can trigger
+`sparra` phases and role-runs on a machine it has no shell on. See
+[`conductors/http/README.md`](http/README.md) (setup/curl examples) and
+[`docs/http-bridge.md`](../docs/http-bridge.md) (endpoint table, job model, mutation lock).
+
 ## Status
 
 `conductors/core` and `conductors/pi` are built and tested (`npm run typecheck` + `npx vitest run
