@@ -1,0 +1,1262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparra Bridge Console</title>
+<style>
+  :root {
+    color-scheme: dark;
+    /* ---- dark (default) ---- */
+    --bg: #0a0e13;
+    --bg-grain: #0c1118;
+    --panel: #10151d;
+    --panel-2: #141b25;
+    --panel-hi: #18202c;
+    --line: #202a38;
+    --line-soft: #19212d;
+    --tick: #2b3a4d;
+    --txt: #dbe4ef;
+    --txt-2: #93a1b4;
+    --txt-3: #5c6b7e;
+    --txt-faint: #3d4a5b;
+    --brand: #35d6e0;      /* phosphor cyan — brand chrome only */
+    --brand-dim: #1b8790;
+    --brand-glow: rgba(53,214,224,.16);
+    --run: #f6a944;        /* running / amber */
+    --run-glow: rgba(246,169,68,.14);
+    --pass: #57d979;       /* passed / green */
+    --pass-glow: rgba(87,217,121,.13);
+    --fail: #ff5f57;       /* failed / coral */
+    --fail-glow: rgba(255,95,87,.13);
+    --cancel: #6e7c90;     /* canceled / slate */
+    --warn: #f6c453;
+    --radius: 7px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #eef1f5;
+    --bg-grain: #e9edf2;
+    --panel: #ffffff;
+    --panel-2: #f6f8fa;
+    --panel-hi: #eef2f6;
+    --line: #d6dde6;
+    --line-soft: #e3e8ee;
+    --tick: #b7c2d0;
+    --txt: #131a23;
+    --txt-2: #4d5a6b;
+    --txt-3: #74839a;
+    --txt-faint: #9aa7b7;
+    --brand: #0b8f99;
+    --brand-dim: #0b8f99;
+    --brand-glow: rgba(11,143,153,.12);
+    --run: #c77a12;
+    --run-glow: rgba(199,122,18,.12);
+    --pass: #1f9d4d;
+    --pass-glow: rgba(31,157,77,.12);
+    --fail: #d63a34;
+    --fail-glow: rgba(214,58,52,.10);
+    --cancel: #7a889b;
+    --warn: #b5820e;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--txt);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    background-image:
+      radial-gradient(1200px 600px at 82% -8%, var(--brand-glow), transparent 60%),
+      linear-gradient(0deg, var(--bg-grain), var(--bg));
+  }
+  /* faint scanline / grid atmosphere */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px);
+    mix-blend-mode: screen;
+    opacity: .5;
+    z-index: 9998;
+  }
+  :root[data-theme="light"] body::before { display: none; }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .kicker {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--txt-3);
+  }
+
+  /* ---------- app shell ---------- */
+  .app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---------- instrument header ---------- */
+  header.bar {
+    display: flex; align-items: center; gap: 20px;
+    padding: 0 16px; height: 52px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    position: relative; z-index: 20;
+  }
+  header.bar::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--brand-dim), transparent);
+    opacity: .5;
+  }
+  .brand-mark { display: flex; align-items: center; gap: 11px; }
+  .glyph {
+    width: 26px; height: 26px; flex: none;
+    border: 1px solid var(--brand-dim);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    background: radial-gradient(circle at 50% 35%, var(--brand-glow), transparent 70%);
+    box-shadow: inset 0 0 12px var(--brand-glow);
+  }
+  .glyph svg { width: 15px; height: 15px; }
+  .wordmark { line-height: 1; }
+  .wordmark .name {
+    font-family: var(--mono); font-weight: 700; letter-spacing: .12em;
+    font-size: 14px; color: var(--txt);
+  }
+  .wordmark .name b { color: var(--brand); font-weight: 700; }
+  .wordmark .sub {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .26em;
+    color: var(--txt-3); text-transform: uppercase; margin-top: 3px;
+  }
+
+  .bar-spacer { flex: 1; }
+
+  .health {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 11px;
+    padding: 5px 11px 5px 9px;
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: var(--panel-2);
+  }
+  .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--pass);
+    box-shadow: 0 0 0 3px var(--pass-glow), 0 0 8px var(--pass);
+    position: relative;
+  }
+  .led::after {
+    content: ""; position: absolute; inset: -3px; border-radius: 50%;
+    border: 1px solid var(--pass); opacity: .5;
+    animation: pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse { 0% { transform: scale(1); opacity:.6 } 100% { transform: scale(2.4); opacity: 0 } }
+  .health .lat { color: var(--txt-3); }
+  .health .iface { color: var(--txt-2); }
+  .health .iface b { color: var(--brand); font-weight: 600; }
+
+  .auth-chip {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px;
+    padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    cursor: pointer; color: var(--txt-2);
+  }
+  .auth-chip:hover { border-color: var(--tick); color: var(--txt); }
+  .auth-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pass); box-shadow: 0 0 6px var(--pass); }
+  .auth-chip.warn { border-color: var(--fail); color: var(--fail); }
+  .auth-chip.warn .dot { background: var(--fail); box-shadow: 0 0 6px var(--fail); }
+
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--txt-2); cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .icon-btn:hover { color: var(--brand); border-color: var(--tick); }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  /* ---------- main grid ---------- */
+  .grid {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: 320px 340px 1fr;
+    gap: 0;
+  }
+  .col { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .col.rail { border-right: 1px solid var(--line); }
+  .col.feed { border-right: 1px solid var(--line); }
+
+  .col-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 15px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    flex: none;
+  }
+  .col-head h2 {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--txt-2); font-weight: 600;
+  }
+  .col-head .count {
+    font-family: var(--mono); font-size: 10px; color: var(--txt-3);
+    border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px;
+  }
+  .col-head .spacer { flex: 1; }
+  .col-scroll { overflow-y: auto; flex: 1; padding: 10px; }
+  .col-scroll::-webkit-scrollbar { width: 9px; }
+  .col-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  .col-scroll::-webkit-scrollbar-thumb:hover { background: var(--tick); }
+
+  /* ---------- panel w/ corner ticks ---------- */
+  .panel {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .panel.tick::before, .panel.tick::after {
+    content: ""; position: absolute; width: 7px; height: 7px; pointer-events: none;
+  }
+  .panel.tick::before { top: -1px; left: -1px; border-top: 1px solid var(--tick); border-left: 1px solid var(--tick); border-top-left-radius: var(--radius); }
+  .panel.tick::after  { bottom: -1px; right: -1px; border-bottom: 1px solid var(--tick); border-right: 1px solid var(--tick); border-bottom-right-radius: var(--radius); }
+
+  /* ---------- target cards ---------- */
+  .target {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 12px 13px 13px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, transform .1s;
+    animation: rise .5s cubic-bezier(.2,.8,.2,1) backwards;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .target:hover { border-color: var(--tick); background: var(--panel-2); }
+  .target.sel { border-color: var(--brand-dim); background: var(--panel-2); box-shadow: 0 0 0 1px var(--brand-dim), 0 8px 24px -14px var(--brand); }
+  .target.sel::before {
+    content: ""; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 2px;
+    background: var(--brand); border-radius: 2px; box-shadow: 0 0 8px var(--brand);
+  }
+  .target .t-top { display: flex; align-items: baseline; gap: 8px; }
+  .target .t-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--txt); }
+  .target .t-path { font-family: var(--mono); font-size: 10px; color: var(--txt-3); margin-top: 3px; word-break: break-all; }
+  .target .t-mid { display: flex; align-items: center; gap: 8px; margin: 11px 0 4px; }
+
+  .phase {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line);
+    color: var(--txt-2); background: var(--panel-hi);
+  }
+  .phase.plan   { color: #8fb8ff; border-color: rgba(143,184,255,.35); }
+  .phase.frozen { color: var(--warn); border-color: rgba(246,196,83,.35); }
+  .phase.build  { color: var(--run);  border-color: rgba(246,169,68,.4); }
+  .phase.reflect{ color: var(--brand); border-color: var(--brand-dim); }
+
+  .lock {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--txt-3);
+  }
+  .lock.busy { color: var(--run); }
+  .lock .lk { width: 6px; height: 6px; border-radius: 50%; background: var(--txt-faint); }
+  .lock.busy .lk { background: var(--run); box-shadow: 0 0 6px var(--run); animation: blink 1.1s steps(2,jump-none) infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+
+  .next {
+    font-family: var(--mono); font-size: 10.5px; color: var(--txt-2);
+    background: var(--panel-hi); border: 1px dashed var(--line);
+    border-radius: 5px; padding: 6px 8px; margin-top: 8px;
+  }
+  .next .arrow { color: var(--brand); }
+
+  /* quick actions (revealed on selected) */
+  .actions { margin-top: 11px; display: none; }
+  .target.sel .actions { display: block; animation: rise .3s backwards; }
+  .act-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .act-row:first-child { margin-top: 0; }
+  .act-row .btn { flex: 1 1 30%; min-width: 64px; }
+  .role-row { align-items: stretch; }
+  .role-kind-select {
+    flex: 1 1 55%; min-width: 0; min-height: 44px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    padding: 7px 8px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--txt);
+  }
+  .role-row .btn { flex: 1 1 40%; }
+  .btn {
+    flex: 1; font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    padding: 7px 6px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel-hi); color: var(--txt);
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+    transition: border-color .12s, background .12s, color .12s;
+  }
+  .btn:hover { border-color: var(--brand-dim); color: var(--brand); }
+  .btn svg { width: 12px; height: 12px; }
+  .btn.primary { background: var(--brand-glow); border-color: var(--brand-dim); color: var(--brand); }
+  .btn.primary:hover { background: rgba(53,214,224,.22); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; border-color: var(--line); color: var(--txt-3); }
+  .btn.ghost { flex: none; padding: 7px 9px; color: var(--txt-3); }
+  .btn.ghost:hover { color: var(--fail); border-color: var(--fail); }
+
+  .controls { display: flex; gap: 8px; margin-top: 8px; }
+  .ctrl { flex: 1; }
+  .ctrl label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--txt-3); display: block; margin-bottom: 4px;
+  }
+  .ctrl .stepper {
+    display: flex; align-items: center; border: 1px solid var(--line);
+    border-radius: 5px; background: var(--bg); overflow: hidden;
+  }
+  .ctrl .stepper button {
+    width: 24px; height: 26px; border: none; background: transparent; color: var(--txt-2);
+    cursor: pointer; font-family: var(--mono); font-size: 14px;
+  }
+  .ctrl .stepper button:hover { color: var(--brand); background: var(--panel-hi); }
+  .ctrl .stepper input {
+    flex: 1; width: 100%; border: none; background: transparent; color: var(--txt);
+    font-family: var(--mono); font-size: 12px; text-align: center; -moz-appearance: textfield;
+  }
+  .ctrl .stepper input::-webkit-outer-spin-button,
+  .ctrl .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+  .toggle-fresh {
+    display: flex; align-items: center; gap: 7px; margin-top: 9px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--txt-2); cursor: pointer;
+  }
+  .switch { width: 30px; height: 16px; border-radius: 9px; background: var(--line); position: relative; transition: background .15s; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--txt-3); transition: .15s; }
+  .toggle-fresh.on .switch { background: var(--brand-dim); }
+  .toggle-fresh.on .switch::after { left: 16px; background: var(--brand); }
+
+  /* 409 toast */
+  .toast-wrap { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 11.5px;
+    padding: 10px 14px; border-radius: 6px;
+    background: var(--panel-hi); border: 1px solid var(--fail);
+    color: var(--txt); box-shadow: 0 12px 32px -12px rgba(0,0,0,.7);
+    animation: toastIn .3s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } }
+  .toast .code { color: var(--fail); font-weight: 700; }
+
+  /* ---------- jobs feed ---------- */
+  .job {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+    padding: 10px 11px; border-radius: var(--radius);
+    border: 1px solid transparent; cursor: pointer; margin-bottom: 6px;
+    transition: background .12s, border-color .12s;
+  }
+  .job:hover { background: var(--panel-2); border-color: var(--line); }
+  .job.sel { background: var(--panel-2); border-color: var(--tick); }
+  .st {
+    width: 9px; height: 9px; border-radius: 50%; flex: none; position: relative;
+  }
+  .st.running { background: var(--run); box-shadow: 0 0 0 3px var(--run-glow); }
+  .st.running::after { content:""; position:absolute; inset:-3px; border-radius:50%; border:1px solid var(--run); animation: pulse 1.8s ease-out infinite; }
+  .st.succeeded { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-glow); }
+  .st.failed { background: var(--fail); box-shadow: 0 0 0 3px var(--fail-glow); }
+  .st.canceled { background: var(--cancel); box-shadow: 0 0 0 3px rgba(110,124,144,.14); }
+  .job .j-main { min-width: 0; }
+  .job .j-line1 { display: flex; align-items: baseline; gap: 8px; }
+  .job .j-phase { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--txt); text-transform: capitalize; }
+  .job .j-id { font-family: var(--mono); font-size: 10px; color: var(--txt-faint); }
+  .job .j-line2 { font-family: var(--mono); font-size: 10px; color: var(--txt-3); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job .j-right { text-align: right; font-family: var(--mono); font-size: 10px; color: var(--txt-3); }
+  .job .j-badge {
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase; padding: 2px 6px; border-radius: 3px;
+    border: 1px solid var(--line);
+  }
+  .badge-running  { color: var(--run); border-color: rgba(246,169,68,.4); }
+  .badge-succeeded{ color: var(--pass); border-color: rgba(87,217,121,.4); }
+  .badge-failed   { color: var(--fail); border-color: rgba(255,95,87,.4); }
+  .badge-canceled { color: var(--cancel); border-color: var(--line); }
+
+  /* ---------- detail stage ---------- */
+  .stage { flex: 1; overflow-y: auto; padding: 16px; }
+  .stage::-webkit-scrollbar { width: 10px; }
+  .stage::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+
+  .detail-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+  .detail-head .dh-l { flex: 1; min-width: 0; }
+  .detail-head .dh-title { display: flex; align-items: center; gap: 10px; }
+  .detail-head h1 { font-family: var(--mono); font-size: 17px; font-weight: 700; letter-spacing: .01em; text-transform: capitalize; }
+  .detail-head .dh-meta { font-family: var(--mono); font-size: 11px; color: var(--txt-3); margin-top: 5px; }
+  .detail-head .dh-meta b { color: var(--txt-2); font-weight: 500; }
+
+  .status-tag {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 5px; border: 1px solid var(--line); font-weight: 600;
+  }
+  .status-tag.running  { color: var(--run); border-color: rgba(246,169,68,.4); background: var(--run-glow); }
+  .status-tag.succeeded{ color: var(--pass); border-color: rgba(87,217,121,.4); background: var(--pass-glow); }
+  .status-tag.failed   { color: var(--fail); border-color: rgba(255,95,87,.4); background: var(--fail-glow); }
+
+  /* metrics strip */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .metric {
+    position: relative; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); padding: 11px 12px;
+  }
+  .metric .m-k { font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--txt-3); }
+  .metric .m-v { font-family: var(--mono); font-size: 19px; font-weight: 700; color: var(--txt); margin-top: 6px; letter-spacing: -.01em; }
+  .metric .m-v small { font-size: 11px; font-weight: 400; color: var(--txt-3); margin-left: 2px; }
+  .metric .m-sub { font-family: var(--mono); font-size: 9.5px; color: var(--txt-faint); margin-top: 2px; }
+
+  /* holdout notice */
+  .holdout-note {
+    display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--txt-2);
+    border: 1px solid var(--line); border-left: 2px solid var(--brand-dim);
+    border-radius: 5px; padding: 8px 11px; margin-bottom: 12px;
+    background: linear-gradient(90deg, var(--brand-glow), transparent 40%);
+  }
+  .holdout-note svg { width: 13px; height: 13px; color: var(--brand); flex: none; }
+  .holdout-note b { color: var(--txt); font-weight: 600; }
+
+  /* log terminal */
+  .term-head { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+  .term-head .kicker { flex: 1; }
+  .term-head .live { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--run); }
+  .term-head .live .lk { width: 6px; height: 6px; border-radius: 50%; background: var(--run); box-shadow: 0 0 6px var(--run); animation: blink 1.1s steps(2,jump-none) infinite; }
+  .terminal {
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .term-body {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
+    padding: 12px 14px; max-height: 320px; overflow-y: auto;
+    background-image: linear-gradient(var(--panel) 0 0);
+  }
+  .term-body::-webkit-scrollbar { width: 9px; }
+  .term-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  .logline { display: flex; gap: 12px; white-space: pre-wrap; word-break: break-word; animation: fadeLine .25s; }
+  @keyframes fadeLine { from { opacity: 0; } }
+  .logline .ts { color: var(--txt-faint); flex: none; }
+  .logline .lv { flex: none; width: 44px; }
+  .logline .msg { color: var(--txt-2); flex: 1; }
+  .lv.info { color: var(--brand); }
+  .lv.ok   { color: var(--pass); }
+  .lv.warn { color: var(--warn); }
+  .lv.step { color: var(--txt-3); }
+  .logline .msg b { color: var(--txt); font-weight: 600; }
+  .caret { display: inline-block; width: 8px; height: 14px; background: var(--brand); vertical-align: text-bottom; animation: blink 1s steps(2,jump-none) infinite; }
+
+  /* unit summary readout */
+  .readout { display: grid; grid-template-columns: 220px 1fr; gap: 14px; }
+  .verdict-card {
+    position: relative; border: 1px solid var(--line); border-radius: var(--radius);
+    background: radial-gradient(circle at 50% 0%, var(--panel-2), var(--panel));
+    padding: 18px 16px; text-align: center; overflow: hidden;
+  }
+  .verdict-card.pass { border-color: rgba(87,217,121,.4); box-shadow: inset 0 0 40px -20px var(--pass); }
+  .verdict-card.fail { border-color: rgba(255,95,87,.4); box-shadow: inset 0 0 40px -20px var(--fail); }
+  .verdict-card .vk { font-family: var(--mono); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--txt-3); }
+  .verdict-card .vv { font-family: var(--mono); font-size: 40px; font-weight: 800; letter-spacing: .04em; margin: 4px 0 2px; line-height: 1; }
+  .verdict-card.pass .vv { color: var(--pass); text-shadow: 0 0 24px var(--pass-glow); }
+  .verdict-card.fail .vv { color: var(--fail); text-shadow: 0 0 24px var(--fail-glow); }
+
+  /* score gauge */
+  .gauge { margin: 16px auto 6px; width: 132px; }
+  .gauge svg { display: block; margin: 0 auto; }
+  .gauge .score { font-family: var(--mono); font-size: 26px; font-weight: 800; fill: var(--txt); }
+  .gauge .score-max { font-family: var(--mono); font-size: 11px; fill: var(--txt-3); }
+  .gauge-label { font-family: var(--mono); font-size: 9.5px; color: var(--txt-3); letter-spacing: .08em; }
+  .gauge-label b.pass { color: var(--pass); } .gauge-label b.fail { color: var(--fail); }
+
+  .readout-right { display: flex; flex-direction: column; gap: 12px; }
+  .ro-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .ro-panel h3 {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--txt-2); padding: 10px 13px; border-bottom: 1px solid var(--line-soft); font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .ro-panel h3 .n { margin-left: auto; color: var(--txt-3); font-weight: 400; }
+  .blockers { padding: 6px; }
+  .blocker { display: flex; gap: 10px; padding: 9px 9px; border-radius: 5px; align-items: flex-start; }
+  .blocker:hover { background: var(--panel-2); }
+  .blocker .sev {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 3px; flex: none; margin-top: 1px; font-weight: 600;
+  }
+  .sev.block { color: var(--fail); border: 1px solid rgba(255,95,87,.4); background: var(--fail-glow); }
+  .sev.major { color: var(--warn); border: 1px solid rgba(246,196,83,.4); }
+  .blocker .b-txt { font-size: 12px; color: var(--txt); }
+  .blocker .b-sub { font-family: var(--mono); font-size: 10px; color: var(--txt-3); margin-top: 3px; }
+
+  .gate {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line);
+    border-radius: 0 0 var(--radius) var(--radius); overflow: hidden;
+  }
+  .gate .g-cell { background: var(--panel); padding: 11px 13px; }
+  .gate .g-k { font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--txt-3); }
+  .gate .g-v { font-family: var(--mono); font-size: 13px; color: var(--txt); margin-top: 5px; display: flex; align-items: center; gap: 7px; }
+  .gate .g-v .chk { width: 14px; height: 14px; flex: none; }
+  .chk.good { color: var(--pass); } .chk.bad { color: var(--fail); }
+
+  .cross-gate {
+    display: flex; align-items: center; gap: 10px; margin-top: 12px;
+    font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px;
+    background: var(--panel);
+  }
+  .cross-gate .cg-icon { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; flex: none; }
+  .cross-gate.held .cg-icon { color: var(--pass); background: var(--pass-glow); border: 1px solid rgba(87,217,121,.4); }
+  .cross-gate .cg-txt b { color: var(--txt); } .cross-gate .cg-txt { color: var(--txt-2); }
+  .cross-gate .cg-tag { margin-left: auto; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--pass); }
+
+  /* empty state */
+  .empty { height: 100%; display: grid; place-items: center; text-align: center; color: var(--txt-3); }
+  .empty .e-glyph { width: 54px; height: 54px; margin: 0 auto 16px; opacity: .35; }
+  .empty h3 { font-family: var(--mono); font-size: 13px; color: var(--txt-2); margin-bottom: 6px; letter-spacing: .04em; }
+  .empty p { font-size: 12px; max-width: 260px; margin: 0 auto; }
+
+  /* ---------- modal (token) ---------- */
+  .overlay { position: fixed; inset: 0; background: rgba(4,7,11,.72); backdrop-filter: blur(3px); z-index: 100; display: none; place-items: center; }
+  .overlay.show { display: grid; animation: fadeLine .2s; }
+  .modal {
+    width: 420px; max-width: calc(100vw - 40px);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px; box-shadow: 0 30px 80px -24px rgba(0,0,0,.8);
+    position: relative;
+  }
+  .modal .m-glyph { width: 34px; height: 34px; border: 1px solid var(--brand-dim); border-radius: 8px; display: grid; place-items: center; margin-bottom: 14px; box-shadow: inset 0 0 16px var(--brand-glow); }
+  .modal .m-glyph svg { width: 18px; height: 18px; color: var(--brand); }
+  .modal h2 { font-family: var(--mono); font-size: 15px; letter-spacing: .04em; margin-bottom: 6px; }
+  .modal p { font-size: 12px; color: var(--txt-2); margin-bottom: 16px; line-height: 1.5; }
+  .modal.auth-fail { border-color: var(--fail); }
+  .fail-banner {
+    display: none; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px; color: var(--fail);
+    border: 1px solid var(--fail); border-radius: 5px; padding: 8px 11px; margin-bottom: 14px;
+    background: var(--fail-glow);
+  }
+  .modal.auth-fail .fail-banner { display: flex; }
+  .field label { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--txt-3); display: block; margin-bottom: 7px; }
+  .field .input-wrap { display: flex; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); overflow: hidden; }
+  .field .input-wrap:focus-within { border-color: var(--brand-dim); box-shadow: 0 0 0 3px var(--brand-glow); }
+  .field .prefix { font-family: var(--mono); font-size: 12px; color: var(--txt-3); padding: 10px 0 10px 12px; }
+  .field input {
+    flex: 1; border: none; background: transparent; color: var(--txt);
+    font-family: var(--mono); font-size: 12px; padding: 10px 12px; letter-spacing: .04em;
+  }
+  .field input:focus { outline: none; }
+  .modal .m-actions { display: flex; gap: 9px; margin-top: 18px; }
+  .modal .m-actions .btn { padding: 10px; font-size: 12px; }
+  .modal .hint { font-family: var(--mono); font-size: 10px; color: var(--txt-faint); margin-top: 12px; display: flex; align-items: center; gap: 6px; }
+  .modal .hint svg { width: 12px; height: 12px; }
+
+  /* responsive */
+  @media (max-width: 1180px) {
+    .grid { grid-template-columns: 300px 1fr; }
+    .col.feed { grid-row: 2; grid-column: 1 / -1; border-right: none; border-top: 1px solid var(--line); max-height: 40vh; }
+  }
+  @media (max-width: 820px) {
+    body { overflow: auto; }
+    .grid { display: block; }
+    .col { border-right: none !important; border-bottom: 1px solid var(--line); }
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+    .readout { grid-template-columns: 1fr; }
+    .health .iface { display: none; }
+    /* The instrument header is a fixed-height, non-wrapping flex row in the desktop layout — at
+     * narrow widths its items (brand + health + auth-chip + theme toggle) overflow the viewport
+     * horizontally instead of stacking. Let it wrap: the brand mark keeps its own line (the
+     * `.bar-spacer` forced to `flex-basis: 100%` breaks the line right after it), and the
+     * status/auth/theme cluster wraps onto the next one, so the header never pushes the page wider
+     * than the viewport. */
+    header.bar { flex-wrap: wrap; height: auto; min-height: 52px; padding: 10px 12px; row-gap: 8px; }
+    .bar-spacer { flex-basis: 100%; height: 0; }
+    .wordmark .sub { display: none; }
+    /* touch targets: comfortably tappable (~44px) once panels stack single-column. */
+    .btn, .icon-btn, .auth-chip { min-height: 44px; }
+    .stepper button { width: 36px; height: 40px; }
+    .field input, .field .prefix { padding-top: 12px; padding-bottom: 12px; }
+    .m-actions .btn { min-height: 46px; }
+    .target { padding: 14px 14px 15px; }
+  }
+
+  /* wide, monospace content NEVER pushes the page wide — it scrolls in its own box. */
+  .term-body { overflow-x: auto; }
+  .gate { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ============ INSTRUMENT HEADER ============ -->
+  <header class="bar">
+    <div class="brand-mark">
+      <div class="glyph">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#35d6e0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h3l2-6 4 14 3-9 2 4h4"/>
+        </svg>
+      </div>
+      <div class="wordmark">
+        <div class="name">SPARRA<b>·</b>BRIDGE</div>
+        <div class="sub">Remote Conductor Console</div>
+      </div>
+    </div>
+
+    <div class="bar-spacer"></div>
+
+    <div class="health" title="Bridge liveness — GET /health">
+      <span class="led"></span>
+      <span class="health-label">bridge&nbsp;online</span>
+      <span class="iface">· double-click to force re-auth</span>
+    </div>
+
+    <div class="auth-chip" id="authChip">
+      <span class="dot"></span>
+      <span>token authorized</span>
+    </div>
+
+    <button class="icon-btn" id="themeBtn" title="Toggle theme">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- ============ MAIN GRID ============ -->
+  <div class="grid">
+
+    <!-- ---- COLUMN 1: TARGETS ---- -->
+    <section class="col rail">
+      <div class="col-head">
+        <h2>Targets</h2>
+        <span class="count" id="targetCount">4 allowlisted</span>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="refreshProjectsBtn" title="GET /projects — refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg>
+        </button>
+      </div>
+      <div class="col-scroll" id="targetList"></div>
+    </section>
+
+    <!-- ---- COLUMN 2: JOBS FEED ---- -->
+    <section class="col feed">
+      <div class="col-head">
+        <h2>Jobs</h2>
+        <span class="count" id="jobCount">last 12</span>
+        <span class="spacer"></span>
+        <span class="kicker" style="color:var(--txt-faint)">in-memory</span>
+      </div>
+      <div class="col-scroll" id="jobList"></div>
+    </section>
+
+    <!-- ---- COLUMN 3: DETAIL STAGE ---- -->
+    <section class="col">
+      <div class="stage" id="stage"></div>
+    </section>
+  </div>
+</div>
+
+<!-- ============ TOAST HOST ============ -->
+<div class="toast-wrap" id="toasts"></div>
+
+<!-- ============ TOKEN MODAL ============ -->
+<div class="overlay" id="authOverlay">
+  <div class="modal" id="authModal">
+    <div class="m-glyph">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+    </div>
+    <h2>Bearer token</h2>
+    <p>The bridge binds only to the Tailscale interface. Paste your token once — it is held in <span class="mono" style="color:var(--txt)">sessionStorage</span> and sent on every request.</p>
+    <div class="fail-banner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+      <span>401 — token rejected or expired. Re-enter to continue.</span>
+    </div>
+    <div class="field">
+      <label>Authorization</label>
+      <div class="input-wrap">
+        <span class="prefix mono">Bearer&nbsp;</span>
+        <input id="tokenInput" type="password" placeholder="sk-bridge-••••••••••••••••" autocomplete="off" spellcheck="false"/>
+      </div>
+    </div>
+    <div class="m-actions">
+      <button class="btn primary" id="authSubmitBtn" style="flex:2">Authorize</button>
+      <button class="btn" id="authCancelBtn">Cancel</button>
+    </div>
+    <div class="hint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/><path d="M12 16v-5M12 8h.01"/></svg>
+      Never persisted to disk. Cleared on tab close.
+    </div>
+  </div>
+</div>
+
+<!--
+  The line below is the ONLY injection point `handlers/dashboard.ts` touches: it replaces this exact
+  comment with the verbatim text of `dashboard.client.js`, inside this SAME `type="module"` script —
+  so the controller/API functions declared there are in scope for the boot code that follows, with no
+  duplication and no second network fetch. (Opening/loading this file directly as a static asset is
+  NOT a supported path — it is always served through the handler, which performs the inlining.)
+-->
+<script type="module">
+/* __SPARRA_DASHBOARD_CLIENT__ */
+
+/* ================================================================================================
+ * Boot: the THIN real `view` adapter (DOM writes) + wiring to `window.fetch` / `sessionStorage` /
+ * the DOM. All controller/API logic above this point comes from `dashboard.client.js` — nothing here
+ * re-implements a request, a schema, or the holdout-safe projection.
+ * ================================================================================================ */
+
+const TOKEN_KEY = "sparra-bridge-token";
+const storage = {
+  getToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || undefined; } catch { return undefined; }
+  },
+  setToken(t) {
+    try { sessionStorage.setItem(TOKEN_KEY, t); } catch { /* private-browsing storage denial: token stays in-memory only for this tab */ }
+  },
+  clearToken() {
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* see setToken */ }
+  },
+};
+
+/* ---------------- state ---------------- */
+const state = {
+  targets: [],           // [{root, phase, next}] — from GET /projects
+  jobs: new Map(),        // jobId -> Job (from POST trigger + GET /jobs/:id)
+  jobOrder: [],           // most-recent-first jobId order for the feed
+  selectedRoot: undefined,
+  selectedJobId: undefined,
+  summary: undefined,     // last /role or /unit projected summary (one-off readout, not a job)
+  budget: 5,
+  maxTurns: 80,
+  fresh: false,
+  applyReflect: false,
+  pollTimer: null,
+};
+
+function targetName(root) {
+  const parts = String(root).replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || root;
+}
+
+/* ---------------- the real view adapter ---------------- */
+const view = {
+  renderHealth({ ok }) {
+    const led = document.querySelector(".health .led");
+    const label = document.querySelector(".health .health-label");
+    if (led) led.style.background = ok ? "var(--pass)" : "var(--fail)";
+    if (label) label.textContent = ok ? "bridge online" : "bridge unreachable";
+  },
+  renderProjects(projects) {
+    state.targets = projects || [];
+    if (state.selectedRoot === undefined && state.targets.length > 0) {
+      state.selectedRoot = state.targets[0].root;
+    }
+    renderTargets();
+  },
+  recordJob({ phase, root, jobId }) {
+    if (!jobId) return;
+    state.jobs.set(jobId, { id: jobId, kind: phase, root, status: "running", log: "", createdAt: Date.now() });
+    state.jobOrder = [jobId, ...state.jobOrder.filter((id) => id !== jobId)];
+    state.selectedJobId = jobId;
+    state.summary = undefined;
+    renderJobs();
+    renderStage();
+    ensurePolling();
+  },
+  renderJob(job) {
+    if (!job || !job.id) return;
+    state.jobs.set(job.id, job);
+    renderJobs();
+    if (state.selectedJobId === job.id) renderStage();
+  },
+  renderRoleSummary(summary) {
+    state.summary = { kind: "role", data: summary };
+    state.selectedJobId = undefined;
+    renderJobs();
+    renderStage();
+  },
+  renderUnitSummary(summary) {
+    state.summary = { kind: "unit", data: summary };
+    state.selectedJobId = undefined;
+    renderJobs();
+    renderStage();
+  },
+  setAuthorized(ok) {
+    const chip = document.getElementById("authChip");
+    if (!chip) return;
+    chip.classList.toggle("warn", !ok);
+    chip.innerHTML = ok
+      ? '<span class="dot"></span><span>token authorized</span>'
+      : '<span class="dot"></span><span>token required</span>';
+  },
+  showReauth() {
+    openAuth(true);
+  },
+  showLockToast(holderJobId) {
+    toast(`<span class="code">409</span> target busy${holderJobId ? ` — job <b>${escapeHtml(holderJobId)}</b> already running` : ""}`);
+  },
+  showError(result) {
+    const msg = (result && result.data && result.data.error) || `request failed (${result && result.status})`;
+    toast(`<span class="code">${result ? result.status : "ERR"}</span> ${escapeHtml(String(msg))}`);
+  },
+};
+
+function controllerDeps() {
+  return { storage, view };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ---------------- polling ---------------- */
+function ensurePolling() {
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(() => {
+    let anyRunning = false;
+    for (const id of state.jobOrder) {
+      const j = state.jobs.get(id);
+      if (j && j.status === "running") {
+        anyRunning = true;
+        pollJob(controllerDeps(), id);
+      }
+    }
+    if (!anyRunning) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }, 1500);
+}
+
+/* ---------------- icons (visual only, unchanged from the design reference) ---------------- */
+
+/* ---------------- icons ---------------- */
+const IC = {
+  build:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 3 4 4-2 2-4-4a5 5 0 0 0 6 6l7 7 3-3-7-7a5 5 0 0 0-6-6Z"/></svg>',
+  reflect:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>',
+  resume:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 4 12 8-12 8Z"/></svg>',
+  cancel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6Z"/><path d="m9 12 2 2 4-4"/></svg>',
+};
+
+/** The role kinds `POST /role` accepts (mirrors `handlers/conductor.ts`'s `ROLE_KINDS`) — offered in
+ *  the per-target "run role" control. */
+const ROLE_KINDS = ['evaluator', 'reviewer', 'generator', 'contract-generator', 'contract-evaluator'];
+
+/* ---------------- render: targets ---------------- */
+function renderTargets() {
+  const el = document.getElementById('targetList');
+  const countEl = document.getElementById('targetCount');
+  if (countEl) countEl.textContent = `${state.targets.length} allowlisted`;
+  el.innerHTML = state.targets.map((t,i) => `
+    <div class="target ${t.root===state.selectedRoot?'sel':''}" style="animation-delay:${i*60}ms" data-action="select-target" data-root="${escapeHtml(t.root)}">
+      <div class="t-top"><span class="t-name">${escapeHtml(targetName(t.root))}</span></div>
+      <div class="t-path mono">${escapeHtml(t.root)}</div>
+      <div class="t-mid">
+        <span class="phase ${escapeHtml(t.phase)}">${escapeHtml(t.phase)}</span>
+      </div>
+      <div class="next mono"><span class="arrow">next ▸</span> ${escapeHtml(t.next)}</div>
+      <div class="actions" data-action="stop">
+        <div class="act-row">
+          <button class="btn primary" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="build">${IC.build} build</button>
+          <button class="btn" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="reflect">${IC.reflect} reflect</button>
+          <button class="btn" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="resume">${IC.resume} resume</button>
+          <button class="btn" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="init">init</button>
+          <button class="btn" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="freeze">freeze</button>
+          <button class="btn" data-action="run-unit" data-root="${escapeHtml(t.root)}">unit</button>
+        </div>
+        <div class="act-row role-row">
+          <select class="mono role-kind-select">
+            ${ROLE_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}
+          </select>
+          <button class="btn" data-action="run-role" data-root="${escapeHtml(t.root)}">${IC.check} run role</button>
+        </div>
+        <div class="controls">
+          <div class="ctrl">
+            <label>budget · usd</label>
+            <div class="stepper">
+              <button data-action="step-budget" data-delta="-1">−</button>
+              <input class="mono budget-input" data-action="set-budget" value="${state.budget}"/>
+              <button data-action="step-budget" data-delta="1">+</button>
+            </div>
+          </div>
+          <div class="ctrl">
+            <label>max turns</label>
+            <div class="stepper">
+              <button data-action="step-turns" data-delta="-10">−</button>
+              <input class="mono turns-input" data-action="set-turns" value="${state.maxTurns}"/>
+              <button data-action="step-turns" data-delta="10">+</button>
+            </div>
+          </div>
+        </div>
+        <div class="toggle-fresh ${state.fresh?'on':''}" data-action="toggle-fresh">
+          <span class="switch"></span> fresh — ignore prior build state (build only)
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+function stepBudget(d){
+  state.budget=Math.max(1,state.budget+d);
+  const input = document.querySelector('.budget-input');
+  if (input) input.value = state.budget;
+}
+function stepTurns(d){
+  state.maxTurns=Math.max(10,state.maxTurns+d);
+  const input = document.querySelector('.turns-input');
+  if (input) input.value = state.maxTurns;
+}
+
+function selectTarget(root){ state.selectedRoot=root; renderTargets(); }
+
+/** Trigger one of build/reflect/resume/init/freeze for the given root, over the REAL controller —
+ *  the request body/schema/lock/401/409 handling all live in `dashboard.client.js`. */
+function trigger(root, phase){
+  const params = { root };
+  if (phase === 'build') { params.fresh = state.fresh; params.budget = state.budget; params.maxTurns = state.maxTurns; }
+  if (phase === 'reflect') { params.apply = state.applyReflect; }
+  triggerPhase(controllerDeps(), phase, params);
+}
+
+/** Ad-hoc `POST /unit` — the full contract → generate → evaluate → decide cycle for `root`. */
+function runUnit(root){
+  triggerUnit(controllerDeps(), { root, budget: state.budget, maxTurns: state.maxTurns });
+}
+
+/** Ad-hoc `POST /role` — one holdout-safe role-run of the kind picked in the target's role-kind
+ *  select. Renders through the SAME summary readout `runUnit` uses (`showRoleResult` →
+ *  `view.renderRoleSummary` → `roleReadout`), never a separate/raw view. */
+function runRole(root){
+  const select = document.querySelector('.role-kind-select');
+  const kind = (select && select.value) || 'evaluator';
+  triggerRole(controllerDeps(), { root, kind });
+}
+
+/* ---------------- render: jobs ---------------- */
+function renderJobs() {
+  const el = document.getElementById('jobList');
+  const countEl = document.getElementById('jobCount');
+  if (countEl) countEl.textContent = `${state.jobOrder.length} tracked`;
+  el.innerHTML = state.jobOrder.map((id,i) => {
+    const j = state.jobs.get(id);
+    if (!j) return '';
+    return `
+    <div class="job ${j.id===state.selectedJobId?'sel':''}" style="animation:rise .4s ${i*40}ms backwards" data-action="select-job" data-job-id="${escapeHtml(j.id)}">
+      <span class="st ${j.status}"></span>
+      <div class="j-main">
+        <div class="j-line1">
+          <span class="j-phase">${escapeHtml(j.kind || '')}</span>
+          <span class="j-id mono">${escapeHtml(j.id)}</span>
+        </div>
+        <div class="j-line2 mono">${escapeHtml(targetName(j.root || ''))}</div>
+      </div>
+      <div class="j-right">
+        <span class="j-badge badge-${j.status}">${j.status}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+function selectJob(id){ state.selectedJobId=id; state.summary=undefined; renderJobs(); renderStage(); }
+
+/* ---------------- render: detail stage ---------------- */
+function renderStage(){
+  const stage = document.getElementById('stage');
+  if (state.summary) { stage.innerHTML = state.summary.kind === 'unit' ? unitReadout(state.summary.data) : roleReadout(state.summary.data); return; }
+  const j = state.selectedJobId ? state.jobs.get(state.selectedJobId) : undefined;
+  if (!j) { stage.innerHTML = emptyState(); return; }
+  stage.innerHTML = phaseJob(j);
+}
+
+function phaseJob(j){
+  const running = j.status === 'running';
+  const elapsedMs = j.createdAt ? Date.now() - j.createdAt : undefined;
+  const elapsed = elapsedMs !== undefined ? `${Math.max(0, Math.round(elapsedMs / 1000))}s` : '—';
+  return `
+  <div class="detail-head">
+    <div class="dh-l">
+      <div class="dh-title">
+        <h1>${escapeHtml(j.kind || 'job')}</h1>
+        <span class="status-tag ${j.status==='canceled'?'':j.status}">${statusDot(j.status)} ${j.status}</span>
+      </div>
+      <div class="dh-meta mono">${escapeHtml(j.root || '')} · job <b>${escapeHtml(j.id)}</b>${j.exitCode!==undefined?` · exit <b>${j.exitCode}</b>`:''}</div>
+    </div>
+    ${running?`<button class="btn ghost" style="border:1px solid var(--fail);color:var(--fail)" data-action="cancel-job" data-job-id="${escapeHtml(j.id)}">${IC.cancel} cancel</button>`:''}
+  </div>
+
+  <div class="metrics">
+    <div class="metric"><div class="m-k">status</div><div class="m-v" style="color:${statusColor(j.status)};text-transform:capitalize">${j.status}</div><div class="m-sub">elapsed ${elapsed}</div></div>
+    <div class="metric"><div class="m-k">exit code</div><div class="m-v tnum">${j.exitCode!==undefined?j.exitCode:'—'}</div><div class="m-sub">phase subprocess</div></div>
+  </div>
+
+  <div class="holdout-note">
+    ${IC.shield}
+    <span><b>Holdout wall enforced.</b> This is Sparra's own redacted phase log — no raw transcripts, verdict dumps, or evaluator traces cross the bridge.</span>
+  </div>
+
+  <div class="terminal">
+    <div class="term-head">
+      <span class="kicker">GET /jobs/${escapeHtml(j.id)} · phase log</span>
+      ${running?'<span class="live"><span class="lk"></span>streaming · poll 1.5s</span>':`<span class="kicker" style="color:var(--txt-faint)">closed</span>`}
+    </div>
+    <div class="term-body" id="termBody"><div class="logline"><span class="msg">${j.log ? escapeHtml(j.log) : '(no output yet)'}</span></div></div>
+  </div>`;
+}
+function doCancel(id){ cancelJob(controllerDeps(), id); }
+
+function statusDot(s){
+  const c = statusColor(s);
+  return `<span style="width:7px;height:7px;border-radius:50%;background:${c};display:inline-block;box-shadow:0 0 6px ${c}"></span>`;
+}
+function statusColor(s){ return {running:'var(--run)',succeeded:'var(--pass)',failed:'var(--fail)',canceled:'var(--cancel)'}[s]||'var(--txt)'; }
+
+/* ---------------- render: /unit and /role summary readouts (holdout-safe fields ONLY) ---------------- */
+function unitReadout(u){
+  const finalVerdict = u.finalVerdict;
+  const pass = finalVerdict ? finalVerdict.verdict === 'PASS' : u.outcome === 'accepted';
+  return `
+  <div class="detail-head">
+    <div class="dh-l">
+      <div class="dh-title">
+        <h1 style="text-transform:none">unit summary</h1>
+        <span class="status-tag ${pass?'succeeded':'failed'}">${statusDot(pass?'succeeded':'failed')} ${escapeHtml(String(u.outcome))}</span>
+      </div>
+      <div class="dh-meta mono">POST /unit → contract → generate → evaluate → decide · contract agreed <b>${String(!!u.contractAgreed)}</b> (${u.contractRounds ?? 0} round${u.contractRounds===1?'':'s'})${u.cycleOutcome?` · cycle <b>${escapeHtml(String(u.cycleOutcome))}</b> (${u.cycleRounds ?? 0} round${u.cycleRounds===1?'':'s'})`:''}</div>
+    </div>
+  </div>
+
+  <div class="holdout-note">
+    ${IC.shield}
+    <span><b>Parent-safe summary only.</b> The raw diff, full verdict, and evaluator transcript never leave the harness — the bridge returns these fields and nothing else.</span>
+  </div>
+
+  ${finalVerdict ? roleReadoutBody(finalVerdict) : `<div class="empty"><p>No build cycle ran (contract not agreed, or run stopped before generate/evaluate).</p></div>`}`;
+}
+
+function roleReadout(r){
+  return `
+  <div class="detail-head">
+    <div class="dh-l">
+      <div class="dh-title">
+        <h1 style="text-transform:none">role · ${escapeHtml(String(r.roleKind || ''))}</h1>
+        <span class="status-tag ${r.verdict==='PASS'?'succeeded':'failed'}">${statusDot(r.verdict==='PASS'?'succeeded':'failed')} ${escapeHtml(String(r.verdict||(r.ok?'ok':'—')))}</span>
+      </div>
+      <div class="dh-meta mono">POST /role</div>
+    </div>
+  </div>
+  <div class="holdout-note">
+    ${IC.shield}
+    <span><b>Parent-safe summary only.</b> The raw diff, full verdict, and evaluator transcript never leave the harness — the bridge returns these fields and nothing else.</span>
+  </div>
+  ${roleReadoutBody(r)}`;
+}
+
+function roleReadoutBody(u){
+  const pass = u.verdict === 'PASS';
+  const score = typeof u.weightedTotal === 'number' ? u.weightedTotal : 0;
+  const thr = typeof u.passThreshold === 'number' ? u.passThreshold : 0;
+  const blocking = Array.isArray(u.blocking) ? u.blocking : [];
+  return `
+  <div class="readout">
+    <div class="verdict-card ${pass?'pass':'fail'}">
+      <div class="vk">verdict</div>
+      <div class="vv">${escapeHtml(String(u.verdict||'—'))}</div>
+      <div class="gauge">
+        ${gaugeSVG(score, thr, pass)}
+        <div class="gauge-label mono">weightedTotal · threshold <b class="${pass?'pass':'fail'}">${thr.toFixed(1)}</b></div>
+      </div>
+    </div>
+
+    <div class="readout-right">
+      <div class="ro-panel">
+        <h3>Blocking items <span class="n">${blocking.length} noted</span></h3>
+        <div class="blockers">
+          ${blocking.length ? blocking.map(b=>`
+            <div class="blocker">
+              <span class="sev block">blocking</span>
+              <div><div class="b-txt">${escapeHtml(typeof b === 'string' ? b : JSON.stringify(b))}</div></div>
+            </div>`).join('')
+          :`<div class="blocker"><div class="b-txt" style="color:var(--pass)">No blocking items — all acceptance checks satisfied.</div></div>`}
+        </div>
+      </div>
+
+      <div class="ro-panel">
+        <h3>Provenance</h3>
+        <div class="gate">
+          <div class="g-cell"><div class="g-k">backend</div><div class="g-v">${escapeHtml(String(u.backend||'—'))}</div></div>
+          <div class="g-cell"><div class="g-k">model</div><div class="g-v">${escapeHtml(String(u.model||'—'))}</div></div>
+          <div class="g-cell"><div class="g-k">tokens</div><div class="g-v tnum">${u.tokens ?? '—'}</div></div>
+          <div class="g-cell"><div class="g-k">cost · usd</div><div class="g-v tnum">$${u.costUsd ?? '—'}</div></div>
+          <div class="g-cell"><div class="g-k">score</div><div class="g-v tnum">${score.toFixed(1)}</div></div>
+          <div class="g-cell"><div class="g-k">same-model grade</div><div class="g-v">${String(!!u.sameModelGrade)}</div></div>
+        </div>
+      </div>
+
+      <div class="cross-gate ${u.sameModelGrade?'':'held'}">
+        <span class="cg-icon">${IC.check}</span>
+        <span class="cg-txt"><b>${u.sameModelGrade?'Same-model grade.':'Cross-model gate held.'}</b> sameModelGrade: <b>${String(!!u.sameModelGrade)}</b></span>
+        <span class="cg-tag">${u.sameModelGrade?'⚠ same-model':'✓ cross-tier'}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function gaugeSVG(score, thr, pass){
+  const R=52, C=2*Math.PI*R, frac=score/100, thrFrac=thr/100;
+  const dash=C*0.75; // 270deg arc
+  const scoreLen=dash*frac, thrPos=dash*thrFrac;
+  const col = pass?'var(--pass)':'var(--fail)';
+  return `
+  <svg width="132" height="132" viewBox="0 0 132 132">
+    <g transform="rotate(135 66 66)">
+      <circle cx="66" cy="66" r="${R}" fill="none" stroke="var(--line)" stroke-width="9"
+        stroke-dasharray="${dash} ${C}" stroke-linecap="round"/>
+      <circle cx="66" cy="66" r="${R}" fill="none" stroke="${col}" stroke-width="9"
+        stroke-dasharray="${scoreLen} ${C}" stroke-linecap="round"
+        style="filter:drop-shadow(0 0 5px ${col})">
+        <animate attributeName="stroke-dasharray" from="0 ${C}" to="${scoreLen} ${C}" dur=".9s" fill="freeze" calcMode="spline" keySplines="0.2 0.8 0.2 1"/>
+      </circle>
+      <!-- threshold tick -->
+      <circle cx="66" cy="66" r="${R}" fill="none" stroke="var(--txt)" stroke-width="11"
+        stroke-dasharray="1.5 ${C}" stroke-dashoffset="${-thrPos}" opacity=".85"/>
+    </g>
+    <text class="score" x="66" y="64" text-anchor="middle">${score.toFixed(1)}</text>
+    <text class="score-max" x="66" y="80" text-anchor="middle">/ 100</text>
+  </svg>`;
+}
+
+/* ---------------- empty state ---------------- */
+function emptyState(){
+  return `<div class="empty">
+    <svg class="e-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-6 4 14 3-9 2 4h4"/></svg>
+    <h3>No job selected</h3>
+    <p>Pick a job from the feed to stream its phase log, or trigger a phase from a target.</p>
+  </div>`;
+}
+
+/* ---------------- toasts ---------------- */
+function toast(html){
+  const wrap = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className='toast';
+  el.innerHTML = `<span class="mono">${html}</span>`;
+  wrap.appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s, transform .3s'; el.style.opacity='0'; el.style.transform='translateY(6px)'; setTimeout(()=>el.remove(),300); }, 3200);
+}
+
+/* ---------------- auth ---------------- */
+function openAuth(failed){
+  document.getElementById('authOverlay').classList.add('show');
+  document.getElementById('authModal').classList.toggle('auth-fail', !!failed);
+}
+function closeAuth(){ document.getElementById('authOverlay').classList.remove('show'); }
+function submitAuth(){
+  const input = document.getElementById('tokenInput');
+  const token = (input && input.value || '').trim();
+  if (!token) return;
+  if (input) input.value = '';
+  closeAuth();
+  setToken(controllerDeps(), token);
+  boot();
+}
+/* Re-run the real 401 path (clears the stored token via `handleAuthError`, same reaction a live 401
+ * from any endpoint would trigger) — wired to the health chip's double-click for manual verification. */
+function forceReauth(){
+  handleAuthError(controllerDeps());
+}
+
+/* ---------------- theme ---------------- */
+function toggleTheme(){
+  const root = document.documentElement;
+  const cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  const next = cur==='dark'?'light':'dark';
+  root.setAttribute('data-theme', next);
+  document.getElementById('themeIcon').innerHTML = next==='light'
+    ? '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/>'
+    : '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/>';
+}
+
+/* ---------------- boot ---------------- */
+function boot(){
+  renderTargets();
+  renderJobs();
+  renderStage();
+  const token = storage.getToken();
+  if (!token) {
+    view.setAuthorized(false);
+    openAuth(false);
+    return;
+  }
+  view.setAuthorized(true);
+  refreshHealth(controllerDeps());
+  refreshProjects(controllerDeps());
+}
+
+/* ---------------- event wiring ----------------
+ * Every handler below is wired via `addEventListener` from THIS module script — never an inline
+ * `onclick="..."` attribute. An inline HTML event-handler attribute is evaluated in the GLOBAL
+ * scope, and functions declared inside a `<script type="module">` are module-scoped, NOT globals —
+ * so `onclick="trigger(...)"` would resolve to `undefined` and silently no-op at click time. Static
+ * chrome (auth chip, theme button, modal buttons, refresh button) gets a direct listener once at
+ * boot; dynamically re-rendered regions (`targetList`, `jobList`, `stage`, whose `innerHTML` is
+ * replaced wholesale on every render) use ONE delegated listener each, keyed off `data-action`, so
+ * newly-rendered buttons/cards are wired without re-attaching anything. Nothing here is exposed on
+ * `window` — every reference is a plain local binding in this module's closure. */
+
+function wireDelegatedClicks(container, handlers){
+  container.addEventListener('click', (event) => {
+    const el = event.target.closest('[data-action]');
+    if (!el || !container.contains(el)) return;
+    const action = el.dataset.action;
+    const handler = handlers[action];
+    if (handler) handler(el, event);
+    // `data-action="stop"` (the `.actions` wrapper) and any other unrecognized action intentionally
+    // no-op here — this is the delegated equivalent of the old `stopPropagation()` on that wrapper.
+  });
+}
+
+wireDelegatedClicks(document.getElementById('targetList'), {
+  'select-target': (el) => selectTarget(el.dataset.root),
+  'trigger': (el) => trigger(el.dataset.root, el.dataset.phase),
+  'run-unit': (el) => runUnit(el.dataset.root),
+  'run-role': (el) => runRole(el.dataset.root),
+  'step-budget': (el) => stepBudget(Number(el.dataset.delta)),
+  'step-turns': (el) => stepTurns(Number(el.dataset.delta)),
+  'toggle-fresh': () => { state.fresh = !state.fresh; renderTargets(); },
+});
+document.getElementById('targetList').addEventListener('change', (event) => {
+  if (event.target.matches('[data-action="set-budget"]')) {
+    state.budget = Number(event.target.value) || 1;
+  } else if (event.target.matches('[data-action="set-turns"]')) {
+    state.maxTurns = Number(event.target.value) || 10;
+  }
+});
+
+wireDelegatedClicks(document.getElementById('jobList'), {
+  'select-job': (el) => selectJob(el.dataset.jobId),
+});
+
+wireDelegatedClicks(document.getElementById('stage'), {
+  'cancel-job': (el) => doCancel(el.dataset.jobId),
+});
+
+document.getElementById('authChip').addEventListener('click', () => openAuth(false));
+document.getElementById('themeBtn').addEventListener('click', () => toggleTheme());
+document.getElementById('authSubmitBtn').addEventListener('click', () => submitAuth());
+document.getElementById('authCancelBtn').addEventListener('click', () => closeAuth());
+document.getElementById('refreshProjectsBtn').addEventListener('click', () => refreshProjects(controllerDeps()));
+document.querySelector('.health').addEventListener('dblclick', forceReauth);
+
+boot();
+</script>
+</body>
+</html>

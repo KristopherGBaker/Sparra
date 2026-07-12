@@ -40,6 +40,10 @@ export interface RouteContext {
 export interface RouteResult {
   status: number;
   body?: unknown;
+  /** Raw HTML body — bypasses JSON encoding and is sent as `text/html; charset=utf-8` verbatim. Used
+   *  ONLY by the dashboard's `GET /` handler; every other route keeps returning `body` (JSON). Mutually
+   *  exclusive with `body`. */
+  html?: string;
   root?: string;
   jobId?: string;
 }
@@ -49,9 +53,12 @@ export type RouteHandler = (ctx: RouteContext) => RouteResult | Promise<RouteRes
 /**
  * A single route registration contributed via the {@link ServerDeps.routes} seam.
  *
- * There is deliberately NO caller-settable `public`/auth-exempt flag: only the built-in
- * `GET /health` is unauthenticated. Every route added through this seam ALWAYS requires a valid
- * Bearer token, so a later unit can never (accidentally or otherwise) register an auth-bypass route.
+ * There is deliberately NO caller-settable `public`/auth-exempt flag: a route contributed here is
+ * re-projected to `method`/`path`/`handler` ONLY (see `compile` below), so it always requires a
+ * valid Bearer token — with exactly TWO hardcoded exceptions in `handle()`: the built-in
+ * `GET /health`, and `GET /` (the dashboard, whose own handler still gates on `config.dashboard` and
+ * which must be reachable without a header, since a browser's top-level navigation can't attach one).
+ * No OTHER path/method combination can ever become unauthenticated through this seam.
  */
 export interface RouteDefinition {
   method: string;
@@ -150,6 +157,17 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body ?? {});
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(payload);
+}
+
+/** Send a {@link RouteResult}: raw `html` (when set) as `text/html; charset=utf-8` verbatim, else the
+ *  usual JSON encoding of `body`. The ONE place a route's result is ever written to the wire. */
+function sendResult(res: ServerResponse, result: RouteResult): void {
+  if (result.html !== undefined) {
+    res.writeHead(result.status, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(result.html);
+    return;
+  }
+  sendJson(res, result.status, result.body);
 }
 
 type BodyOutcome =
@@ -252,9 +270,17 @@ export function createRequestListener(
     };
 
     try {
-      // A public route (GET /health) is served without auth.
+      // A public route is served without auth: the built-in `GET /health`, AND `GET /` (the
+      // dashboard) registered via the normal `register.ts` seam. `GET /` is the ONE exception to
+      // "the seam never grants a public route" (see `compile`'s `public` stripping above) — a
+      // browser's top-level navigation can't attach an `Authorization` header, so the page itself
+      // must be reachable unauthenticated (its own handler still gates on `config.dashboard`, and
+      // every DATA call the served page's client script makes remains Bearer-gated).
       const publicMatch = routes.find(
-        (r) => r.public && r.method === method && matchPattern(r.segments, reqSegments),
+        (r) =>
+          (r.public || (r.method === "GET" && r.path === "/")) &&
+          r.method === method &&
+          matchPattern(r.segments, reqSegments),
       );
       if (publicMatch) {
         auditRoute = publicMatch.path;
@@ -269,7 +295,7 @@ export function createRequestListener(
           jobs: deps.jobs,
         });
         status = result.status;
-        sendJson(res, result.status, result.body);
+        sendResult(res, result);
         return;
       }
 
@@ -326,7 +352,7 @@ export function createRequestListener(
       auditRoot = result.root;
       auditJobId = result.jobId;
       status = result.status;
-      sendJson(res, result.status, result.body);
+      sendResult(res, result);
     } catch (err) {
       // Typed path-guard errors map to their own status; anything else is an internal 500.
       if (err instanceof PathGuardError) {

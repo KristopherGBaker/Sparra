@@ -22,7 +22,7 @@ function tmpRoot(): string {
 }
 
 function baseConfig(roots: string[]): BridgeConfig {
-  return { roots, port: 8787, lastNJobs: 50, auditLogPath: "/tmp/a.log", allowRemotePlan: false };
+  return { roots, port: 8787, lastNJobs: 50, auditLogPath: "/tmp/a.log", allowRemotePlan: false, dashboard: true };
 }
 
 function getHandler(routes: RouteDefinition[], method: string, path: string) {

@@ -1,13 +1,16 @@
 /**
- * `conductors/http/register.ts` — wire every trigger + conductor handler into U1's route registry.
+ * `conductors/http/register.ts` — wire every trigger + conductor + dashboard handler into U1's route
+ * registry.
  *
  * `registerBridgeRoutes` builds the phase routes and the conductor routes over a SINGLE shared
  * {@link TargetLock}, so a phase writer and a conductor writer contend on the SAME per-target lock
- * (a `/build` in flight blocks a `/unit` on that root, and vice versa). U1's `startBridge` calls this
- * so the running server exposes the full surface, without ever editing `server.ts`'s core routing.
+ * (a `/build` in flight blocks a `/unit` on that root, and vice versa), and adds the dashboard's
+ * `GET /` alongside them. U1's `startBridge` calls this so the running server exposes the full
+ * surface, without ever editing `server.ts`'s core routing/auth logic for any OTHER route.
  */
 
 import { createConductorRoutes, type ConductorRouteDeps } from "./handlers/conductor.ts";
+import { createDashboardRoutes, type DashboardRouteDeps } from "./handlers/dashboard.ts";
 import { createPhaseRoutes, type PhaseRouteDeps } from "./handlers/phases.ts";
 import type { RouteDefinition } from "./server.ts";
 import { TargetLock } from "./spawn.ts";
@@ -27,6 +30,9 @@ export interface BridgeRouteDeps {
   runRole?: ConductorRouteDeps["runRole"];
   /** Core unit runner for `/unit`. */
   runUnit?: ConductorRouteDeps["runUnit"];
+  /** Asset reader for `GET /` (the dashboard) — ONE call returning both files. Defaults to reading
+   *  the real `dashboard.html`/`dashboard.client.js` next to this package. */
+  readDashboardAssets?: DashboardRouteDeps["readAssets"];
 }
 
 /** Build every bridge route (phases + conductor) over one shared {@link TargetLock}. */
@@ -44,6 +50,13 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
     ...(deps.runRole !== undefined ? { runRole: deps.runRole } : {}),
     ...(deps.runUnit !== undefined ? { runUnit: deps.runUnit } : {}),
   };
+  const dashboardDeps: DashboardRouteDeps = {
+    ...(deps.readDashboardAssets !== undefined ? { readAssets: deps.readDashboardAssets } : {}),
+  };
 
-  return [...createPhaseRoutes(phaseDeps), ...createConductorRoutes(conductorDeps)];
+  return [
+    ...createPhaseRoutes(phaseDeps),
+    ...createConductorRoutes(conductorDeps),
+    ...createDashboardRoutes(dashboardDeps),
+  ];
 }

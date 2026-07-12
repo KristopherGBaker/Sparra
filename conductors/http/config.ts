@@ -30,6 +30,9 @@ export interface BridgeConfig {
   auditLogPath: string;
   /** Consumed by a later unit; loaded + exposed here only. */
   allowRemotePlan: boolean;
+  /** Whether `GET /` serves the Sparra Bridge Console dashboard. Default `true`; an operator who
+   *  wants zero unauthenticated HTTP surface beyond `/health` can set this `false` (→ 404). */
+  dashboard: boolean;
 }
 
 const bridgeConfigSchema = z.object({
@@ -41,6 +44,7 @@ const bridgeConfigSchema = z.object({
   lastNJobs: z.number().int().positive().default(50),
   auditLogPath: z.string().optional(),
   allowRemotePlan: z.boolean().default(false),
+  dashboard: z.boolean().default(true),
 });
 
 const DEFAULT_CONFIG_REL = join(".sparra", "bridge.yaml");
@@ -118,6 +122,7 @@ export function loadBridgeConfig(deps: LoadBridgeConfigDeps = {}): BridgeConfig 
     lastNJobs: data.lastNJobs,
     auditLogPath,
     allowRemotePlan: data.allowRemotePlan,
+    dashboard: data.dashboard,
   };
   if (data.bind !== undefined) config.bind = data.bind;
   return config;

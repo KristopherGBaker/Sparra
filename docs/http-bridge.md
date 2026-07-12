@@ -5,10 +5,31 @@ Tailscale-connected agent trigger `sparra` phases and role-runs on a Mac it does
 It's built entirely on `conductors/core` (the same host-agnostic `runRole`/`runUnit` the Pi conductor
 uses); this doc covers the HTTP-specific surface. Setup/on-ramp: [`conductors/http/README.md`](../conductors/http/README.md).
 
+## Dashboard
+
+`GET /` serves the **Sparra Bridge Console**: a self-contained, responsive web dashboard (dark
+instrument-console styling, light/dark theme, no external assets or new dependency) for driving +
+monitoring the bridge from a browser — health, the `/projects` targets rail, per-target
+build/reflect/resume/init/freeze triggers, a live job feed polling `GET /jobs/:id`'s already-redacted
+phase log, cancel, and `/role`/`/unit` summary readouts rendered as finite holdout-safe cards (never
+scrollback). It is served WITHOUT auth, like `GET /health` — a browser's top-level navigation can't
+attach an `Authorization` header — but every data call the page's own client script makes is still
+Bearer-gated; the token is entered once via an on-page modal and held only in `sessionStorage`.
+`bridge.yaml`'s `dashboard` field (default `true`) gates the route: `false` → `404`, for operators who
+want zero unauthenticated HTTP surface beyond `/health`.
+
+The client logic lives in `conductors/http/dashboard.client.js` — a DOM-free, plain-ESM module (no
+Node built-ins) that is BOTH inlined verbatim into the served page (by `handlers/dashboard.ts`, read
++ assembled once and cached) AND imported directly by `dashboard.test.ts`, so the tests exercise the
+exact code the browser runs. `dashboard.html` holds only the CSS/markup and a thin real `view`
+adapter (DOM writes) + boot wiring — no request-building, schema, or holdout-projection logic is
+duplicated there.
+
 ## Endpoints
 
 | Method + Path | Body | Response |
 | --- | --- | --- |
+| `GET /` | — (unauthenticated) | `200 text/html; charset=utf-8` (the dashboard) or `404` when `dashboard: false` |
 | `GET /health` | — (unauthenticated) | `200 { ok: true }` |
 | `GET /projects` | — | `200 { projects: [{ root, phase, next }] }` — one entry per allowlisted root |
 | `POST /init` | `{ root, mode?, docs? }` | `202 { jobId }` |
@@ -22,8 +43,9 @@ uses); this doc covers the HTTP-specific surface. Setup/on-ramp: [`conductors/ht
 | `GET /jobs/:id` | — | `200 Job` (`{ id, kind, root?, status, log, exitCode?, result?, createdAt }`) or `404` |
 | `POST /jobs/:id/cancel` | — | `200 Job` (now `status: "canceled"`) or `404` |
 
-Every route but `GET /health` requires `Authorization: Bearer <$SPARRA_BRIDGE_TOKEN>`; a missing/
-wrong token is `401` before routing details are revealed. Every strict-schema body rejects unknown
+Every route but `GET /health` and `GET /` (the dashboard page load) requires
+`Authorization: Bearer <$SPARRA_BRIDGE_TOKEN>`; a missing/wrong token is `401` before routing details
+are revealed. Every strict-schema body rejects unknown
 fields (`400`). A request body over 1 MiB is `413`; malformed JSON is `400`. `/init`, `/freeze`,
 `/build`, `/reflect`, `/resume`, `/plan`, `/role` (writer kinds only), and `/unit` each acquire the
 per-target mutation lock (see below) — a second writer for a target already in flight gets `409`
@@ -41,6 +63,7 @@ naming the holder's `jobId`.
 | `lastNJobs` | no (default `50`) | Max jobs retained in the in-memory `JobStore`. |
 | `auditLogPath` | no (default `~/.sparra/bridge-audit.log`) | Where the append-only request audit log is written. |
 | `allowRemotePlan` | no (default `false`) | Whether `POST /plan` is permitted at all. |
+| `dashboard` | no (default `true`) | Whether `GET /` serves the Sparra Bridge Console; `false` → `404`. |
 
 ## Safety invariants
 

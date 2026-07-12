@@ -16,9 +16,11 @@ One rule, four layers — every layer must hold for a request to do anything:
    IPv4 (or `127.0.0.1` if Tailscale isn't running); a caller can pin an explicit address via
    `$SPARRA_BRIDGE_BIND` or `bridge.yaml`'s `bind`, but a wildcard is refused there too. So the only
    way to reach it at all is over your tailnet (or localhost).
-2. **Bearer token.** Every route except `GET /health` requires `Authorization: Bearer <token>`,
+2. **Bearer token.** Every route except `GET /health` and `GET /` (the dashboard page itself — a
+   browser's top-level navigation can't attach a header) requires `Authorization: Bearer <token>`,
    checked in constant time against `$SPARRA_BRIDGE_TOKEN`. The bridge refuses to even start if that
-   env var is unset or empty (fail-closed) — there is no allow-all mode.
+   env var is unset or empty (fail-closed) — there is no allow-all mode. Every DATA call the dashboard's
+   own client script makes is still Bearer-gated like any other caller.
 3. **Path allowlist.** Every request-supplied `root`/`workspace` (and every path field it implies —
    `briefPath`, `contractPath`, `holdoutPath`, `worktree`, `unitWorktree`) must resolve INSIDE one of
    `bridge.yaml`'s `roots` before any spawn/read/write happens. Anything outside is rejected (400/403)
@@ -59,10 +61,12 @@ $EDITOR ~/.sparra/bridge.yaml   # set `roots` to your real project directories
 ```
 
 `$SPARRA_BRIDGE_CONFIG` overrides the path if you'd rather keep it elsewhere. Every field
-(`roots`, `port`, `bind`, `lastNJobs`, `auditLogPath`, `allowRemotePlan`) is commented in the example;
-the two most worth knowing about beyond `roots`/`port`: `lastNJobs` bounds how many jobs the in-memory
-store retains (oldest evicted first), and `auditLogPath` is where the append-only request audit log
-lands (default `~/.sparra/bridge-audit.log`).
+(`roots`, `port`, `bind`, `lastNJobs`, `auditLogPath`, `allowRemotePlan`, `dashboard`) is commented in
+the example; the two most worth knowing about beyond `roots`/`port`: `lastNJobs` bounds how many jobs
+the in-memory store retains (oldest evicted first), and `auditLogPath` is where the append-only
+request audit log lands (default `~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls
+whether `GET /` serves the web console below — set it `false` for zero unauthenticated HTTP surface
+beyond `GET /health`.
 
 ### 3. Install the launchd agent
 
@@ -83,10 +87,25 @@ plist if you're done with it for good).
 Prefer to run it in a foreground terminal first (to watch for startup errors) before installing the
 plist: `SPARRA_BRIDGE_TOKEN=<token> node bin/sparra-bridge.mjs`.
 
+## Dashboard
+
+`GET /` serves the **Sparra Bridge Console** — a self-contained, holdout-safe web dashboard for
+driving + monitoring the bridge (health, per-target phase triggers with budget/maxTurns/fresh
+controls, a live job feed with the redacted phase log, and `/role`/`/unit` summary readouts) from a
+browser over your tailnet, phone included. It needs no token to LOAD (a browser's top-level
+navigation can't attach an `Authorization` header), but every data call the page itself makes is
+Bearer-gated exactly like a `curl` caller — enter your token once via the on-page modal; it's held in
+`sessionStorage`, never persisted to disk. Set `bridge.yaml`'s `dashboard: false` to disable it
+entirely (→ 404), for zero unauthenticated HTTP surface beyond `GET /health`. The page is a single
+static asset — no external script/style/image references, no new dependency — built from
+`conductors/http/dashboard.client.js` (the DOM-free API/controller logic, unit-tested in
+`dashboard.test.ts`) inlined into `conductors/http/dashboard.html` at serve time.
+
 ## Endpoints
 
 | Method + Path | Body | Response |
 | --- | --- | --- |
+| `GET /` | — (unauthenticated) | `200 text/html` (the dashboard) or `404` when `dashboard: false` |
 | `GET /health` | — (unauthenticated) | `200 { ok: true }` |
 | `GET /projects` | — | `200 { projects: [...] }` |
 | `POST /init` | `{ root, mode?, docs? }` | `202 { jobId }` |
@@ -104,6 +123,12 @@ Full field-by-field request/response shapes: [`docs/http-bridge.md`](../../docs/
 
 One authenticated example per endpoint (`$HOST`/`$PORT` = wherever you bound; `$TOKEN` =
 `$SPARRA_BRIDGE_TOKEN`):
+
+`GET /` — the dashboard console (unauthenticated load; see [Dashboard](#dashboard) above):
+
+```bash
+curl "http://$HOST:$PORT/"
+```
 
 `GET /health` — unauthenticated liveness check:
 

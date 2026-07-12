@@ -47,6 +47,7 @@ function baseConfig(roots: string[], overrides: Partial<BridgeConfig> = {}): Bri
     lastNJobs: 50,
     auditLogPath: "/tmp/audit.log",
     allowRemotePlan: false,
+    dashboard: true,
     ...overrides,
   };
 }

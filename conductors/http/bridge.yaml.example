@@ -30,3 +30,8 @@ auditLogPath: ~/.sparra/bridge-audit.log
 # `/plan` is a human-freeze-gated write, so a remote agent can only propose plan content once an
 # operator explicitly opts a target machine in.
 allowRemotePlan: false
+
+# Optional. Whether GET / serves the Sparra Bridge Console (a self-contained, holdout-safe web
+# dashboard for driving + monitoring the bridge). Default: true. Set false for zero unauthenticated
+# HTTP surface beyond GET /health — every other route already requires a token.
+dashboard: true
