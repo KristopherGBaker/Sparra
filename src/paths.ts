@@ -1,5 +1,39 @@
 import path from "node:path";
-import { ensureDir } from "./util/io.ts";
+import { ensureDir, writeTextIfAbsent } from "./util/io.ts";
+
+/**
+ * The Sparra-owned nested `.sparra/.gitignore` (the terraform/direnv pattern). A FAIL-CLOSED
+ * ALLOWLIST: the first effective rule ignores everything under `.sparra/`, then re-includes ONLY
+ * the durable, cross-machine-shareable set — this file, `config.yaml`, `prompts/` (incl.
+ * `.baseline.json`), and `calibration/`. Everything else — `state.json` (machine-local absolute
+ * paths), `environment.md`/`memory.md` (per-machine), `frozen/` (holds `HOLDOUT.frozen.md`),
+ * `traces/`, `verdicts/`, `runs/`, and ANY future dir — stays ignored by construction. A new
+ * holdout-bearing subdir is ignored automatically: it must be explicitly allowlisted to ride git.
+ *
+ * The isolation invariant is therefore NOT "the whole `.sparra` dir is untracked" but "no
+ * HOLDOUT-BEARING `.sparra` content is ever tracked — the allowlist admits only
+ * config.yaml/prompts/calibration".
+ *
+ * Written write-if-absent so a user's own edits to this file are never clobbered.
+ */
+export const SPARRA_GITIGNORE = `# Sparra-owned nested .gitignore — fail-closed allowlist.
+#
+# Ignore EVERYTHING under .sparra/ by default, then re-include ONLY the durable set that is
+# safe to commit and share across machines. Machine-local and holdout-bearing artifacts
+# (state.json, environment.md, memory.md, frozen/, traces/, verdicts/, runs/, conduct/, …
+# and any FUTURE dir) stay ignored by construction — a new subdir must be explicitly
+# allowlisted here to be tracked, so a future holdout-bearing dir is ignored automatically.
+#
+# To share the durable set across machines, drop your top-level \`.sparra/\` ignore line (if
+# any). NEVER commit HOLDOUT.md — \`sparra finish\` refuses to land while it is tracked.
+*
+!/.gitignore
+!/config.yaml
+!/prompts/
+!/prompts/**
+!/calibration/
+!/calibration/**
+`;
 
 /**
  * Canonical on-disk layout. The filesystem is Sparra's source of truth and the
@@ -41,6 +75,10 @@ export class Paths {
   }
   get config() {
     return path.join(this.dir, "config.yaml");
+  }
+  /** The Sparra-owned nested allowlist `.gitignore` (see `SPARRA_GITIGNORE`). */
+  get gitignore() {
+    return path.join(this.dir, ".gitignore");
   }
   get state() {
     return path.join(this.dir, "state.json");
@@ -172,5 +210,9 @@ export class Paths {
       ensureDir(this.runs),
       ensureDir(this.cycles),
     ]);
+    // Sparra-owned nested allowlist `.gitignore` — write-if-absent so config/prompts/calibration
+    // can ride git across machines while everything else (incl. any future dir) stays ignored by
+    // construction. Never clobbers a user-edited file. Shared by init/new/finish via this choke point.
+    await writeTextIfAbsent(this.gitignore, SPARRA_GITIGNORE);
   }
 }

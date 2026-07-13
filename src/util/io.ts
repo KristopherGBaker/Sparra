@@ -36,6 +36,22 @@ export async function appendText(file: string, content: string): Promise<void> {
   await fsp.appendFile(file, content, "utf8");
 }
 
+/**
+ * Write `content` only when `file` is ABSENT; never overwrite an existing (possibly
+ * user-edited) file. Returns true if it wrote, false if the file already existed. Uses the
+ * exclusive-create flag so it is atomic against concurrent callers (two scaffold paths racing).
+ */
+export async function writeTextIfAbsent(file: string, content: string): Promise<boolean> {
+  await ensureDir(path.dirname(file));
+  try {
+    await fsp.writeFile(file, content, { encoding: "utf8", flag: "wx" });
+    return true;
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException)?.code === "EEXIST") return false;
+    throw e;
+  }
+}
+
 export function exists(p: string): boolean {
   return fs.existsSync(p);
 }
