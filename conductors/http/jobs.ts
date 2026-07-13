@@ -20,6 +20,11 @@ export interface Job {
   exitCode?: number;
   /** Holdout-safe summary, set by a later unit. */
   result?: unknown;
+  /** For a `conduct` job: the run id parsed from the child's run-START announcement line. */
+  runId?: string;
+  /** For a `conduct` job: the run directory (`.sparra/conduct/<runId>/`) parsed alongside `runId` —
+   *  the ONLY on-disk location `GET /jobs/:id` reads for this job's `pendingDecisions` projection. */
+  runDir?: string;
   createdAt: number;
 }
 

@@ -58,6 +58,10 @@ export interface SpawnPhaseDeps {
   spawn?: SpawnFn;
   /** Called exactly once when the job settles (close/error/cancel) — releases the mutation lock. */
   release?: () => void;
+  /** Optional observer of each raw stdout chunk (in ADDITION to the verbatim job-log append). The
+   *  `/conduct` route uses this to parse the run-START announcement and associate the run with the
+   *  job. Never mutates the streamed output. */
+  onStdout?: (chunk: string) => void;
 }
 
 /** The repo's own `bin/sparra.mjs`, resolved relative to THIS module (not a cwd). */
@@ -103,7 +107,11 @@ export function spawnPhase(job: Job, options: SpawnPhaseOptions, deps: SpawnPhas
 
   // The child's own output is Sparra's already-redacted phase log; we append it verbatim (no extra
   // redaction) but never expose trace dirs / verdict files through any endpoint.
-  child.stdout?.on("data", (chunk) => deps.jobs.appendLog(job.id, chunk.toString()));
+  child.stdout?.on("data", (chunk) => {
+    const text = chunk.toString();
+    deps.jobs.appendLog(job.id, text);
+    deps.onStdout?.(text);
+  });
   child.stderr?.on("data", (chunk) => deps.jobs.appendLog(job.id, chunk.toString()));
 
   child.on("error", (err) => {

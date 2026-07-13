@@ -35,10 +35,13 @@ poll-until-done). Source it or crib from it: `source skills/sparra-bridge/script
 
 ## Two rules that shape every call
 
-1. **Phase triggers are ASYNC.** `/init /freeze /build /reflect /resume` return `202 {jobId}`
+1. **Phase triggers are ASYNC.** `/init /freeze /build /reflect /resume /conduct` return `202 {jobId}`
    immediately and run in the background. You must **poll `GET /jobs/:id`** until `status` is terminal
-   (`succeeded` | `failed` | `canceled`) and read its `log`. `/plan`, `/role`, `/unit`, and the
-   `GET`s are synchronous (they return the result directly).
+   (`succeeded` | `failed` | `canceled`) and read its `log`. A `/conduct` job may PARK a decision: while
+   `status` stays `running`, `GET /jobs/:id` carries `pendingDecisions:[{seq,…}]` — answer one with
+   `POST /jobs/:id/decision {seq, answer}` (`bridge decide <jobId> <seq> <answer>`) and it unparks.
+   `/plan`, `/conduct`'s decision route, `/role`, `/unit`, and the `GET`s are synchronous (they return
+   the result directly).
 2. **The holdout wall holds over HTTP.** `/role` returns a redacted `ParentSummary` and `/unit` a
    holdout-safe projection — never a raw transcript, verdict dump, trace dir, or holdout text. There
    is **no file-read endpoint**. Do not try to fetch raw artifacts; there is no HTTP way to, by design.
@@ -74,6 +77,8 @@ curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" \
 curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" -H "Content-Type: application/json" \
   -d '{"root":"/Users/me/proj","budget":5,"maxTurns":80}' "$SPARRA_BRIDGE_URL/build"   # 202 {jobId}
 # /reflect {root,apply?}  /resume {root}  /init {root,mode?,docs?}  /freeze {root}  likewise
+# /conduct {root,prompt,auto?,mode?,maxUnits?,concurrency?,budget?,maxTurns?} -> {jobId}; a parked
+#   decision surfaces as pendingDecisions on GET /jobs/:id — answer via POST /jobs/:id/decision {seq,answer,note?}
 ```
 
 **Run one role / a full unit (sync → summary; holdout-safe)**:

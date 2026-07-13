@@ -36,10 +36,12 @@ const SHIPPED_ENDPOINTS = [
   "POST /build",
   "POST /reflect",
   "POST /resume",
+  "POST /conduct",
   "POST /role",
   "POST /unit",
   "GET /jobs/:id",
   "POST /jobs/:id/cancel",
+  "POST /jobs/:id/decision",
 ];
 
 const BRIDGE_CONFIG_FIELDS = [
@@ -135,7 +137,7 @@ describe("docs match shipped code", () => {
     }
   });
 
-  it("register.ts + the built-ins produce EXACTLY the documented 12 method+path pairs", () => {
+  it("register.ts + the built-ins produce EXACTLY the documented method+path pairs", () => {
     const routes = registerBridgeRoutes({});
     const registered = routes.map((r) => `${r.method} ${r.path}`).sort();
     // Built-ins (GET /health, GET /jobs/:id, POST /jobs/:id/cancel) are compiled inside
@@ -155,8 +157,10 @@ describe("docs match shipped code", () => {
   it("README has exactly one authenticated curl per endpoint (Bearer except /health)", () => {
     const curlBlocks = readme.split("```bash").slice(1);
     const bearerCurls = curlBlocks.filter((b) => b.includes("Authorization: Bearer"));
-    // 11 authenticated endpoints (everything but GET /health) + the health curl itself (no Bearer).
-    expect(bearerCurls.length).toBe(11);
+    // 13 authenticated curls: one per authed endpoint (everything but GET /health and the
+    // unauthenticated GET / dashboard load) — the conduct example block adds /conduct + the
+    // /jobs/:id/decision answer. GET /health has its own no-Bearer curl.
+    expect(bearerCurls.length).toBe(13);
     expect(readme).toMatch(/curl "http:\/\/\$HOST:\$PORT\/health"/);
   });
 

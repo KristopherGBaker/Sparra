@@ -35,8 +35,10 @@ export const API_ENDPOINTS = Object.freeze([
   Object.freeze({ method: "POST", path: "/resume" }),
   Object.freeze({ method: "POST", path: "/init" }),
   Object.freeze({ method: "POST", path: "/freeze" }),
+  Object.freeze({ method: "POST", path: "/conduct" }),
   Object.freeze({ method: "GET", path: "/jobs/:id" }),
   Object.freeze({ method: "POST", path: "/jobs/:id/cancel" }),
+  Object.freeze({ method: "POST", path: "/jobs/:id/decision" }),
   Object.freeze({ method: "POST", path: "/role" }),
   Object.freeze({ method: "POST", path: "/unit" }),
 ]);
@@ -275,6 +277,36 @@ export async function triggerPhase(deps, phase, params) {
   });
 }
 
+/**
+ * Build the `POST /conduct` body from ONLY the schema's fields — the prompt + root are required, the
+ * rest are copied only when present. An unknown/extra `params` key is never forwarded.
+ */
+function buildConductBody(p) {
+  return {
+    root: p.root,
+    prompt: p.prompt,
+    ...(p.auto !== undefined ? { auto: p.auto } : {}),
+    ...(p.mode !== undefined ? { mode: p.mode } : {}),
+    ...(p.maxUnits !== undefined ? { maxUnits: p.maxUnits } : {}),
+    ...(p.concurrency !== undefined ? { concurrency: p.concurrency } : {}),
+    ...(p.budget !== undefined ? { budget: p.budget } : {}),
+    ...(p.maxTurns !== undefined ? { maxTurns: p.maxTurns } : {}),
+  };
+}
+
+/**
+ * Trigger a `sparra conduct` run (`POST /conduct`) for the given `params` (from the target card's
+ * conduct controls). On success (`202 {jobId}`) records the job like any phase; a 409/401 routes
+ * through {@link dispatch}.
+ */
+export async function triggerConduct(deps, params) {
+  const body = buildConductBody(params || {});
+  const result = await apiCall("POST", "/conduct", { token: currentToken(deps), body, fetchImpl: deps.fetchImpl });
+  dispatch(deps, result, (data) => {
+    deps.view.recordJob({ phase: "conduct", root: body.root, jobId: data && data.jobId });
+  });
+}
+
 /** Trigger one ad-hoc `/role` run (the dashboard's "run role" summary readout). */
 export async function triggerRole(deps, params) {
   const p = params || {};
@@ -298,11 +330,60 @@ export async function triggerUnit(deps, params) {
   dispatch(deps, result, (data) => showUnitResult(deps, data));
 }
 
-/** Poll `GET /jobs/:id` → `view.renderJob(job)` (status + the already-redacted phase log verbatim —
- *  no further parsing happens here). */
+/** The ONLY fields a parked decision surfaces to the decision card — an ALLOWLIST, so a raw request
+ *  field (or holdout text) can never reach the view even if the server projection ever regressed. */
+const PENDING_DECISION_FIELDS = ["seq", "unit", "kind", "question", "options", "default", "expiresAt"];
+
+/** Project ONE `pendingDecisions` entry down to exactly {@link PENDING_DECISION_FIELDS} (allowlist
+ *  copy, never a spread). */
+function projectPendingDecision(d) {
+  const out = {};
+  if (d === null || typeof d !== "object") return out;
+  for (const field of PENDING_DECISION_FIELDS) {
+    if (hasOwn(d, field)) out[field] = d[field];
+  }
+  return out;
+}
+
+/** Re-project a job's `pendingDecisions` array (defense in depth over the server's projection) so the
+ *  view only ever sees allowlisted decision fields; other job fields (status, the already-redacted
+ *  log) pass through as today. */
+function projectJobForView(job) {
+  if (job === null || typeof job !== "object") return job;
+  if (!Array.isArray(job.pendingDecisions)) return job;
+  return { ...job, pendingDecisions: job.pendingDecisions.map(projectPendingDecision) };
+}
+
+/** Poll `GET /jobs/:id` → `view.renderJob(job)` (status, the already-redacted phase log verbatim, and
+ *  — for a conduct job — the holdout-safe projected `pendingDecisions`; no raw decision field crosses). */
 export async function pollJob(deps, jobId) {
   const result = await apiCall("GET", `/jobs/${jobId}`, { token: currentToken(deps), fetchImpl: deps.fetchImpl });
-  dispatch(deps, result, (data) => deps.view.renderJob(data));
+  dispatch(deps, result, (data) => deps.view.renderJob(projectJobForView(data)));
+}
+
+/**
+ * Answer a parked conduct decision (`POST /jobs/:id/decision`) with `{seq, answer, note?}` from the
+ * decision card. On success refreshes the job (so the answered decision drops out of `pendingDecisions`
+ * on the next projection); a 404/409/400/401 routes through {@link dispatch}. The body carries ONLY
+ * the schema's fields — no extra card state leaks into the request.
+ */
+export async function submitDecision(deps, jobId, params) {
+  const p = params || {};
+  const body = { seq: p.seq, answer: p.answer, ...(p.note !== undefined && p.note !== "" ? { note: p.note } : {}) };
+  const result = await apiCall("POST", `/jobs/${jobId}/decision`, {
+    token: currentToken(deps),
+    body,
+    fetchImpl: deps.fetchImpl,
+  });
+  // Handle the failure paths exactly like {@link dispatch}, but AWAIT the success refresh so the
+  // answered decision is reflected (dropped from `pendingDecisions`) before this call settles.
+  if (result.authError) return handleAuthError(deps);
+  if (result.locked) return handleLock(deps, result.data && result.data.jobId);
+  if (!result.ok) {
+    if (deps.view && typeof deps.view.showError === "function") deps.view.showError(result);
+    return;
+  }
+  await pollJob(deps, jobId);
 }
 
 /** `POST /jobs/:id/cancel` → `view.renderJob(job)` (now `status: "canceled"`). */

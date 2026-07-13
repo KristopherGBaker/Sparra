@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { loadCtxForRole, type Ctx } from "../src/context.ts";
 import { cmdConduct, cmdConductDecide, parseConductFlags } from "../src/phases/conduct.ts";
 import { parse } from "../src/util/args.ts";
 import { runConduct, type ConductOptions, type ConductResult } from "../src/conduct/run.ts";
+import { formatRunStartAnnouncement, parseRunStartAnnouncement, RUN_START_RE } from "../src/conduct/announce.ts";
 import type { ParentSummary, RunRoleSpec } from "../conductors/core/index.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
 
@@ -36,6 +37,69 @@ async function makeCtx(dir: string): Promise<Ctx> {
 
 afterEach(() => {
   process.exitCode = 0;
+});
+
+describe("conduct — run-START announcement (assertion 4, U3 bridge parse)", () => {
+  it("format/parse round-trip via the shared RUN_START_RE the bridge parser uses", () => {
+    const runId = "conduct-20260713-abc";
+    const runDir = "/tmp/proj/.sparra/conduct/conduct-20260713-abc";
+    const line = formatRunStartAnnouncement(runId, runDir);
+    expect(RUN_START_RE.test(line)).toBe(true);
+    expect(parseRunStartAnnouncement(line)).toEqual({ runId, runDir });
+  });
+
+  it("parses a logger-decorated line (the `› ` prefix info() prepends)", () => {
+    const parsed = parseRunStartAnnouncement("› " + formatRunStartAnnouncement("conduct-x", "/a/b c"));
+    expect(parsed).toEqual({ runId: "conduct-x", runDir: "/a/b c" });
+  });
+
+  it("a non-announcement line parses to undefined", () => {
+    expect(parseRunStartAnnouncement("conduct: run conduct-x → /a/b")).toBeUndefined(); // run-END, not run-start
+    expect(parseRunStartAnnouncement("some other log line")).toBeUndefined();
+  });
+
+  it("runConduct emits the announcement BEFORE any unit work (captured on stdout, bridge-parseable)", async () => {
+    const dir = tmpdir();
+    const prev = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const ctx = await makeCtx(dir);
+      // A decomposer that yields ZERO units → runConduct returns right after decompose, but the
+      // announcement is emitted BEFORE decompose, so it must already be on stdout.
+      const emptyDecomposer = async (): Promise<RunResult> => ({
+        ok: true,
+        subtype: "success",
+        resultText: "```json\n[]\n```",
+        sessionId: "d",
+        costUsd: 0,
+        tokens: 1,
+        numTurns: 1,
+        hitMaxTurns: false,
+        hitBudget: false,
+        errors: [],
+        tracePath: "",
+      });
+      const res = await runConduct(
+        ctx,
+        { prompt: "x", maxUnits: 1, concurrency: 1, dryRun: false },
+        { runSessionFn: emptyDecomposer },
+      );
+      const joined = writes.join("");
+      expect(joined).toContain(formatRunStartAnnouncement(res.runId, res.runDir));
+      const line = joined.split("\n").find((l) => l.includes("run-start"));
+      expect(parseRunStartAnnouncement(line!)).toEqual({ runId: res.runId, runDir: res.runDir });
+    } finally {
+      spy.mockRestore();
+      if (prev === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("parseConductFlags — validation (no side effects)", () => {

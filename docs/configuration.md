@@ -36,8 +36,9 @@ conduct:                      # `sparra conduct` (headless conductor) intelligen
     surface: park-timeout     # park (wait for a human) | park-timeout (auto-resolve after timeoutSec) | auto (never park; --auto)
     timeoutSec: 1800          # seconds a parked decision waits before the brain/deterministic policy decides
 # The conductor brain uses `roles.conductor` (default claude/sonnet/medium) and sees ONLY holdout-safe
-# ParentSummary-derived material. Answer a parked decision from another terminal with
-# `sparra conduct --decide <runId> <seq> <answer> [--note "…"]`.
+# ParentSummary-derived material. Answer a parked decision from the file, an inline TTY prompt,
+# `sparra conduct --decide <runId> <seq> <answer> [--note "…"]` in another terminal, OR the HTTP bridge
+# (`POST /jobs/:id/decision`) — see docs/http-bridge.md.
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions

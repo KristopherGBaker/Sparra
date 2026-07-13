@@ -38,18 +38,49 @@ duplicated there.
 | `POST /build` | `{ root, fresh?, only?, step?, budget?, maxTurns? }` | `202 { jobId }` |
 | `POST /reflect` | `{ root, apply? }` | `202 { jobId }` |
 | `POST /resume` | `{ root }` | `202 { jobId }` |
+| `POST /conduct` | `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns? }` | `202 { jobId }` |
+| `POST /jobs/:id/decision` | `{ seq, answer, note? }` | `200 { ok, seq, chosen }` or `404`/`409`/`400` |
 | `POST /role` | `{ root\|workspace, kind, brief?, briefPath?, contractPath?, holdoutPath?, backend?, model?, effort?, worktree?, unitWorktree?, budget?, maxTurns? }` | `200 ParentSummary` (verbatim, holdout-redacted) |
 | `POST /unit` | `{ root\|workspace, brief?, briefPath?, contractPath?, holdoutPath?, backend?, generatorModel?, evaluatorModel?, effort?, worktree?, unitWorktree?, budget?, maxTurns?, maxRounds?, contractRounds?, proceedIfNotAgreed? }` | `200 UnitProjection` (`{ outcome, contract: { agreed, rounds }, cycle? }`) |
-| `GET /jobs/:id` | — | `200 Job` (`{ id, kind, root?, status, log, exitCode?, result?, createdAt }`) or `404` |
+| `GET /jobs/:id` | — | `200 Job` (`{ id, kind, root?, status, log, exitCode?, result?, createdAt, pendingDecisions? }`) or `404` |
 | `POST /jobs/:id/cancel` | — | `200 Job` (now `status: "canceled"`) or `404` |
 
 Every route but `GET /health` and `GET /` (the dashboard page load) requires
 `Authorization: Bearer <$SPARRA_BRIDGE_TOKEN>`; a missing/wrong token is `401` before routing details
 are revealed. Every strict-schema body rejects unknown
 fields (`400`). A request body over 1 MiB is `413`; malformed JSON is `400`. `/init`, `/freeze`,
-`/build`, `/reflect`, `/resume`, `/plan`, `/role` (writer kinds only), and `/unit` each acquire the
-per-target mutation lock (see below) — a second writer for a target already in flight gets `409`
-naming the holder's `jobId`.
+`/build`, `/reflect`, `/resume`, `/conduct`, `/plan`, `/role` (writer kinds only), and `/unit` each
+acquire the per-target mutation lock (see below) — a second writer for a target already in flight gets
+`409` naming the holder's `jobId`.
+
+## Conduct over the bridge + remote decisions
+
+`POST /conduct` triggers `sparra conduct "<prompt>"` as an async job exactly like the other phase
+triggers: the argv is built server-side from the validated body only (`conduct <prompt> [--auto]
+[--brain <mode>] [--max-units N] [--concurrency N] [--budget N] [--max-turns N]`), the child runs with
+`cwd` = the guarded root, and it holds the per-target lock while it runs. Numeric fields are validated
+to CLI-meaningful values (positive integers for `maxUnits`/`concurrency`/`maxTurns`, a non-negative
+number for `budget`), and `mode` ∈ `hybrid|llm` — an out-of-range value is a `400`, not a spawn.
+
+A conduct run parks its important decisions (U2's decision engine) under
+`.sparra/conduct/<runId>/decisions/`. The bridge learns the run's `runId`/`runDir` by parsing a stable
+run-START line the conduct phase prints at run start, then surfaces the still-PARKED decisions on
+`GET /jobs/:id` as a `pendingDecisions` array — projected to exactly
+`{ seq, unit, kind, question, options, default, expiresAt }` (nothing else from the request file
+crosses; the job stays `running` while parked). Answer one remotely with:
+
+```bash
+curl -s -X POST $H $J -d '{"seq":1,"answer":"finalize"}' "$SPARRA_BRIDGE_URL/jobs/$JOB_ID/decision"
+```
+
+The answer is validated against the parked request's `options` (off-menu → `400`), resolved
+**in-process** via the same engine functions the CLI's `conduct --decide` uses (`writeDecisionAnswer` +
+`applyFileDecisionToRunState`) — the bridge never shells out and never reimplements the
+`<seq>.decision.json` write. An unknown job/run/seq is `404`; a second answer for a resolved seq is
+`409` (the first answer stands). The audit line for a decision records only the `seq` + the chosen
+option key + result — never the free-text `note`. This is holdout-safe by construction: the decision
+requests/answers and job projections are all `ParentSummary`-derived, and no endpoint reads a run
+artifact beyond the decisions dir + the `run.json` projection.
 
 ## Configuration (`bridge.yaml`)
 
@@ -117,8 +148,10 @@ never parse a raw role envelope, and never open a holdout file in-process:
   same as every other conductor built on `conductors/core`.
 - **No endpoint reads an arbitrary file and returns its content.** There is no file-read endpoint at
   all; `GET /jobs/:id` returns only the job's own streamed subprocess log (Sparra's own
-  already-redacted phase log, not a raw file), and `GET /projects` returns only the `phase` control
-  field of `.sparra/state.json` plus a static hint string — never any other state content.
+  already-redacted phase log, not a raw file) plus — for a conduct job — the `pendingDecisions`
+  projection read solely from the run's `decisions/` dir (each field `ParentSummary`-derived by
+  construction), and `GET /projects` returns only the `phase` control field of `.sparra/state.json`
+  plus a static hint string — never any other state content.
 
 ## Job model
 

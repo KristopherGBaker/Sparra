@@ -9,6 +9,7 @@
  * surface, without ever editing `server.ts`'s core routing/auth logic for any OTHER route.
  */
 
+import { createConductRoutes, type ConductRouteDeps } from "./handlers/conduct.ts";
 import { createConductorRoutes, type ConductorRouteDeps } from "./handlers/conductor.ts";
 import { createDashboardRoutes, type DashboardRouteDeps } from "./handlers/dashboard.ts";
 import { createPhaseRoutes, type PhaseRouteDeps } from "./handlers/phases.ts";
@@ -45,6 +46,11 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
     ...(deps.sparraBin !== undefined ? { sparraBin: deps.sparraBin } : {}),
     ...(deps.statusSource !== undefined ? { statusSource: deps.statusSource } : {}),
   };
+  const conductDeps: ConductRouteDeps = {
+    lock,
+    ...(deps.spawn !== undefined ? { spawn: deps.spawn } : {}),
+    ...(deps.sparraBin !== undefined ? { sparraBin: deps.sparraBin } : {}),
+  };
   const conductorDeps: ConductorRouteDeps = {
     lock,
     ...(deps.runRole !== undefined ? { runRole: deps.runRole } : {}),
@@ -56,6 +62,7 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
 
   return [
     ...createPhaseRoutes(phaseDeps),
+    ...createConductRoutes(conductDeps),
     ...createConductorRoutes(conductorDeps),
     ...createDashboardRoutes(dashboardDeps),
   ];

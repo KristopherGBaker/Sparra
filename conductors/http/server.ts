@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { appendAudit, createFileAuditSink, UNMATCHED_ROUTE, type AuditEntry } from "./audit.ts";
 import { checkBearer, requireBridgeToken } from "./auth.ts";
 import { loadBridgeConfig, resolveBind, type BridgeConfig } from "./config.ts";
-import { JobStore } from "./jobs.ts";
+import { readPendingDecisions } from "./decisions.ts";
+import { JobStore, type Job } from "./jobs.ts";
 import { matchedAllowlistRoot, PathGuardError } from "./paths.ts";
 import { registerBridgeRoutes, type BridgeRouteDeps } from "./register.ts";
 
@@ -46,9 +47,28 @@ export interface RouteResult {
   html?: string;
   root?: string;
   jobId?: string;
+  /** Decision-route audit fields: the parked decision's `seq` and the CHOSEN option key (holdout-safe
+   *  by construction — one of the request's own `options`). Threaded into the request's single audit
+   *  line; a free-text `note` is NEVER carried here. */
+  seq?: number;
+  decision?: string;
 }
 
 export type RouteHandler = (ctx: RouteContext) => RouteResult | Promise<RouteResult>;
+
+/**
+ * Project a {@link Job} for `GET /jobs/:id`: the job as-is, plus (for a `conduct` job whose run has
+ * been announced) its `pendingDecisions` read from the run's decisions dir. `runDir`/`runId` are
+ * internal routing fields and are dropped from the wire projection — only the holdout-safe
+ * `pendingDecisions` allowlist is added.
+ */
+function projectJob(job: Job, roots: string[]): Record<string, unknown> {
+  const { runDir, runId: _runId, ...rest } = job;
+  const out: Record<string, unknown> = { ...rest };
+  // `readPendingDecisions` re-asserts the realpath allowlist guard on `runDir` (symlink-escape safe).
+  if (runDir !== undefined) out.pendingDecisions = readPendingDecisions(runDir, roots);
+  return out;
+}
 
 /**
  * A single route registration contributed via the {@link ServerDeps.routes} seam.
@@ -133,11 +153,11 @@ function builtinRoutes(): Array<RouteDefinition & { public?: boolean }> {
     {
       method: "GET",
       path: "/jobs/:id",
-      handler: ({ params, jobs }) => {
+      handler: ({ params, jobs, config }) => {
         const id = params.id!;
         const job = jobs.getJob(id);
         if (!job) return { status: 404, body: { error: "job not found" }, jobId: id };
-        return { status: 200, body: job, jobId: id, ...(job.root ? { root: job.root } : {}) };
+        return { status: 200, body: projectJob(job, config.roots), jobId: id, ...(job.root ? { root: job.root } : {}) };
       },
     },
     {
@@ -254,6 +274,8 @@ export function createRequestListener(
     let auditRoute = UNMATCHED_ROUTE;
     let auditRoot: string | undefined;
     let auditJobId: string | undefined;
+    let auditSeq: number | undefined;
+    let auditDecision: string | undefined;
     let status = 500;
     const emit = () => {
       const entry: AuditEntry = { remote, method, route: auditRoute, result: status };
@@ -266,6 +288,8 @@ export function createRequestListener(
         auditRoot !== undefined ? matchedAllowlistRoot(auditRoot, deps.config.roots) : undefined;
       if (matchedRoot !== undefined) entry.root = matchedRoot;
       if (auditJobId !== undefined) entry.jobId = auditJobId;
+      if (auditSeq !== undefined) entry.seq = auditSeq;
+      if (auditDecision !== undefined) entry.decision = auditDecision;
       deps.audit(entry);
     };
 
@@ -351,6 +375,8 @@ export function createRequestListener(
       });
       auditRoot = result.root;
       auditJobId = result.jobId;
+      auditSeq = result.seq;
+      auditDecision = result.decision;
       status = result.status;
       sendResult(res, result);
     } catch (err) {

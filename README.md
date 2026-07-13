@@ -68,7 +68,8 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 > machinery, writing `.sparra/conduct/<runId>/` and generating each unit on its own worktree (nothing
 > lands on your branch). Two brain modes (`--brain hybrid` = deterministic loop + an LLM conductor at
 > the judgment points, `--brain llm` = the brain drives turn-by-turn) plus a decision engine that
-> parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` to answer).
+> parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` — or the HTTP
+> bridge's `POST /jobs/:id/decision` — to answer).
 > Flags + artifacts + safety properties: [docs/conduct.md](docs/conduct.md).
 
 > **Remote conductor (HTTP bridge).** Trigger `sparra` phases and role-runs on another Mac over

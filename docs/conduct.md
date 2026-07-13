@@ -84,8 +84,16 @@ run's poller looks **and** transitions that `<seq>`'s `run.json` record to `reso
 The write is **exclusive** — an already-resolved decision cannot be overwritten (a second `--decide`
 for the same `<seq>` exits non-zero, the first answer stands), so one sequence yields exactly one
 durable resolution whether the running poller or `--decide` resolves it. An unknown run or unparked
-`<seq>` exits non-zero with a naming error and spends nothing. (This is also the call target of the U3
-HTTP bridge.)
+`<seq>` exits non-zero with a naming error and spends nothing.
+
+**Remote (HTTP bridge).** The same parked decisions are answerable over the HTTP bridge without shell
+access: `POST /conduct` triggers a run, `GET /jobs/:id` surfaces the run's still-parked
+`pendingDecisions` (`{seq, unit, kind, question, options, default, expiresAt}`), and
+`POST /jobs/:id/decision {seq, answer, note?}` (or `bridge decide <jobId> <seq> <answer>`) answers one —
+resolved **in-process** through the very same `writeDecisionAnswer` + `applyFileDecisionToRunState`
+engine functions this CLI uses (no shell-out, no reimplemented protocol). So a parked decision can be
+answered from the file, an inline TTY prompt, `conduct --decide` in another terminal, **or** the bridge
+over the network. See [docs/http-bridge.md](http-bridge.md#conduct-over-the-bridge--remote-decisions).
 
 A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--concurrency`/`--max-turns`,
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the

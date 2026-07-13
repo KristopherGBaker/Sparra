@@ -13,6 +13,7 @@ import {
 } from "../../conductors/core/index.ts";
 import { runRole as coreRunRole } from "../../conductors/core/index.ts";
 import { newRunId, type Ctx } from "../context.ts";
+import { formatRunStartAnnouncement } from "./announce.ts";
 import { loadPrompt } from "../prompts.ts";
 import { mergedBuildEnv } from "../build/env.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
@@ -159,6 +160,11 @@ export async function runConduct(
   const runDir = conductRunDir(ctx.paths.dir, runId);
   const writer = new RunStateWriter(runDir);
   const now = () => new Date().toISOString();
+
+  // Run-START announcement (BEFORE any unit work): a stable, documented `runId → runDir` line the
+  // HTTP bridge parses from child stdout to associate a spawned conduct job with its run — the
+  // run-END `run: <runId> → <runDir>` summary lands only after every unit has finished.
+  info(formatRunStartAnnouncement(runId, runDir));
 
   const state: ConductRunState = {
     runId,

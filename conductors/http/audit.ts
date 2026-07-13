@@ -39,6 +39,14 @@ export interface AuditEntry {
   root?: string;
   /** Server-generated job id; char-classed + length-capped defensively on format. */
   jobId?: string;
+  /** A conduct decision's per-run sequence number (decision route only). */
+  seq?: number;
+  /**
+   * A conduct decision's CHOSEN option key (decision route only) — holdout-safe by construction (one
+   * of the parked request's own `options`). Char-classed + length-capped like a job id. A free-text
+   * decision `note` is NEVER an audit field.
+   */
+  decision?: string;
   /** HTTP status code or a short outcome label. */
   result: string | number;
 }
@@ -51,6 +59,9 @@ const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "
 
 /** Longest job-id we retain in the audit line; a generated id is far shorter than this. */
 const MAX_JOB_ID_LEN = 64;
+
+/** Longest chosen-option key we retain; a judgment option (`finalize`, `abandon`, …) is far shorter. */
+const MAX_DECISION_LEN = 64;
 
 function sanitizeMethod(method: string): string {
   const up = typeof method === "string" ? method.toUpperCase() : "";
@@ -83,6 +94,12 @@ export function formatAuditLine(entry: AuditEntry, now: () => Date = () => new D
   };
   if (entry.root !== undefined) record.root = entry.root;
   if (entry.jobId !== undefined) record.jobId = sanitizeJobId(entry.jobId);
+  if (entry.seq !== undefined && Number.isFinite(entry.seq)) record.seq = entry.seq;
+  // The chosen option key is server-validated (one of the request's options) but char-classed +
+  // capped defensively, exactly like a job id — it reaches us via the request body.
+  if (entry.decision !== undefined) {
+    record.decision = entry.decision.replace(/[^A-Za-z0-9_-]/g, "").slice(0, MAX_DECISION_LEN);
+  }
   return JSON.stringify(record);
 }
 

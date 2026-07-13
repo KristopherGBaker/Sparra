@@ -60,7 +60,7 @@ ${color.bold("Commands")}
   conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] [--brain <hybrid|llm>] [--auto] [--dry-run]
                                                 headless conductor: decompose a prompt into 1..N units, then per unit negotiate contract → generate → cross-model evaluate → decide, all through the isolated role-run machinery (works without 'sparra init'). Writes .sparra/conduct/<runId>/ (run.json + per-unit briefs/contracts); each unit generates on its own sparra/<name> worktree — nothing lands on your branch. --max-units clamps the decomposition (default 4); --concurrency bounds units run at once (default 2); --budget/--max-turns cap each role-run (--budget 0 = unlimited); --brain picks the conductor mode (hybrid = deterministic loop + LLM at judgment points [default], llm = brain drives turn-by-turn); --auto never parks a decision (the brain decides everything); --dry-run decomposes + writes briefs only (no role spend beyond the decomposer)
   conduct --decide <runId> <seq> <answer> [--note …]
-                                                answer a parked conductor decision from another terminal: writes .sparra/conduct/<runId>/decisions/<seq>.decision.json where the run's poller looks (unknown run/seq → non-zero, no spend)
+                                                answer a parked conductor decision from another terminal (or over the HTTP bridge via POST /jobs/:id/decision): writes .sparra/conduct/<runId>/decisions/<seq>.decision.json where the run's poller looks (unknown run/seq → non-zero, no spend)
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 

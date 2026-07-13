@@ -59,6 +59,20 @@ bridge() {
               _bridge_post /plan "$(jq -cn --arg r "$1" --arg c "$2" '{root:$r,content:$c}')" ;;
     # conductor endpoints (sync -> summary): pass a full JSON body
     role|unit) _bridge_post "/$cmd" "$1" ;;
+    # conduct: bridge conduct <root> <prompt> [extra-json] -> {jobId}; merges {root,prompt} with extras.
+    # The extra-json arg is OPTIONAL and defaults to an empty object; jq/body-construction failures are
+    # propagated (return 1) rather than sending a bodyless POST.
+    conduct)  _bridge_need || return 1
+              local cbody cextra="${3:-}"
+              [ -n "$cextra" ] || cextra='{}'
+              cbody=$(jq -cn --arg r "$1" --arg p "$2" --argjson x "$cextra" '{root:$r,prompt:$p} + $x') || {
+                echo "bridge conduct: invalid extra-json (must be a JSON object, e.g. '{\"budget\":5}')" >&2; return 1; }
+              _bridge_post /conduct "$cbody" ;;
+    # decide: bridge decide <jobId> <seq> <answer> [note] -> answer a parked conduct decision.
+    decide)   _bridge_need || return 1
+              local dbody
+              dbody=$(jq -cn --argjson s "$2" --arg a "$3" --arg n "${4:-}" '{seq:$s,answer:$a} + (if $n=="" then {} else {note:$n} end)') || return 1
+              _bridge_post "/jobs/$1/decision" "$dbody" ;;
     job)      _bridge_get "/jobs/$1" ;;
     cancel)   _bridge_post "/jobs/$1/cancel" ;;
     # watch <jobId> [interval] — poll until the job leaves "running", print status+exitCode.
@@ -82,9 +96,11 @@ bridge <command>
   projects                       GET /projects
   build|reflect|resume|init|freeze <root> [extra-json]   POST phase -> {jobId}
   plan <root> <plan-md-text>     POST /plan (needs allowRemotePlan)
+  conduct <root> <prompt> [extra-json]   POST /conduct -> {jobId}
+  decide <jobId> <seq> <answer> [note]   POST /jobs/:id/decision (answer a parked decision)
   role <json>                    POST /role  -> ParentSummary
   unit <json>                    POST /unit  -> UnitProjection
-  job <jobId>                    GET /jobs/:id
+  job <jobId>                    GET /jobs/:id  (conduct jobs carry pendingDecisions)
   watch <jobId> [interval=5]     poll until terminal (exit 0 iff succeeded)
   cancel <jobId>                 POST /jobs/:id/cancel
 env: SPARRA_BRIDGE_URL, SPARRA_BRIDGE_TOKEN

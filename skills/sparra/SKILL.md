@@ -107,8 +107,9 @@ evaluate → decide, all through the isolated `role run … --json` machinery. F
 its own `sparra/<name>` worktree — nothing lands on your branch, and `run.json` reports each accepted
 unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
-decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from another
-terminal with `sparra conduct --decide <runId> <seq> <answer>`. Full reference:
+decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
+an inline TTY prompt, `sparra conduct --decide <runId> <seq> <answer>` in another terminal, or the HTTP
+bridge (`POST /jobs/:id/decision`). Full reference:
 **[docs/conduct.md](../../docs/conduct.md)**.
 
 **Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives

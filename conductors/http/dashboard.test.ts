@@ -21,6 +21,8 @@ import {
   refreshProjects,
   showRoleResult,
   showUnitResult,
+  submitDecision,
+  triggerConduct,
   triggerPhase,
   triggerRole,
   triggerUnit,
@@ -98,8 +100,10 @@ describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point",
         "POST /resume",
         "POST /init",
         "POST /freeze",
+        "POST /conduct",
         "GET /jobs/:id",
         "POST /jobs/:id/cancel",
+        "POST /jobs/:id/decision",
         "POST /role",
         "POST /unit",
       ].sort(),
@@ -275,6 +279,123 @@ describe("triggerPhase — request schema pinned per phase, Bearer on every call
     expect(JSON.stringify(init.headers ?? {})).not.toContain("undefined");
     expect(view.showReauth).toHaveBeenCalled();
     expect(storage.clearToken).toHaveBeenCalled();
+  });
+});
+
+// --- conduct trigger + decision card flow (U3) ---------------------------------------------------
+
+describe("triggerConduct — body built only from schema fields; records job", () => {
+  it("POST /conduct — exact body (only present fields), Bearer, records a conduct job", async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return jsonResponse(202, { jobId: "cjob-1" });
+    });
+    const storage = fakeStorage(TOKEN);
+    const view = fakeView();
+    // Include an UNKNOWN extra field — it must NOT be forwarded (body built from schema fields only).
+    await triggerConduct({ fetchImpl, storage, view }, { root: "/a", prompt: "build X", auto: true, mode: "llm", maxUnits: 3, budget: 5, evil: "x" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("/conduct");
+    expect((seen[0]!.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ root: "/a", prompt: "build X", auto: true, mode: "llm", maxUnits: 3, budget: 5 });
+    expect(view.recordJob).toHaveBeenCalledWith({ phase: "conduct", root: "/a", jobId: "cjob-1" });
+  });
+
+  it("minimal params → only {root, prompt}", async () => {
+    const seen: Array<{ init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push({ init });
+      return jsonResponse(202, { jobId: "cjob-2" });
+    });
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, { root: "/a", prompt: "hi" });
+    expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ root: "/a", prompt: "hi" });
+  });
+
+  it("a 409 (target busy) routes to the lock toast, not recordJob", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(409, { error: "busy", jobId: "holder" }));
+    const view = fakeView();
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view }, { root: "/a", prompt: "x" });
+    expect(view.showLockToast).toHaveBeenCalledWith("holder");
+    expect(view.recordJob).not.toHaveBeenCalled();
+  });
+});
+
+describe("pollJob — pendingDecisions drive the view, projected (no raw field crosses)", () => {
+  it("a job with pendingDecisions is projected to the allowlist fields before renderJob", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(200, {
+        id: "cjob-1",
+        kind: "conduct",
+        status: "running",
+        log: "",
+        createdAt: 1,
+        pendingDecisions: [
+          // a planted extra field must be dropped by the client projection too:
+          { seq: 1, unit: "unit-001", kind: "unit-exhausted", question: "Q?", options: ["finalize", "abandon"], default: "finalize", expiresAt: "z", secret: "CLIENT-LEAK" },
+        ],
+      }),
+    );
+    const view = fakeView();
+    await pollJob({ fetchImpl, storage: fakeStorage(TOKEN), view }, "cjob-1");
+    expect(view.renderJob).toHaveBeenCalledTimes(1);
+    const arg = view.renderJob.mock.calls[0]![0] as { status: string; pendingDecisions: Array<Record<string, unknown>> };
+    expect(arg.status).toBe("running");
+    expect(arg.pendingDecisions).toEqual([
+      { seq: 1, unit: "unit-001", kind: "unit-exhausted", question: "Q?", options: ["finalize", "abandon"], default: "finalize", expiresAt: "z" },
+    ]);
+    expect(JSON.stringify(arg.pendingDecisions)).not.toContain("CLIENT-LEAK");
+  });
+
+  it("a job without pendingDecisions passes through unchanged", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { id: "j", kind: "build", status: "running", log: "", createdAt: 1 }));
+    const view = fakeView();
+    await pollJob({ fetchImpl, storage: fakeStorage(TOKEN), view }, "j");
+    expect(view.renderJob).toHaveBeenCalledWith({ id: "j", kind: "build", status: "running", log: "", createdAt: 1 });
+  });
+});
+
+describe("submitDecision — posts {seq, answer, note?} and refreshes", () => {
+  it("posts to /jobs/:id/decision with the exact body, then re-polls the job on success", async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      if (url === "/jobs/cjob-1/decision") return jsonResponse(200, { ok: true, seq: 1, chosen: "abandon" });
+      return jsonResponse(200, { id: "cjob-1", kind: "conduct", status: "running", log: "", createdAt: 1, pendingDecisions: [] });
+    });
+    const view = fakeView();
+    await submitDecision({ fetchImpl, storage: fakeStorage(TOKEN), view }, "cjob-1", { seq: 1, answer: "abandon", note: "why" });
+    expect(seen[0]!.url).toBe("/jobs/cjob-1/decision");
+    expect(seen[0]!.init.method).toBe("POST");
+    expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ seq: 1, answer: "abandon", note: "why" });
+    // refresh happened (a second call to GET /jobs/:id), and the answered job re-rendered.
+    expect(seen[1]!.url).toBe("/jobs/cjob-1");
+    expect(view.renderJob).toHaveBeenCalled();
+  });
+
+  it("an empty note is omitted from the body", async () => {
+    const seen: Array<{ init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      seen.push({ init });
+      if (url.endsWith("/decision")) return jsonResponse(200, { ok: true });
+      return jsonResponse(200, { id: "j", status: "running", pendingDecisions: [] });
+    });
+    await submitDecision({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, "j", { seq: 2, answer: "finalize", note: "" });
+    expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ seq: 2, answer: "finalize" });
+  });
+
+  it("a 409 (already resolved) routes to the lock toast; a 401 clears the token", async () => {
+    const fetch409 = vi.fn(async () => jsonResponse(409, { error: "already resolved", jobId: "j" }));
+    const view409 = fakeView();
+    await submitDecision({ fetchImpl: fetch409, storage: fakeStorage(TOKEN), view: view409 }, "j", { seq: 1, answer: "finalize" });
+    expect(view409.showLockToast).toHaveBeenCalled();
+
+    const fetch401 = vi.fn(async () => jsonResponse(401, { error: "unauthorized" }));
+    const storage = fakeStorage(TOKEN);
+    const view401 = fakeView();
+    await submitDecision({ fetchImpl: fetch401, storage, view: view401 }, "j", { seq: 1, answer: "finalize" });
+    expect(storage.clearToken).toHaveBeenCalled();
+    expect(view401.showReauth).toHaveBeenCalled();
   });
 });
 
@@ -573,5 +694,26 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     // The controller's real triggerRole (not a bespoke fetch) is what the page's own run-role wiring
     // calls — proven by the exported name appearing in the inlined client source.
     expect(body).toMatch(/function triggerRole\(/);
+  });
+
+  it("exposes a conduct trigger (prompt + mode + auto + max-units) wired to the real controller", () => {
+    const body = servedBody();
+    expect(body).toMatch(/data-action=["']run-conduct["']/);
+    expect(body).toContain("conduct-prompt");
+    expect(body).toContain("conduct-mode-select");
+    expect(body).toMatch(/data-action=["']toggle-conduct-auto["']/);
+    expect(body).toMatch(/data-action=["']step-units["']/);
+    // the page's run-conduct wiring calls the exported controller, not a bespoke fetch.
+    expect(body).toMatch(/function triggerConduct\(/);
+    expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
+  });
+
+  it("exposes the decision card + answer flow (answer-decision data-action → submitDecision) with an awaiting badge", () => {
+    const body = servedBody();
+    expect(body).toMatch(/data-action=["']answer-decision["']/);
+    expect(body).toContain("decision-card");
+    expect(body).toContain("badge-awaiting"); // distinct pending visual state
+    // the answer flow uses the real controller (POST /jobs/:id/decision), not a bespoke fetch.
+    expect(body).toMatch(/function submitDecision\(/);
   });
 });

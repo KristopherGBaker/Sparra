@@ -383,6 +383,11 @@
   .badge-succeeded{ color: var(--pass); border-color: rgba(87,217,121,.4); }
   .badge-failed   { color: var(--fail); border-color: rgba(255,95,87,.4); }
   .badge-canceled { color: var(--cancel); border-color: var(--line); }
+  /* awaiting a parked conduct decision — distinct phosphor accent (not color alone: the label text
+     reads "awaiting decision", and the job dot gets a ring, so it's conveyed by shape+text too). */
+  .badge-awaiting { color: var(--brand); border-color: var(--brand); font-weight: 700; }
+  .st.awaiting { background: var(--brand); box-shadow: 0 0 0 3px rgba(53,214,224,.22); }
+  .job.awaiting { border-color: var(--brand); }
 
   /* ---------- detail stage ---------- */
   .stage { flex: 1; overflow-y: auto; padding: 16px; }
@@ -404,6 +409,36 @@
   .status-tag.running  { color: var(--run); border-color: rgba(246,169,68,.4); background: var(--run-glow); }
   .status-tag.succeeded{ color: var(--pass); border-color: rgba(87,217,121,.4); background: var(--pass-glow); }
   .status-tag.failed   { color: var(--fail); border-color: rgba(255,95,87,.4); background: var(--fail-glow); }
+
+  /* ---------- conduct controls (target card) ---------- */
+  .conduct-row { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .conduct-row .conduct-prompt {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 42px;
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 9px; font-size: 11px;
+  }
+  .conduct-row .conduct-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .conduct-row .conduct-mode-select {
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 5px;
+    padding: 4px 6px; font-size: 11px;
+  }
+
+  /* ---------- decision card (parked conduct decision) ---------- */
+  .decision-card {
+    border: 1px solid var(--brand); border-radius: var(--radius); background: var(--panel);
+    padding: 12px 13px; margin-bottom: 14px;
+  }
+  .decision-card .dc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .decision-card .dc-kicker {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--brand); font-weight: 700;
+  }
+  .decision-card .dc-unit { font-size: 10px; color: var(--txt-3); }
+  .decision-card .dc-question { font-size: 13px; color: var(--txt); margin: 8px 0; line-height: 1.4; }
+  .decision-card .dc-note {
+    width: 100%; box-sizing: border-box; background: var(--bg); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 8px; font-size: 11px; margin-bottom: 8px;
+  }
+  .decision-card .dc-options { display: flex; flex-wrap: wrap; gap: 8px; }
 
   /* metrics strip */
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
@@ -738,6 +773,10 @@ const state = {
   maxTurns: 80,
   fresh: false,
   applyReflect: false,
+  maxUnits: 4,           // conduct: clamp on the decomposition
+  conductMode: 'hybrid', // conduct: --brain hybrid | llm
+  conductAuto: false,    // conduct: --auto (never park a decision)
+  decisionNote: '',      // decision card: optional note for POST /jobs/:id/decision
   pollTimer: null,
 };
 
@@ -881,6 +920,26 @@ function renderTargets() {
           </select>
           <button class="btn" data-action="run-role" data-root="${escapeHtml(t.root)}">${IC.check} run role</button>
         </div>
+        <div class="conduct-row">
+          <textarea class="mono conduct-prompt" rows="2" placeholder="conduct prompt — one line drives decompose → per-unit contract → generate → evaluate → decide"></textarea>
+          <div class="conduct-ctrls">
+            <select class="mono conduct-mode-select" data-action="set-conduct-mode">
+              ${['hybrid','llm'].map((m) => `<option value="${m}" ${state.conductMode===m?'selected':''}>brain: ${m}</option>`).join('')}
+            </select>
+            <div class="ctrl">
+              <label>max units</label>
+              <div class="stepper">
+                <button data-action="step-units" data-delta="-1">−</button>
+                <input class="mono units-input" data-action="set-units" value="${state.maxUnits}"/>
+                <button data-action="step-units" data-delta="1">+</button>
+              </div>
+            </div>
+            <div class="toggle-fresh ${state.conductAuto?'on':''}" data-action="toggle-conduct-auto">
+              <span class="switch"></span> auto — never park a decision
+            </div>
+            <button class="btn primary" data-action="run-conduct" data-root="${escapeHtml(t.root)}">conduct</button>
+          </div>
+        </div>
         <div class="controls">
           <div class="ctrl">
             <label>budget · usd</label>
@@ -916,6 +975,11 @@ function stepTurns(d){
   const input = document.querySelector('.turns-input');
   if (input) input.value = state.maxTurns;
 }
+function stepUnits(d){
+  state.maxUnits=Math.max(1,state.maxUnits+d);
+  const input = document.querySelector('.units-input');
+  if (input) input.value = state.maxUnits;
+}
 
 function selectTarget(root){ state.selectedRoot=root; renderTargets(); }
 
@@ -931,6 +995,23 @@ function trigger(root, phase){
 /** Ad-hoc `POST /unit` — the full contract → generate → evaluate → decide cycle for `root`. */
 function runUnit(root){
   triggerUnit(controllerDeps(), { root, budget: state.budget, maxTurns: state.maxTurns });
+}
+
+/** `POST /conduct` — decompose the prompt into units and drive each through the loop. The prompt is
+ *  read from the card's textarea at click time; mode/auto/maxUnits/budget come from the card controls.
+ *  An empty prompt is a no-op toast (the server would 400 it — surface it locally first). */
+function runConduct(root){
+  const ta = document.querySelector('.conduct-prompt');
+  const prompt = (ta && ta.value || '').trim();
+  if (!prompt) { toast('<span class="code">conduct</span> enter a prompt first'); return; }
+  triggerConduct(controllerDeps(), {
+    root,
+    prompt,
+    auto: state.conductAuto,
+    mode: state.conductMode,
+    maxUnits: state.maxUnits,
+    budget: state.budget,
+  });
 }
 
 /** Ad-hoc `POST /role` — one holdout-safe role-run of the kind picked in the target's role-kind
@@ -950,9 +1031,10 @@ function renderJobs() {
   el.innerHTML = state.jobOrder.map((id,i) => {
     const j = state.jobs.get(id);
     if (!j) return '';
+    const pending = pendingCount(j);
     return `
-    <div class="job ${j.id===state.selectedJobId?'sel':''}" style="animation:rise .4s ${i*40}ms backwards" data-action="select-job" data-job-id="${escapeHtml(j.id)}">
-      <span class="st ${j.status}"></span>
+    <div class="job ${j.id===state.selectedJobId?'sel':''} ${pending?'awaiting':''}" style="animation:rise .4s ${i*40}ms backwards" data-action="select-job" data-job-id="${escapeHtml(j.id)}">
+      <span class="st ${pending?'awaiting':j.status}"></span>
       <div class="j-main">
         <div class="j-line1">
           <span class="j-phase">${escapeHtml(j.kind || '')}</span>
@@ -961,12 +1043,15 @@ function renderJobs() {
         <div class="j-line2 mono">${escapeHtml(targetName(j.root || ''))}</div>
       </div>
       <div class="j-right">
-        <span class="j-badge badge-${j.status}">${j.status}</span>
+        ${pending?`<span class="j-badge badge-awaiting">awaiting decision${pending>1?` ×${pending}`:''}</span>`:`<span class="j-badge badge-${j.status}">${j.status}</span>`}
       </div>
     </div>`;
   }).join('');
 }
 function selectJob(id){ state.selectedJobId=id; state.summary=undefined; renderJobs(); renderStage(); }
+
+/** How many parked decisions a job is awaiting (holdout-safe projected list from GET /jobs/:id). */
+function pendingCount(j){ return Array.isArray(j && j.pendingDecisions) ? j.pendingDecisions.length : 0; }
 
 /* ---------------- render: detail stage ---------------- */
 function renderStage(){
@@ -998,6 +1083,8 @@ function phaseJob(j){
     <div class="metric"><div class="m-k">exit code</div><div class="m-v tnum">${j.exitCode!==undefined?j.exitCode:'—'}</div><div class="m-sub">phase subprocess</div></div>
   </div>
 
+  ${decisionCards(j)}
+
   <div class="holdout-note">
     ${IC.shield}
     <span><b>Holdout wall enforced.</b> This is Sparra's own redacted phase log — no raw transcripts, verdict dumps, or evaluator traces cross the bridge.</span>
@@ -1011,6 +1098,37 @@ function phaseJob(j){
     <div class="term-body" id="termBody"><div class="logline"><span class="msg">${j.log ? escapeHtml(j.log) : '(no output yet)'}</span></div></div>
   </div>`;
 }
+/** Render a decision card per parked decision on a conduct job: the question, each option as a button
+ *  (the default marked), and an optional note field. Answering posts through the controller's
+ *  `submitDecision` (POST /jobs/:id/decision), never a bespoke fetch. Only the projected, holdout-safe
+ *  fields are ever rendered. */
+function decisionCards(j){
+  const pending = Array.isArray(j.pendingDecisions) ? j.pendingDecisions : [];
+  if (pending.length === 0) return '';
+  return pending.map((d) => {
+    const options = Array.isArray(d.options) ? d.options : [];
+    return `
+    <div class="decision-card" data-seq="${escapeHtml(String(d.seq))}">
+      <div class="dc-head">
+        <span class="dc-kicker">awaiting decision · #${escapeHtml(String(d.seq))} · ${escapeHtml(String(d.kind||''))}</span>
+        <span class="dc-unit mono">${escapeHtml(String(d.unit||''))}</span>
+      </div>
+      <div class="dc-question">${escapeHtml(String(d.question||''))}</div>
+      <input class="mono dc-note" data-action="set-decision-note" placeholder="optional note (not audited)"/>
+      <div class="dc-options">
+        ${options.map((o) => `<button class="btn ${o===d.default?'primary':''}" data-action="answer-decision" data-job-id="${escapeHtml(j.id)}" data-seq="${escapeHtml(String(d.seq))}" data-answer="${escapeHtml(String(o))}">${escapeHtml(String(o))}${o===d.default?' ✓':''}</button>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** Answer a parked decision via the controller — reads the note field at click time. */
+function answerDecision(jobId, seq, answer){
+  const noteEl = document.querySelector('.decision-card[data-seq="'+seq+'"] .dc-note');
+  const note = noteEl && noteEl.value ? noteEl.value : '';
+  submitDecision(controllerDeps(), jobId, { seq: Number(seq), answer, ...(note ? { note } : {}) });
+}
+
 function doCancel(id){ cancelJob(controllerDeps(), id); }
 
 function statusDot(s){
@@ -1229,15 +1347,22 @@ wireDelegatedClicks(document.getElementById('targetList'), {
   'trigger': (el) => trigger(el.dataset.root, el.dataset.phase),
   'run-unit': (el) => runUnit(el.dataset.root),
   'run-role': (el) => runRole(el.dataset.root),
+  'run-conduct': (el) => runConduct(el.dataset.root),
   'step-budget': (el) => stepBudget(Number(el.dataset.delta)),
   'step-turns': (el) => stepTurns(Number(el.dataset.delta)),
+  'step-units': (el) => stepUnits(Number(el.dataset.delta)),
   'toggle-fresh': () => { state.fresh = !state.fresh; renderTargets(); },
+  'toggle-conduct-auto': () => { state.conductAuto = !state.conductAuto; renderTargets(); },
 });
 document.getElementById('targetList').addEventListener('change', (event) => {
   if (event.target.matches('[data-action="set-budget"]')) {
     state.budget = Number(event.target.value) || 1;
   } else if (event.target.matches('[data-action="set-turns"]')) {
     state.maxTurns = Number(event.target.value) || 10;
+  } else if (event.target.matches('[data-action="set-units"]')) {
+    state.maxUnits = Math.max(1, Number(event.target.value) || 1);
+  } else if (event.target.matches('[data-action="set-conduct-mode"]')) {
+    state.conductMode = event.target.value === 'llm' ? 'llm' : 'hybrid';
   }
 });
 
@@ -1247,6 +1372,7 @@ wireDelegatedClicks(document.getElementById('jobList'), {
 
 wireDelegatedClicks(document.getElementById('stage'), {
   'cancel-job': (el) => doCancel(el.dataset.jobId),
+  'answer-decision': (el) => answerDecision(el.dataset.jobId, el.dataset.seq, el.dataset.answer),
 });
 
 document.getElementById('authChip').addEventListener('click', () => openAuth(false));

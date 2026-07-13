@@ -64,6 +64,27 @@ Body: `{ root, apply? }` — `apply` (bool) actually applies proposed prompt edi
 ## POST /resume — continue the current phase from disk (async)
 Body: `{ root }`. `202 {jobId}`. Recovery-friendly: Sparra resumes wherever it left off.
 
+## POST /conduct — headless conductor from one prompt (async)
+Body: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns? }`
+- `prompt` (string, required) — the one-line goal; decompose → per-unit contract → generate → evaluate → decide.
+- `auto` (bool) — never park a decision (the brain decides everything).
+- `mode` ∈ `hybrid | llm` — conductor-brain mode (`--brain`).
+- `maxUnits`/`concurrency`/`maxTurns` — positive integers; `budget` — non-negative number (`0` = unlimited).
+`202 {jobId}`. Runs `sparra conduct`; argv is built server-side from these fields only. Holds the
+per-target lock. Poll the job — a conduct job also surfaces `pendingDecisions` (see below).
+```bash
+curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","budget":5}' "$SPARRA_BRIDGE_URL/conduct"
+```
+
+## POST /jobs/:id/decision — answer a parked conduct decision (sync, holdout-safe)
+Body: `{ seq, answer, note? }` — `answer` MUST be one of the parked request's `options`. `200 {ok, seq,
+chosen}`. Resolves IN-PROCESS via the same engine the CLI's `conduct --decide` uses (no shell-out).
+`404` unknown job/run/seq · `409` the seq is already resolved (first answer stands) · `400` `answer`
+not in the request's `options`. The audit line records only `{seq, decision, result}` — never `note`.
+```bash
+curl -s -X POST $H $J -d '{"seq":1,"answer":"finalize"}' "$SPARRA_BRIDGE_URL/jobs/$ID/decision"
+```
+
 ## POST /role — run ONE role (sync, holdout-safe)
 Body: `{ root|workspace, kind, brief?, briefPath?, contractPath?, holdoutPath?, backend?, model?,
 effort?, worktree?, unitWorktree?, budget?, maxTurns? }`
@@ -99,9 +120,11 @@ curl -s -X POST $H $J -d '{"root":"/abs/proj","briefPath":"…","contractPath":"
 curl -s $H "$SPARRA_BRIDGE_URL/jobs/$ID"
 # -> {id, kind, root?, status:"running|succeeded|failed|canceled", log, exitCode?, result?, createdAt}
 ```
-`result` is populated for `/role` (its `ParentSummary`) and `/unit` (its projection). `404` if the id
-is unknown (jobs are in-memory, last-N, dropped on bridge restart). `log` is the child's
-already-redacted phase log — nothing else (no trace dir/verdict file) is surfaced.
+`result` is populated for `/role` (its `ParentSummary`) and `/unit` (its projection). A `/conduct` job
+also carries `pendingDecisions: [{seq, unit, kind, question, options, default, expiresAt}]` — the
+still-PARKED decisions of its run (answer them with `POST /jobs/:id/decision`); the job stays `running`
+while parked. `404` if the id is unknown (jobs are in-memory, last-N, dropped on bridge restart). `log`
+is the child's already-redacted phase log — nothing else (no trace dir/verdict file) is surfaced.
 
 ## POST /jobs/:id/cancel — kill a running job
 ```bash
