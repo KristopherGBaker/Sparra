@@ -289,7 +289,14 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // DEGENERATE/NO-OP bullet gained the argv-acceptance-test requirement (produced argv must be
     // ACCEPTED by the real parser/validation layer, not merely flag-content-asserted), so the hash
     // over non-reflector prompts changed. Only that one existing prompt was edited (no new prompt).
-    expect(h.digest("hex")).toBe("f2a7151d8ec3f5b8d570a1714248f2fd7e8fe1c02416c083911a710a57e089f1");
+    // Regenerated 2026-07-13 (four-finding reflect fold): folded four 2026-07-13 reflect findings into
+    // DEFAULT_PROMPTS — contract-generator (JUDGE-RUNNABLE FORM bullet; closed-rule for flag-compat;
+    // shell-portable/worktree-relative verify snippets), contract-evaluator (closed-rule standard;
+    // UN-RUN blast-radius cap; check shell snippets under real shell semantics — zsh-reserved `status`,
+    // fail-fast, no MAIN-checkout `cd`/abs path), evaluator (FLAKY documented-env-denial EXCEPTION +
+    // PROCESS step-1 "unless rule 1's documented-env-denial exception applies" rewording). Three
+    // existing prompts edited; no new prompt.
+    expect(h.digest("hex")).toBe("544c5bbecff5555eeba65dc1b06dd0cac3bee2591eccece30aa6958d310a3799");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
