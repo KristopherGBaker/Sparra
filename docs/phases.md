@@ -2,7 +2,7 @@
 
 Sparra's flow mirrors how real software gets built: plan together → optionally de-risk → build once you're satisfied. Each phase is a CLI command; everything reads from and writes to disk, so any phase is resumable.
 
-The **build** step runs two ways: hand it off to the autonomous loop (`sparra build`, this page), or drive it yourself from a Claude Code session via the [role-runner](role-runner.md) (the `/sparra-loop` skill), the same adversarial rigor with your hand on the wheel. The plan/freeze/reflect phases below are shared by both.
+The **build** step runs three ways: hand it off to the autonomous loop (`sparra build`, this page), drive it yourself from a Claude Code session via the [role-runner](role-runner.md) (the `/sparra-loop` skill) — the same adversarial rigor with your hand on the wheel — or skip plan/freeze entirely with [`sparra conduct "<prompt>"`](conduct.md), a headless conductor that takes one prompt through decompose → contract → generate → cross-model evaluate → decide, surfacing important decisions to you along the way. The plan/freeze/reflect phases below are shared by all of them.
 
 ```
 init → [orient] → plan ⇄ prototype → freeze → build → reflect

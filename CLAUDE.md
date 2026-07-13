@@ -19,8 +19,9 @@ No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.
 
 ## Architecture
 
-- `src/cli.ts` — command dispatch. `src/phases/` — one file per phase: `init`, `orient`, `plan`, `prototype`, `freeze`, `build`, `reflect`, `status`, `batch`.
+- `src/cli.ts` — command dispatch. `src/phases/` — one file per phase: `init`, `orient`, `plan`, `prototype`, `freeze`, `build`, `conduct`, `reflect`, `status`, `batch`.
 - `src/build/` — the build-loop internals: `decompose`, `contract`, `generate`, `evaluate`, `review` (code-review gate), `pivot`, `reconcile`, `budget`, `holdout`, `swiftConventions`, `modeText`, `types`.
+- `src/conduct/` — `sparra conduct <prompt>`, the headless conductor: prompt → decompose → per-unit contract → generate → cross-model evaluate → decide, over `conductors/core` role-run subprocesses (not in-process SDK sessions). `run`/`unitRunner` (loop), `roleSpecs` (config→argv), `decision`/`decisionEngine` (park/timeout/auto surfacing, `--decide`, audit trail), `brain` (hybrid/llm modes via `roles.conductor`), `recovery`, `strategy` (judgment seam), `announce` (run-START line the HTTP bridge parses), `runState`/`types` (atomic `run.json` under `.sparra/conduct/<runId>/`). See `docs/conduct.md`.
 - `src/sdk/` — the agent seam. `backend.ts` (the `AgentBackend` interface + `AgentRequest`/`AgentResult` + registry), `session.ts` (the single choke point: `runSession` → `getBackend().runTask`), `backends/{claude,codex}.ts`, plus `skills`, `hooks`, `guard`, `exercise`, `scoping`, `permissions`, `format`, `trace`.
 - `src/` core: `config.ts` (all knobs + `defaultConfig`), `prompts.ts` (role system prompts + `DEFAULT_PROMPTS`), `paths.ts` (`.sparra/` layout), `state.ts`, `context.ts`, `memory.ts`, `detect.ts`. `roleEnvelope.ts` is the canonical runner↔conductor contract (`RunRolePayload`), emitted by both the MCP `run_role` tool and the `--json` CLI.
 - `src/util/` — `git`, `io`, `log`, `extract`.
