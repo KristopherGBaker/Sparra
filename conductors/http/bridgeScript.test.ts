@@ -84,6 +84,58 @@ describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
     expect(r.called).toBe(false);
   });
 
+  it("`bridge conduct <root> <prompt> --commit --merge` forwards both landing flags verbatim", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge conduct /tmp/root "go" --commit --merge >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", prompt: "go", commit: true, merge: true });
+  });
+
+  it("`bridge conduct` with a landing flag AND extra-json merges both", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge conduct /tmp/root "go" --commit '{"budget":5}' >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", prompt: "go", commit: true, budget: 5 });
+  });
+
+  it("`bridge resume <root> <runId> --auto --commit` posts a {resume,…} body to /conduct", () => {
+    if (!hasJq()) return;
+    const runId = "conduct-2026-07-13T06-44-18";
+    const r = runBridgeCapture(`bridge resume /tmp/root ${runId} --auto --commit >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", resume: runId, auto: true, commit: true });
+  });
+
+  it("`bridge resume` bare (no flags) posts just {root,resume}", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge resume /tmp/root run-42 >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", resume: "run-42" });
+  });
+
+  it("`bridge resume` with an unknown arg is rejected before any curl call", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge resume /tmp/root run-42 --max-units 3 >/dev/null 2>&1`);
+    if (r === null) return;
+    expect(r.status).not.toBe(0);
+    expect(r.called).toBe(false);
+  });
+
+  it("`bridge help` names BOTH the conduct and resume grammars", () => {
+    // `help` isn't a real subcommand → hits the usage fallback (printed to stderr, exit 2). No curl.
+    const r = runBridgeCapture(`bridge help`);
+    if (r === null) return;
+    expect(r.called).toBe(false);
+    expect(r.stderr).toContain("conduct <root> <prompt> [--commit] [--merge] [extra-json]");
+    expect(r.stderr).toContain("resume <root> <runId> [--commit] [--merge] [--auto]");
+  });
+
   it("`bridge decide <jobId> <seq> <answer> [note]` builds {seq,answer[,note]}", () => {
     if (!hasJq()) return;
     const noNote = runBridgeCapture(`bridge decide job-1 1 finalize >/dev/null`);

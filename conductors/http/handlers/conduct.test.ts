@@ -229,6 +229,146 @@ describe("POST /conduct — argv + cwd + lock", () => {
   });
 });
 
+describe("POST /conduct — commit/merge/resume parity (unit-001)", () => {
+  const SAFE_RUN_ID = "conduct-2026-07-13T06-44-18";
+
+  // Assertion 1: fresh commit/merge matrix — deep equality on captured argv (bridge forwards flags
+  // verbatim; it does NOT synthesize `--commit` from `--merge`).
+  const freshMatrix: Array<[string, Record<string, unknown>, string[]]> = [
+    ["commit only", { commit: true }, ["conduct", "p", "--commit"]],
+    ["merge only (no synthesized --commit)", { merge: true }, ["conduct", "p", "--merge"]],
+    ["commit + merge", { commit: true, merge: true }, ["conduct", "p", "--commit", "--merge"]],
+  ];
+  for (const [label, extra, expected] of freshMatrix) {
+    it(`fresh ${label} → argv deep-equals ${JSON.stringify(expected)}`, async () => {
+      const root = tmpRoot();
+      const { spawn, calls } = fakeSpawner();
+      const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+      const res = await dispatch(listener, { url: "/conduct", body: { root, prompt: "p", ...extra } });
+      expect(res.status).toBe(202);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.args.slice(1)).toEqual(expected);
+    });
+  }
+
+  // Assertion 2: resume argv.
+  it("resume with auto+commit+merge → argv deep-equals ['conduct','--resume',<id>,'--auto','--commit','--merge']", async () => {
+    const root = tmpRoot();
+    const { spawn, calls } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const res = await dispatch(listener, {
+      url: "/conduct",
+      body: { root, resume: SAFE_RUN_ID, auto: true, commit: true, merge: true },
+    });
+    expect(res.status).toBe(202);
+    expect(calls[0]!.args.slice(1)).toEqual([
+      "conduct", "--resume", SAFE_RUN_ID, "--auto", "--commit", "--merge",
+    ]);
+    expect(calls[0]!.options.cwd).toBe(root);
+  });
+
+  it("bare resume → argv deep-equals ['conduct','--resume',<id>]", async () => {
+    const root = tmpRoot();
+    const { spawn, calls } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, resume: SAFE_RUN_ID } });
+    expect(res.status).toBe(202);
+    expect(calls[0]!.args.slice(1)).toEqual(["conduct", "--resume", SAFE_RUN_ID]);
+  });
+
+  // Assertion 3: 400 matrix — each case 400 with ZERO spawns.
+  const four00: Array<[string, Record<string, unknown>]> = [
+    ["both prompt AND resume", { prompt: "p", resume: SAFE_RUN_ID }],
+    ["neither prompt NOR resume", {}],
+    ["resume + mode", { resume: SAFE_RUN_ID, mode: "llm" }],
+    ["resume + maxUnits", { resume: SAFE_RUN_ID, maxUnits: 3 }],
+    ["resume + concurrency", { resume: SAFE_RUN_ID, concurrency: 2 }],
+    ["resume + budget", { resume: SAFE_RUN_ID, budget: 5 }],
+    ["resume + maxTurns", { resume: SAFE_RUN_ID, maxTurns: 80 }],
+    ["unknown field (strict)", { prompt: "p", evil: 1 }],
+  ];
+  for (const [label, body] of four00) {
+    it(`400 (no spawn): ${label}`, async () => {
+      const root = tmpRoot();
+      const { spawn, calls } = fakeSpawner();
+      const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+      const res = await dispatch(listener, { url: "/conduct", body: { root, ...body } });
+      expect(res.status, label).toBe(400);
+      expect(calls, label).toHaveLength(0);
+    });
+  }
+
+  // Assertion 4: unsafe runId → 400 BEFORE lock/spawn — zero spawns, JobStore unchanged, lock free.
+  const unsafeIds = ["../x", "a/b", "a\\b", "-flag", "..", "x/../y"];
+  for (const bad of unsafeIds) {
+    it(`unsafe runId ${JSON.stringify(bad)} → 400 before lock/spawn (no side effects)`, async () => {
+      const root = tmpRoot();
+      const { spawn, calls } = fakeSpawner();
+      const lock = new TargetLock();
+      const { listener, jobs } = makeHarness(baseConfig([root]), { lock, spawn });
+      const before = jobs.listJobs().length;
+      const res = await dispatch(listener, { url: "/conduct", body: { root, resume: bad } });
+      expect(res.status, bad).toBe(400);
+      expect(calls, bad).toHaveLength(0);
+      expect(jobs.listJobs().length, bad).toBe(before);
+      expect(lock.holder(root), bad).toBeUndefined();
+    });
+  }
+
+  // Assertion 5: lock-held resume → 409, no new job, no additional spawn.
+  it("resume while the target lock is held → 409, no new job/spawn", async () => {
+    const root = tmpRoot();
+    const { spawn, calls } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const first = await dispatch(listener, { url: "/conduct", body: { root, prompt: "a" } });
+    expect(first.status).toBe(202);
+    const second = await dispatch(listener, { url: "/conduct", body: { root, resume: SAFE_RUN_ID } });
+    expect(second.status).toBe(409);
+    expect(second.json.jobId).toBe(first.json.jobId);
+    expect(calls).toHaveLength(1); // only the first (fresh) run ever spawned
+  });
+});
+
+describe("POST /conduct — announce-association on a RESUMED run (assertion 6)", () => {
+  const RESUME_ID = "conduct-resume-fixture";
+
+  it("resumed run re-announces → job gains runId+runDir; decision surfaces + resolves", async () => {
+    const root = tmpRoot();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    // Seed the persisted run dir + a parked decision, then resume it.
+    const runDir = runDirFor(root, RESUME_ID);
+    const res = await dispatch(listener, { url: "/conduct", body: { root, resume: RESUME_ID } });
+    expect(res.status).toBe(202);
+    const jobId = res.json.jobId;
+    // The resume re-announces the same run-START line a fresh run prints.
+    children.at(-1)!.emitStdout(formatRunStartAnnouncement(RESUME_ID, runDir) + "\n");
+    seedParked(runDir, 1, { options: ["finalize", "abandon"], def: "finalize" });
+
+    const job = await dispatch(listener, { method: "GET", url: `/jobs/${jobId}` });
+    expect(job.json.pendingDecisions).toEqual([
+      { seq: 1, unit: "unit-001", kind: "unit-exhausted", question: "Q?", options: ["finalize", "abandon"], default: "finalize", expiresAt: "2026-07-13T00:00:00.000Z" },
+    ]);
+    const answered = await dispatch(listener, { url: `/jobs/${jobId}/decision`, body: { seq: 1, answer: "abandon" } });
+    expect(answered.status).toBe(200);
+    expect(existsSync(join(runDir, "decisions", "1.decision.json"))).toBe(true);
+  });
+
+  it("resumed run whose spawner emits NO announcement → no runId/runDir; decision POST → 404", async () => {
+    const root = tmpRoot();
+    const { spawn } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, resume: RESUME_ID } });
+    expect(res.status).toBe(202);
+    const jobId = res.json.jobId;
+    // No announcement emitted → the job never learns its run dir.
+    const job = await dispatch(listener, { method: "GET", url: `/jobs/${jobId}` });
+    expect(job.json).not.toHaveProperty("pendingDecisions");
+    const dec = await dispatch(listener, { url: `/jobs/${jobId}/decision`, body: { seq: 1, answer: "finalize" } });
+    expect(dec.status).toBe(404);
+  });
+});
+
 describe("POST /conduct — malformed value rejection (assertion 18): 400, spawner NOT called", () => {
   const bad: Array<[string, unknown]> = [
     ["mode outside enum", { mode: "bogus" }],

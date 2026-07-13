@@ -13,6 +13,7 @@ import {
   apiCall,
   buildRequest,
   cancelJob,
+  cardScopedValue,
   handleAuthError,
   handleLock,
   pollJob,
@@ -318,6 +319,97 @@ describe("triggerConduct — body built only from schema fields; records job", (
     await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view }, { root: "/a", prompt: "x" });
     expect(view.showLockToast).toHaveBeenCalledWith("holder");
     expect(view.recordJob).not.toHaveBeenCalled();
+  });
+
+  it("commit/merge ride the body ONLY when toggled ON (omitted when off)", async () => {
+    const bodyFor = async (params: Record<string, unknown>) => {
+      let sent: unknown;
+      const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+        sent = JSON.parse(init.body as string);
+        return jsonResponse(202, { jobId: "c" });
+      });
+      await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, params);
+      return sent;
+    };
+    // OFF: no commit/merge keys at all.
+    expect(await bodyFor({ root: "/a", prompt: "p" })).toEqual({ root: "/a", prompt: "p" });
+    // ON: exactly the toggled flags.
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: true })).toEqual({ root: "/a", prompt: "p", commit: true });
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: true, merge: true })).toEqual({ root: "/a", prompt: "p", commit: true, merge: true });
+    // A false toggle is omitted, not sent as `false`.
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: false, merge: false })).toEqual({ root: "/a", prompt: "p" });
+  });
+
+  it("a resume runId builds a {resume,…} body (no prompt; resume-compatible fields only)", async () => {
+    const seen: Array<{ init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push({ init });
+      return jsonResponse(202, { jobId: "cr" });
+    });
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, {
+      root: "/a", resume: "run-42", auto: true, commit: true,
+    });
+    expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ root: "/a", resume: "run-42", auto: true, commit: true });
+  });
+});
+
+// --- multi-target card scoping (regression: resume read the page-global first card) ------------
+
+describe("cardScopedValue — resume/prompt read the CLICKED card, not the page-global first card", () => {
+  /** Build a fake `.target` card whose fields carry per-card values, plus the clicked buttons that
+   *  live inside it. Only `closest`/`querySelector` are modelled — exactly what `cardScopedValue`
+   *  uses — so this is a faithful stand-in for a rendered card without a full DOM. */
+  function fakeCard(fields: Record<string, string>) {
+    const inputs: Record<string, { value: string }> = {};
+    for (const [sel, value] of Object.entries(fields)) inputs[sel] = { value };
+    const card = {
+      querySelector: (sel: string) => inputs[sel] ?? null,
+    };
+    const button = { closest: (sel: string) => (sel === ".target" ? card : null) };
+    return { card, button };
+  }
+
+  it("resolves the resume runId scoped to the owning card (each card independent)", () => {
+    const first = fakeCard({ ".conduct-resume-id": "run-FIRST" });
+    const second = fakeCard({ ".conduct-resume-id": "run-SECOND" });
+    expect(cardScopedValue(first.button, ".conduct-resume-id")).toBe("run-FIRST");
+    expect(cardScopedValue(second.button, ".conduct-resume-id")).toBe("run-SECOND");
+  });
+
+  it("trims and returns '' when the card or field is absent", () => {
+    const card = fakeCard({ ".conduct-resume-id": "  run-42  " });
+    expect(cardScopedValue(card.button, ".conduct-resume-id")).toBe("run-42");
+    // a button not inside any .target card → '' (no throw)
+    expect(cardScopedValue({ closest: () => null }, ".conduct-resume-id")).toBe("");
+    // a card missing this particular field → ''
+    expect(cardScopedValue(fakeCard({}).button, ".conduct-resume-id")).toBe("");
+  });
+
+  it("the SECOND target card's resume action sends ITS OWN runId in the /conduct body (behavioral)", async () => {
+    // Two allowlisted targets are rendered; only the SECOND card's runId is filled/clicked.
+    const first = fakeCard({ ".conduct-resume-id": "run-FIRST" });
+    const second = fakeCard({ ".conduct-resume-id": "run-SECOND" });
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string));
+      return jsonResponse(202, { jobId: "cr" });
+    });
+    const deps = { fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() };
+
+    // Reproduce exactly what dashboard.html's `runConductResume(el)` does for the SECOND card's
+    // button: resolve the runId scoped to that card, then POST /conduct with resume-only fields.
+    const resume = cardScopedValue(second.button, ".conduct-resume-id");
+    await triggerConduct(deps, { root: "/second", resume, auto: false });
+
+    expect(bodies).toHaveLength(1);
+    // `auto` rides along exactly as `runConductResume` sends it (resume-compatible field); the runId
+    // is the SECOND card's, which is the point of this test.
+    expect(bodies[0]).toEqual({ root: "/second", resume: "run-SECOND", auto: false });
+    // The old page-global `document.querySelector('.conduct-resume-id')` bug would have sent the
+    // FIRST card's runId — assert we did NOT.
+    expect(bodies[0]!.resume).not.toBe("run-FIRST");
+    // sanity: the first card genuinely holds a DIFFERENT id (fixture is non-vacuous).
+    expect(cardScopedValue(first.button, ".conduct-resume-id")).toBe("run-FIRST");
   });
 });
 
@@ -706,6 +798,28 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     // the page's run-conduct wiring calls the exported controller, not a bespoke fetch.
     expect(body).toMatch(/function triggerConduct\(/);
     expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
+  });
+
+  it("exposes the conduct commit/merge toggles + a resume affordance in the trigger card", () => {
+    const body = servedBody();
+    expect(body).toMatch(/data-action=["']toggle-conduct-commit["']/);
+    expect(body).toMatch(/data-action=["']toggle-conduct-merge["']/);
+    // resume affordance: a runId input + a run-conduct-resume action, both wired to the real controller.
+    expect(body).toMatch(/data-action=["']run-conduct-resume["']/);
+    expect(body).toContain("conduct-resume-id");
+    expect(body).toMatch(/function runConductResume\(/);
+    expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
+  });
+
+  it("the resume runId is read scoped to the clicked card, NOT via a page-global querySelector", () => {
+    const body = servedBody();
+    // The round-2 regression: a page-global `document.querySelector('.conduct-resume-id')` always
+    // reads the FIRST rendered card, so a second target's resume would send the first's runId.
+    expect(body).not.toMatch(/document\.querySelector\(\s*['"]\.conduct-resume-id['"]\s*\)/);
+    expect(body).not.toMatch(/document\.querySelector\(\s*['"]\.conduct-prompt['"]\s*\)/);
+    // Resolution goes through the card-scoped helper (walks up to `.target` via `closest`).
+    expect(body).toMatch(/function cardScopedValue\(/);
+    expect(body).toMatch(/cardScopedValue\(\s*el\s*,\s*['"]\.conduct-resume-id['"]\s*\)/);
   });
 
   it("exposes the decision card + answer flow (answer-decision data-action → submitDecision) with an awaiting badge", () => {
