@@ -19,11 +19,13 @@ sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--
                           [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
 sparra conduct --resume <runId> [--commit] [--merge] [--auto]   # continue a crashed/interrupted run in place
+sparra conduct --status <runId> [--json]                        # read-only projection of one run (zero spend)
+sparra conduct --list [--json]                                  # read-only list of all runs (zero spend)
 ```
 
-> A prompt is **required only for a fresh run**. With `--resume <runId>` any prompt argument is
-> **optional and ignored** (the run's persisted `prompt` stands). No prompt **and** no `--resume` is
-> the usage error.
+> A prompt is **required to start a fresh run only**. The **promptless forms** — `--resume`, `--status`,
+> and `--list` — take no prompt (with `--resume <runId>` any prompt argument is **optional and ignored**;
+> `--status`/`--list` reject one). No prompt **and** no promptless form is the usage error.
 
 ### Flags
 
@@ -200,6 +202,34 @@ never contents** — the verdict file is already holdout-redacted). The evaluato
 settled blocking ground** rather than whipsaw-bouncing an already-accepted fix. These per-round paths
 are persisted as each unit's `verdictPaths`, so a resumed re-grade threads exactly the same settled
 ground the crashed process had established.
+
+## Inspecting runs (`--status` / `--list`)
+
+Two **zero-spend, read-only** reporting surfaces let you inspect runs without triggering any model
+call. Both project **metadata and paths only** out of `run.json` — never a brief/contract/verdict's
+**contents** (holdout-safe by construction: `run.json` is paths-only, and the pending-decision
+projection is the exact same allowlist the HTTP bridge exposes, shared from `src/conduct/pending.ts`).
+
+```bash
+sparra conduct --status <runId> [--json]
+sparra conduct --list [--json]
+```
+
+- **`--status <runId>`** prints a header (`runId`, `status`, `brain`, decision surface, `createdAt`/
+  `updatedAt`, and the run's `prompt` truncated to **one line**), then one line **per unit** (id, title,
+  outcome, `score`, `cost`, `branch`, a **short** `committedSha`, and `mergedInto` when the unit landed),
+  and finally any **still-parked decisions** (each with its `seq`, question, and a
+  `conduct --decide <runId> <seq> <answer>` hint). `--json` emits the `run.json` fields plus a
+  `pendingDecisions` array (the shared allowlist projection) instead. An **unknown** or **unsafe**
+  `runId` exits **1** naming it, with **no** side effects.
+- **`--list`** enumerates the run dirs under `.sparra/conduct/` that pass the `isSafeRunId` guard **and**
+  contain a `run.json`, **newest-first by `updatedAt`** — one line each: `runId`, `status`,
+  accepted/total units, summed unit `cost`, and `updatedAt`. A **corrupt/torn** `run.json` is listed with
+  status `unreadable` (never a crash). No conduct dir / no runs → a friendly **"no conduct runs"** line,
+  exit **0**. `--json` emits the rows as an array.
+
+Both forms are **promptless** and **read-only**: a prompt alongside either, or `--status` combined with
+`--list`/`--resume`/`--decide`, is a **usage error** (exit 1, no side effects, no spend).
 
 ## Artifacts layout
 

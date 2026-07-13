@@ -123,6 +123,12 @@ decision seq + a `resumedAt` stamp); prior parked decisions stay answerable and 
 Unknown runId → exit 1 (no side effects); a terminal all-accepted run → no-op. Multi-round re-grades
 (normal AND resumed) thread each prior round's redacted `verdictPath` onto the next evaluator as
 repeatable `--prior-blocking` (paths only) so settled blocking ground is verified, not re-litigated.
+**Inspect runs with zero spend**: `sparra conduct --status <runId> [--json]` prints a holdout-safe
+projection of one run (header + per-unit id/title/outcome/score/cost/branch/short-sha/mergedInto + any
+still-parked decisions with a `--decide` hint), and `sparra conduct --list [--json]` lists all runs
+newest-first (runId, status, accepted/total, total cost, updatedAt; a corrupt `run.json` shows
+`unreadable`; no runs → "no conduct runs"). Both are read-only/promptless (paths + metadata only, never
+brief/contract/verdict contents); the pending-decision projection is shared with the HTTP bridge.
 Full reference: **[docs/conduct.md](../../docs/conduct.md)**.
 
 **Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives
