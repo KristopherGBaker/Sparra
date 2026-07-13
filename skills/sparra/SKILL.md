@@ -114,7 +114,10 @@ never touched; `run.json` reports each accepted unit's branch/worktree. Two brai
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
 decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
 an inline TTY prompt, `sparra conduct --decide <runId> <seq> <answer>` in another terminal, or the HTTP
-bridge (`POST /jobs/:id/decision`). **Resume a crashed/interrupted run in place** with
+bridge (`POST /jobs/:id/decision`). The bridge's `POST /conduct` has full parity: a fresh run
+(`{root,prompt,…,commit?,merge?}`, self-landing forwarded verbatim) OR a resume (`{root,resume,commit?,
+merge?,auto?}`, EXACTLY ONE of `prompt`|`resume`), and a resumed run re-announces so its
+`pendingDecisions` stay answerable remotely. **Resume a crashed/interrupted run in place** with
 `sparra conduct --resume <runId> [--commit|--merge] [--auto]` (any prompt arg is ignored): it skips
 already-accepted/dry-run units, re-enters pending/running/error units at the right stage (agreed/forced
 contract → straight to generate, no re-negotiation; else renegotiate from the persisted brief), reuses

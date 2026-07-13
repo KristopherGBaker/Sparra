@@ -102,7 +102,13 @@ access: `POST /conduct` triggers a run, `GET /jobs/:id` surfaces the run's still
 resolved **in-process** through the very same `writeDecisionAnswer` + `applyFileDecisionToRunState`
 engine functions this CLI uses (no shell-out, no reimplemented protocol). So a parked decision can be
 answered from the file, an inline TTY prompt, `conduct --decide` in another terminal, **or** the bridge
-over the network. See [docs/http-bridge.md](http-bridge.md#conduct-over-the-bridge--remote-decisions).
+over the network. The bridge's `POST /conduct` has full CLI parity: the optional `commit`/`merge`
+booleans forward verbatim as `--commit`/`--merge` (self-land a remote run's accepted units), and a
+`resume: "<runId>"` field rides the SAME endpoint to continue a crashed/parked run in place
+(`bridge resume <root> <runId> [--commit] [--merge] [--auto]`) — EXACTLY ONE of `prompt`|`resume`, with
+a resume body limited to `root, resume, commit, merge, auto`. A resumed run re-announces, so its
+`pendingDecisions` remain answerable remotely.
+See [docs/http-bridge.md](http-bridge.md#conduct-over-the-bridge--remote-decisions).
 
 A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--concurrency`/`--max-turns`,
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the

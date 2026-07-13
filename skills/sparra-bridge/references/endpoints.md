@@ -64,16 +64,28 @@ Body: `{ root, apply? }` — `apply` (bool) actually applies proposed prompt edi
 ## POST /resume — continue the current phase from disk (async)
 Body: `{ root }`. `202 {jobId}`. Recovery-friendly: Sparra resumes wherever it left off.
 
-## POST /conduct — headless conductor from one prompt (async)
-Body: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns? }`
-- `prompt` (string, required) — the one-line goal; decompose → per-unit contract → generate → evaluate → decide.
+## POST /conduct — headless conductor from one prompt, OR resume a run (async)
+Fresh run body: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge? }`
+Resume body: `{ root, resume, auto?, commit?, merge? }`
+**EXACTLY ONE of `prompt` | `resume` must be present** (both or neither → `400`).
+- `prompt` (string) — the one-line goal; decompose → per-unit contract → generate → evaluate → decide.
+- `resume` (string) — a `<runId>` to continue a crashed/parked run IN PLACE (`conduct --resume <runId>`).
+  Validated as a safe single-segment id BEFORE any lock/spawn — an unsafe id (`..`, separator, leading
+  `-`) → `400`, zero side effects. A resume body may carry ONLY `root, resume, commit, merge, auto`; any
+  run-shaping field (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) alongside `resume` → `400`.
 - `auto` (bool) — never park a decision (the brain decides everything).
-- `mode` ∈ `hybrid | llm` — conductor-brain mode (`--brain`).
-- `maxUnits`/`concurrency`/`maxTurns` — positive integers; `budget` — non-negative number (`0` = unlimited).
+- `commit`/`merge` (bool) — forwarded verbatim as `--commit`/`--merge` (self-land accepted units; the CLI
+  owns `--merge` ⇒ `--commit`, the bridge synthesizes neither). Valid on both fresh and resume runs.
+- `mode` ∈ `hybrid | llm` — conductor-brain mode (`--brain`); fresh-run only.
+- `maxUnits`/`concurrency`/`maxTurns` — positive integers; `budget` — non-negative number (`0` =
+  unlimited); all fresh-run only.
 `202 {jobId}`. Runs `sparra conduct`; argv is built server-side from these fields only. Holds the
-per-target lock. Poll the job — a conduct job also surfaces `pendingDecisions` (see below).
+per-target lock (fresh OR resume). Poll the job — a conduct job (including a resumed one, which
+re-announces) surfaces `pendingDecisions` (see below).
 ```bash
 curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","budget":5}' "$SPARRA_BRIDGE_URL/conduct"
+curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","commit":true}' "$SPARRA_BRIDGE_URL/conduct"
+curl -s -X POST $H $J -d '{"root":"/abs/proj","resume":"conduct-2026-07-13T06-44-18","merge":true}' "$SPARRA_BRIDGE_URL/conduct"
 ```
 
 ## POST /jobs/:id/decision — answer a parked conduct decision (sync, holdout-safe)

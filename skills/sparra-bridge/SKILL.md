@@ -77,8 +77,10 @@ curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" \
 curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" -H "Content-Type: application/json" \
   -d '{"root":"/Users/me/proj","budget":5,"maxTurns":80}' "$SPARRA_BRIDGE_URL/build"   # 202 {jobId}
 # /reflect {root,apply?}  /resume {root}  /init {root,mode?,docs?}  /freeze {root}  likewise
-# /conduct {root,prompt,auto?,mode?,maxUnits?,concurrency?,budget?,maxTurns?} -> {jobId}; a parked
-#   decision surfaces as pendingDecisions on GET /jobs/:id — answer via POST /jobs/:id/decision {seq,answer,note?}
+# /conduct fresh {root,prompt,auto?,commit?,merge?,mode?,maxUnits?,concurrency?,budget?,maxTurns?} -> {jobId}
+#   OR resume {root,resume,auto?,commit?,merge?} (EXACTLY ONE of prompt|resume). commit/merge self-land;
+#   a resumed run re-announces. A parked decision surfaces as pendingDecisions on GET /jobs/:id —
+#   answer via POST /jobs/:id/decision {seq,answer,note?}
 ```
 
 **Run one role / a full unit (sync → summary; holdout-safe)**:
