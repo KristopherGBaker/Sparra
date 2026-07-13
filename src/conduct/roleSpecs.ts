@@ -45,6 +45,12 @@ function priorCritiqueArgs(paths: string[]): string[] {
   return paths.flatMap((p) => ["--prior-critique", p]);
 }
 
+/** Prior-blocking args for an evaluator re-grade: each prior round's runner-persisted redacted
+ *  verdict path (paths only — never contents; the verdict file is already holdout-redacted). */
+function priorBlockingArgs(paths: string[]): string[] {
+  return paths.flatMap((p) => ["--prior-blocking", p]);
+}
+
 /** Per-role-run cap flags (`--budget`/`--max-turns`), threaded onto EVERY spawned role-run — the
  *  contract-generator + contract-evaluator negotiation roles as well as the generator + evaluator.
  *  `--budget 0` (= unlimited) is a real value and is propagated; only an omitted flag adds nothing. */
@@ -207,7 +213,7 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
   };
   const generatorSpec = (ctx: RoundContext): RunRoleSpec => generatorSpecFor(gen, ctx);
 
-  const evaluatorSpec = (): RunRoleSpec => {
+  const evaluatorSpec = (ctx: RoundContext): RunRoleSpec => {
     const args = [
       "role",
       "run",
@@ -225,6 +231,9 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
       gen.backend ?? "claude",
       "--baseline-model",
       gen.model,
+      // Round>1 (or a resumed re-grade): thread each prior round's persisted verdict path so the
+      // evaluator verifies settled blocking ground rather than whipsaw-bouncing an accepted fix.
+      ...priorBlockingArgs(ctx.priorVerdictPaths ?? []),
     ];
     // Holdout PATH only (never opened here) — evaluator-only.
     if (p.holdoutPath !== undefined) args.push("--holdout", p.holdoutPath);

@@ -24,6 +24,11 @@ export interface RoundContext {
   /** True once `pivotAfterFailures` consecutive fails have been hit — the next round should try a
    *  different approach rather than a small revision. */
   pivoting: boolean;
+  /** Prior rounds' runner-persisted redacted verdict FILE paths (never contents), in round order.
+   *  `[]`/absent on round 1. An evaluator spec builder threads these forward as repeatable
+   *  `--prior-blocking <path>` so a re-grade verifies settled blocking ground rather than
+   *  re-litigating it. Holdout-safe: each verdict file is already holdout-redacted by the runner. */
+  priorVerdictPaths?: string[];
 }
 
 /** A per-round decision function: the SAME signature as {@link decideFromEvaluation}. Injecting one
@@ -122,12 +127,16 @@ export async function runBuildCycle(
   let feedback: string[] = [];
   let pivoting = false;
   let lastEvaluator: ParentSummary | undefined;
+  // Each graded round's persisted verdict path, threaded forward as the NEXT round's evaluator
+  // `--prior-blocking` (settled-ground re-grade). Paths only — never contents.
+  const priorVerdictPaths: string[] = [];
 
   while (round <= maxRounds) {
-    const ctx: RoundContext = { round, feedback, pivoting };
+    const ctx: RoundContext = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     const generator = await deps.runRole(config.generatorSpec(ctx));
     const evaluator = await deps.runRole(config.evaluatorSpec(ctx));
     lastEvaluator = evaluator;
+    if (evaluator.verdictPath) priorVerdictPaths.push(evaluator.verdictPath);
 
     const decision = decide(
       evaluator,

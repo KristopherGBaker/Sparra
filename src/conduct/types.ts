@@ -5,8 +5,9 @@ import type { DecisionRecord } from "./decision.ts";
  * `src/conduct/types.ts` — the on-disk shapes for a `sparra conduct` run.
  *
  * The filesystem is the source of truth (like every other Sparra phase): a run's `run.json` plus
- * its per-unit briefs/contracts under `.sparra/conduct/<runId>/` fully describe it, so a crashed
- * run is still inspectable. Only holdout-safe, `ParentSummary`-derived control values are recorded —
+ * its per-unit briefs/contracts under `.sparra/conduct/<runId>/` fully describe it, so a crashed or
+ * interrupted run is both inspectable AND resumable in place via `sparra conduct --resume <runId>`.
+ * Only holdout-safe, `ParentSummary`-derived control values are recorded —
  * never a raw transcript, a verdict dump, holdout text, or an evaluator trace dir.
  */
 
@@ -55,6 +56,11 @@ export interface UnitStateEntry {
   error?: string;
   /** Every judgment-point decision surfaced for this unit (park/timeout/auto), in order. */
   decisions?: DecisionRecord[];
+  /** Each graded round's runner-persisted redacted verdict FILE path (never contents), in round
+   *  order. Threaded forward as repeatable `--prior-blocking` on a later round's evaluator (a normal
+   *  multi-round re-grade AND a resumed re-grade) so settled blocking ground is verified, not
+   *  re-litigated. Holdout-safe: the verdict file the runner writes is already holdout-redacted. */
+  verdictPaths?: string[];
   /** Opt-in `--commit`: the `sparra/<name>` branch tip (40-hex) after the unit's WIP was committed.
    *  Absent when the flags are off, or the unit produced no committable WIP. */
   committedSha?: string;
@@ -73,6 +79,9 @@ export interface ConductRunState {
   status: ConductOverallStatus;
   createdAt: string;
   updatedAt: string;
+  /** One ISO timestamp per `conduct --resume` of this run, in resume order. Absent until first
+   *  resumed. Lets an inspector see the run was continued in place rather than re-created. */
+  resumedAt?: string[];
   /** Effective (post-clamp) knobs, echoed for inspectability. */
   maxUnits: number;
   concurrency: number;
