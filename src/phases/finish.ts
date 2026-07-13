@@ -140,15 +140,17 @@ export async function cmdFinish(
   // Resolve the Sparra branch + its worktree. With no branch, land/teardown are no-ops.
   const worktreeDir = branch ? d.worktreeForBranch(ctx.root, branch) ?? workspaceDir : null;
 
-  // ── Holdout safety: it must never ride into a PR/merge. It is gitignored under .sparra/
-  //    in the normal case. If a tracked HOLDOUT.md would be carried by the land, HARD-STOP the
+  // ── Holdout safety: it must never ride into a PR/merge. Normally it is untracked — HOLDOUT.md
+  //    lives at the docs root (outside the Sparra `.sparra/.gitignore` allowlist, which admits only
+  //    config/prompts/calibration), so the usual case is already safe. If a tracked HOLDOUT.md would
+  //    be carried by the land, HARD-STOP the
   //    land path BEFORE any PR/merge so the holdout can never leak — but still archive it
   //    privately below (that is the whole point of close-out). ──
   const holdoutTracked =
     (opts.merge || opts.pr) && exists(paths.holdout) && d.isTracked(ctx.root, paths.holdout);
   if (holdoutTracked) {
     err(`Refusing to land: HOLDOUT.md is TRACKED by git and would be exposed in the PR/merge.`);
-    detail(`Untrack it first: \`git rm --cached ${path.relative(ctx.root, paths.holdout)}\` and add it to .gitignore (it is gitignored under .sparra/ by default), then re-run.`);
+    detail(`Untrack it first: \`git rm --cached ${path.relative(ctx.root, paths.holdout)}\` and add it to your top-level .gitignore (HOLDOUT.md lives at the docs root, outside the Sparra .sparra/.gitignore allowlist), then re-run.`);
     detail(`The cycle will still be archived (the holdout is moved privately into the cycle dir).`);
     process.exitCode = 1;
   }

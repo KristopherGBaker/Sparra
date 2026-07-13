@@ -30,9 +30,11 @@ function containsHoldoutArtifact(ctx: Ctx, dir: string): boolean {
 /**
  * The cwd to give a build-loop FORBID role (decomposer, contract-generator/-evaluator): the
  * `workspaceDir` when it is holdout-free — it is NOT `ctx.root` AND no holdout artifact is `within`
- * it — else `ctx.root`. A build WORKTREE is a sibling source checkout WITHOUT the holdout (`.sparra`
- * is gitignored), so running the role there removes the holdout from its cwd tree entirely (closing
- * the pathless-search leak). In-place runs (`workspaceDir === ctx.root`) keep `cwd = ctx.root`.
+ * it — else `ctx.root`. A build WORKTREE is a sibling source checkout WITHOUT any holdout artifact:
+ * the Sparra-owned `.sparra/.gitignore` allowlist tracks only `config.yaml`/`prompts/`/`calibration/`,
+ * so no holdout-bearing `.sparra` content (`frozen/`, `verdicts/`, `traces/`) — nor `HOLDOUT.md` —
+ * ever rides git into it. Running the role there removes the holdout from its cwd tree entirely
+ * (closing the pathless-search leak). In-place runs (`workspaceDir === ctx.root`) keep `cwd = ctx.root`.
  * Never returns a dir that contains a holdout. Pure.
  */
 export function holdoutFreeCwd(ctx: Ctx, workspaceDir: string): string {

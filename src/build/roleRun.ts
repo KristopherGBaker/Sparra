@@ -930,8 +930,8 @@ export const BRIEF_SPARRA_MARKER = "[the agreed contract is inlined in this prom
  *   separator boundary so a path that merely CONTAINS `root` as a non-prefix substring is
  *   left untouched (e.g. `/other/Sparra-fork/file.ts` when root is `/abs/Sparra`).
  * - `<root>/.sparra/…` or bare `.sparra/…` references → `BRIEF_SPARRA_MARKER` (a short neutral
- *   phrase noting the contract is inlined; contains no `.sparra` path — `.sparra` is gitignored
- *   and absent in the worktree).
+ *   phrase noting the contract is inlined; contains no `.sparra` path — no holdout-bearing
+ *   `.sparra` content is tracked by the allowlist `.sparra/.gitignore`, so it is absent in the worktree).
  *
  * Idempotent; safe on a brief with no paths; only rewrites PATH tokens, never other prose.
  */
@@ -959,7 +959,8 @@ export function remapBriefForWorkspace(brief: string, root: string, workspace: s
   const leftBoundary = `(?<![a-zA-Z0-9/._\\-~])`;
 
   // Step 1: neutralize absolute <root>/.sparra/… references BEFORE the general root-rewrite —
-  // .sparra is gitignored and absent in the worktree; pointing there is holdout risk / pure noise.
+  // no holdout-bearing .sparra content is tracked by the allowlist .gitignore, so it is absent in
+  // the worktree; pointing there is holdout risk / pure noise.
   // Left boundary guards against non-token occurrences; right pathChar stops at prose punctuation.
   const absSparraRx = new RegExp(`${leftBoundary}${escapedRoot}[/\\\\]\\.sparra(?:[/\\\\]${pathChar}*)?`, "g");
   let result = brief.replace(absSparraRx, BRIEF_SPARRA_MARKER);
