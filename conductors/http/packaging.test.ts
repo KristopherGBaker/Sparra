@@ -164,13 +164,18 @@ describe("docs match shipped code", () => {
     expect(readme).toMatch(/curl "http:\/\/\$HOST:\$PORT\/health"/);
   });
 
-  it("README covers plist install steps and token/config setup", () => {
-    expect(readme).toMatch(/openssl rand -hex 32/);
-    expect(readme).toMatch(/cp conductors\/http\/bridge\.yaml\.example/);
-    expect(readme).toMatch(/cp conductors\/http\/com\.sparra\.bridge\.plist\.example/);
-    expect(readme).toMatch(/launchctl load/);
+  it("README is script-first: names the one-command install, token handoff, and config", () => {
+    // Script-first setup (the old copy-template-then-hand-edit flow was replaced by
+    // bin/sparra-bridge-setup.mjs; see conductors/http/setup.ts).
+    expect(readme).toMatch(/make bridge-install/);
+    expect(readme).toMatch(/sparra-bridge-setup/);
+    expect(readme).toMatch(/export SPARRA_BRIDGE_TOKEN=/); // token handed to the operator
+    expect(readme).toMatch(/bridge\.yaml/);
+    expect(readme).toMatch(/launchctl load/); // manual appendix still documents the raw load
     expect(readme).toMatch(/allowRemotePlan/);
     expect(readme).toMatch(/no\s+endpoint\s+returns\s+holdout\s+text\s+or\s+raw\s+role\s+output/i);
+    // The superseded manual two-step must not be re-advertised as the primary flow.
+    expect(readme).not.toMatch(/cp conductors\/http\/com\.sparra\.bridge\.plist\.example/);
   });
 
   it("detail doc covers safety invariants, job model, and the per-target lock", () => {

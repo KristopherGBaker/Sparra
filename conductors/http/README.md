@@ -44,69 +44,76 @@ don't expose the bound address through anything else (a port-forward, a public t
 
 ## Setup
 
-### 1. Generate a token
+### 1. Install the launchd agent — one command
 
 ```bash
-openssl rand -hex 32   # → the value for $SPARRA_BRIDGE_TOKEN below
+make bridge-install    # or: node bin/sparra-bridge-setup.mjs install
 ```
 
-Keep it secret — it's the only thing standing between "anyone on my tailnet" and "an authenticated
-remote agent."
+That's the whole install. `bin/sparra-bridge-setup.mjs` auto-derives every plist value (this
+machine's node path, this checkout's `bin/sparra-bridge.mjs` + working directory, the
+`~/Library/Logs/sparra-bridge{.log,.err.log}` log paths, and `~/.sparra/bridge.yaml` for
+`SPARRA_BRIDGE_CONFIG`), generates a **crypto-random Bearer token**, seeds `~/.sparra/bridge.yaml`
+if it doesn't exist yet (see below), writes the rendered plist to
+`~/Library/LaunchAgents/com.sparra.bridge.plist` with mode `0600`, and loads it via `launchctl`. It
+prints the token to you **once**, along with the ready-to-paste client line:
 
-### 2. Write `bridge.yaml`
-
-Copy the example and edit the allowlist (see [`bridge.yaml.example`](bridge.yaml.example) for every
-field):
-
-```bash
-mkdir -p ~/.sparra
-cp conductors/http/bridge.yaml.example ~/.sparra/bridge.yaml
-$EDITOR ~/.sparra/bridge.yaml   # set `roots` to your real project directories
+```
+export SPARRA_BRIDGE_TOKEN=<the generated token>
 ```
 
-`$SPARRA_BRIDGE_CONFIG` overrides the path if you'd rather keep it elsewhere. Every field
-(`roots`, `port`, `bind`, `lastNJobs`, `auditLogPath`, `allowRemotePlan`, `dashboard`,
-`discoverProjects`, `discoverDepth`) is commented in the example; the two most worth knowing about
-beyond `roots`/`port`: `lastNJobs` bounds how many jobs the in-memory store retains (oldest evicted
-first), and `auditLogPath` is where the append-only request audit log lands (default
-`~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls whether `GET /` serves the web
-console below — set it `false` for zero unauthenticated HTTP surface beyond `GET /health`.
-`discoverProjects` (default `false`) turns `GET /projects` from "one entry per allowlisted root" into
-a recursive walk that reports every Sparra project FOUND under each root (useful when a root like
-`~/code` is a parent of many projects, not a project itself); `discoverDepth` (default `3`; validated
-to `0`–`8` at config load — a negative, non-integer, or out-of-range value is REJECTED, never clamped)
-bounds how deep that walk goes. See [`docs/http-bridge.md`](../../docs/http-bridge.md) for
-the full discovery semantics (skip-list, symlink handling, result cap).
+Keep that secret — it's the only thing standing between "anyone on my tailnet" and "an authenticated
+remote agent." It lives ONLY in the plist (never in a log or any other file); the setup command is
+the one time it's shown. A re-install **preserves** the existing token (idempotent); pass
+`ROTATE=1` (`make bridge-install ROTATE=1`, or `install --rotate-token`) to rotate it.
 
-### 3. Install the launchd agent
-
-The Makefile wraps the whole lifecycle:
+Lifecycle, all one command each:
 
 ```bash
-make bridge-install   # first run copies the plist template to ~/Library/LaunchAgents and stops;
-                      # edit EVERY placeholder (node path, bin path, working directory, the token —
-                      # `make bridge-token` generates one — config path, log paths, an agent-backend
-                      # credential), then re-run to load. Refuses to load while placeholders remain.
 make bridge-update    # restart the service (unload + load) to pick up new code/config
 make bridge-status    # launchctl status
 make bridge-logs      # tail the stdout/stderr logs named in the plist
-make bridge-remove    # unload + delete the plist
+make bridge-remove    # unload + delete the plist (leaves ~/.sparra/bridge.yaml in place)
+make bridge-token     # print a standalone Bearer token (rarely needed — install generates one)
 ```
 
-Or by hand:
+### 2. Edit `bridge.yaml` (seeded for you on first install)
+
+The install seeds `~/.sparra/bridge.yaml` from [`bridge.yaml.example`](bridge.yaml.example) if it's
+absent, with `roots` pre-pointed at this checkout and a comment telling you where to add your own
+project roots — so open it and set `roots` to your real project directories:
 
 ```bash
-cp conductors/http/com.sparra.bridge.plist.example ~/Library/LaunchAgents/com.sparra.bridge.plist
-$EDITOR ~/Library/LaunchAgents/com.sparra.bridge.plist   # replace every placeholder
-launchctl load ~/Library/LaunchAgents/com.sparra.bridge.plist
+$EDITOR ~/.sparra/bridge.yaml   # set `roots` to the projects the bridge may touch
+make bridge-update              # restart to pick up the change
 ```
 
-Check it's up: `launchctl list | grep com.sparra.bridge`, and tail the log paths you configured.
-To stop/uninstall: `launchctl unload ~/Library/LaunchAgents/com.sparra.bridge.plist` (and delete the
-plist if you're done with it for good).
+An existing `bridge.yaml` is **never** overwritten by a re-install. `$SPARRA_BRIDGE_CONFIG` overrides
+the path if you'd rather keep it elsewhere. Every field (`roots`, `port`, `bind`, `lastNJobs`,
+`auditLogPath`, `allowRemotePlan`, `dashboard`, `discoverProjects`, `discoverDepth`) is commented in
+the example; the two most worth knowing about beyond `roots`/`port`: `lastNJobs` bounds how many jobs
+the in-memory store retains (oldest evicted first), and `auditLogPath` is where the append-only
+request audit log lands (default `~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls
+whether `GET /` serves the web console below — set it `false` for zero unauthenticated HTTP surface
+beyond `GET /health`. `discoverProjects` (default `false`) turns `GET /projects` from "one entry per
+allowlisted root" into a recursive walk that reports every Sparra project FOUND under each root
+(useful when a root like `~/code` is a parent of many projects, not a project itself);
+`discoverDepth` (default `3`; validated to `0`–`8` at config load — a negative, non-integer, or
+out-of-range value is REJECTED, never clamped) bounds how deep that walk goes. See
+[`docs/http-bridge.md`](../../docs/http-bridge.md) for the full discovery semantics (skip-list,
+symlink handling, result cap).
 
-Prefer to run it in a foreground terminal first (to watch for startup errors) before installing the
-plist: `SPARRA_BRIDGE_TOKEN=<token> node bin/sparra-bridge.mjs`.
+Check it's up: `make bridge-status` (or `launchctl list | grep com.sparra.bridge`), and
+`make bridge-logs`. Prefer to run it in a foreground terminal first (to watch for startup errors)
+before installing the plist: `SPARRA_BRIDGE_TOKEN=<token> node bin/sparra-bridge.mjs`.
+
+### Appendix: manual install (advanced)
+
+The setup script supersedes hand-editing, but if you need to render the plist yourself, the fields to
+fill are the node path, the absolute `bin/sparra-bridge.mjs` path, the `WorkingDirectory`, a
+`SPARRA_BRIDGE_TOKEN` (`make bridge-token` prints one), `SPARRA_BRIDGE_CONFIG`, and the two log paths;
+then `launchctl load ~/Library/LaunchAgents/com.sparra.bridge.plist`. To stop/uninstall by hand:
+`launchctl unload ~/Library/LaunchAgents/com.sparra.bridge.plist`.
 
 ## Dashboard
 

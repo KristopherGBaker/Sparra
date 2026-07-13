@@ -62,32 +62,18 @@ update-codex-plugin: ## Reinstall the sparra Codex plugin from this checkout (bu
 
 # ── HTTP bridge launchd service (macOS LaunchAgent) ────────────────────────────────────
 
-## Two-step by design: the first run only copies the template (its token/paths are FAKE
-## placeholders — loading it would give launchd a broken KeepAlive service to respawn
-## forever). Edit the plist, then re-run to load. The placeholder guard keeps a
-## half-edited plist from ever being loaded.
-bridge-install: ## Install + load the bridge LaunchAgent (first run copies the plist template to edit)
-	@if [ ! -f "$(BRIDGE_PLIST)" ]; then \
-		cp conductors/http/com.sparra.bridge.plist.example "$(BRIDGE_PLIST)"; \
-		echo "→ Copied template to $(BRIDGE_PLIST)"; \
-		echo "  Edit EVERY placeholder (token — try 'make bridge-token' — node/bin paths,"; \
-		echo "  working dir, bridge.yaml path, log paths), then re-run 'make bridge-install'."; \
-	elif grep -q 'REPLACE_WITH\|/Users/example' "$(BRIDGE_PLIST)"; then \
-		echo "✗ $(BRIDGE_PLIST) still contains template placeholders — edit it first."; exit 1; \
-	else \
-		launchctl load "$(BRIDGE_PLIST)"; \
-		launchctl list | grep -q $(BRIDGE_LABEL) && echo "✓ $(BRIDGE_LABEL) loaded (make bridge-status / bridge-logs)"; \
-	fi
+## One command: bin/sparra-bridge-setup.mjs auto-derives the plist (node/bin/working-dir/log/
+## config paths), generates a crypto-random Bearer token (preserved on re-install unless
+## ROTATE=1), seeds ~/.sparra/bridge.yaml once, writes the plist mode 0600, loads it via
+## launchctl, and prints the token to you ONCE. No manual placeholder editing.
+bridge-install: ## Install + load the bridge LaunchAgent (auto-renders the plist, hands you the token; ROTATE=1 to rotate)
+	@node bin/sparra-bridge-setup.mjs install $(if $(ROTATE),--rotate-token,)
 
-bridge-update: ## Restart the bridge service (picks up new code/config — bins run the checkout live)
-	launchctl unload "$(BRIDGE_PLIST)"
-	launchctl load "$(BRIDGE_PLIST)"
-	@launchctl list | grep -q $(BRIDGE_LABEL) && echo "↻ $(BRIDGE_LABEL) restarted."
+bridge-update: ## Restart the bridge service (unload + load, picks up new code/config)
+	@node bin/sparra-bridge-setup.mjs update
 
-bridge-remove: ## Unload the bridge service and delete its plist
-	-launchctl unload "$(BRIDGE_PLIST)"
-	rm -f "$(BRIDGE_PLIST)"
-	@echo "✓ $(BRIDGE_LABEL) removed."
+bridge-remove: ## Unload the bridge service and delete its plist (keeps ~/.sparra/bridge.yaml)
+	@node bin/sparra-bridge-setup.mjs remove
 
 bridge-status: ## Show the bridge service's launchd status
 	@launchctl list | grep $(BRIDGE_LABEL) || echo "$(BRIDGE_LABEL): not loaded"

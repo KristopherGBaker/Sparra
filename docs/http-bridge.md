@@ -5,6 +5,18 @@ Tailscale-connected agent trigger `sparra` phases and role-runs on a Mac it does
 It's built entirely on `conductors/core` (the same host-agnostic `runRole`/`runUnit` the Pi conductor
 uses); this doc covers the HTTP-specific surface. Setup/on-ramp: [`conductors/http/README.md`](../conductors/http/README.md).
 
+## Install (one command)
+
+`make bridge-install` (equivalently `node bin/sparra-bridge-setup.mjs install`) is the whole install:
+it auto-derives the LaunchAgent plist from this checkout (node path, `bin/sparra-bridge.mjs`, working
+directory, `~/Library/Logs` log paths, `~/.sparra/bridge.yaml` config), generates a crypto-random
+Bearer **token**, seeds `~/.sparra/bridge.yaml` once (never clobbering an existing one), writes the
+plist mode `0600`, and loads it via `launchctl`. The token is printed **once** on stdout as a
+ready-to-paste `export SPARRA_BRIDGE_TOKEN=<token>` line — it lives only in the plist otherwise, never
+in a log. A re-install preserves that token; `make bridge-install ROTATE=1` (or `install
+--rotate-token`) rotates it. `make bridge-update` restarts, `make bridge-remove` uninstalls (keeping
+`bridge.yaml`). Full walkthrough + `bridge.yaml` fields: [`conductors/http/README.md`](../conductors/http/README.md).
+
 ## Dashboard
 
 `GET /` serves the **Sparra Bridge Console**: a self-contained, responsive web dashboard (dark

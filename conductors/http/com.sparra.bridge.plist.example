@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Sample launchd LaunchAgent for the Sparra HTTP bridge. EVERY path/value below is a FAKE
-  placeholder — `make bridge-install` copies this file to ~/Library/LaunchAgents, waits for you to
-  replace the placeholders, then loads it on the second run (refusing while placeholders remain).
-  Or by hand:
+  Template LaunchAgent for the Sparra HTTP bridge. Every value below is a FAKE placeholder that the
+  setup script fills in automatically — you do NOT hand-edit this file. `make bridge-install` (or
+  `node bin/sparra-bridge-setup.mjs install`) renders a real plist from this template with your node
+  path, this checkout's bin/working-directory, `~/Library/Logs` log paths, `~/.sparra/bridge.yaml`,
+  and a freshly generated crypto-random Bearer token; it then writes the rendered plist (mode 0600)
+  to ~/Library/LaunchAgents and loads it via launchctl, printing the token to you ONCE. A re-install
+  preserves the existing token (pass `--rotate-token` to change it). After rendering, the setup guard
+  refuses to write if any placeholder below survived (i.e. the template grew a field the renderer
+  doesn't fill yet).
 
-    cp conductors/http/com.sparra.bridge.plist.example \
-       ~/Library/LaunchAgents/com.sparra.bridge.plist
-    launchctl load ~/Library/LaunchAgents/com.sparra.bridge.plist
-
-  See conductors/http/README.md for the full walkthrough (token generation, bridge.yaml, uninstall;
-  make bridge-update / bridge-status / bridge-logs / bridge-remove cover the rest of the lifecycle).
+  See conductors/http/README.md for the full walkthrough (bridge.yaml, uninstall; make
+  bridge-update / bridge-status / bridge-logs / bridge-remove cover the rest of the lifecycle).
 -->
 <plist version="1.0">
 <dict>
@@ -25,40 +26,43 @@
 	<key>KeepAlive</key>
 	<true/>
 
-	<!-- node + the installed `sparra-bridge` bin. Replace with your own node path (`which node`) and
-	     the bin's actual location (e.g. after `npm link`, or the repo-relative `bin/sparra-bridge.mjs`). -->
+	<!-- node + this checkout's `sparra-bridge` bin. The setup script fills these with the running
+	     node (`process.execPath`) and the absolute `bin/sparra-bridge.mjs` path in this checkout. -->
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/local/bin/node</string>
 		<string>/Users/example/code/Sparra/bin/sparra-bridge.mjs</string>
 	</array>
 
-	<!-- Always the Sparra checkout the bridge should serve from. FAKE placeholder path — replace. -->
+	<!-- The Sparra checkout the bridge serves from. The setup script fills this with this checkout. -->
 	<key>WorkingDirectory</key>
 	<string>/Users/example/code/Sparra</string>
 
 	<key>EnvironmentVariables</key>
 	<dict>
 		<!-- REQUIRED. A long random secret the bridge compares (constant-time) against every
-		     request's `Authorization: Bearer <token>` header. Generate your own, e.g.
-		     `openssl rand -hex 32` — the value below is a FAKE placeholder, never a real secret. -->
+		     request's `Authorization: Bearer <token>` header. The setup script fills this with a
+		     freshly generated `crypto.randomBytes(32)` hex token (the placeholder below is never a
+		     real secret) and prints it to you once. -->
 		<key>SPARRA_BRIDGE_TOKEN</key>
 		<string>REPLACE_WITH_A_LONG_RANDOM_SECRET_TOKEN</string>
 
-		<!-- Path to your bridge.yaml (see conductors/http/bridge.yaml.example). FAKE placeholder. -->
+		<!-- Path to your bridge.yaml (see conductors/http/bridge.yaml.example). The setup script
+		     fills this with ~/.sparra/bridge.yaml. -->
 		<key>SPARRA_BRIDGE_CONFIG</key>
 		<string>/Users/example/.sparra/bridge.yaml</string>
 
 		<!-- Whatever agent backend(s) the triggered `sparra` roles use must be authenticated in THIS
 		     environment too — launchd agents don't inherit your interactive shell's login state.
-		     Supply an Anthropic credential (ANTHROPIC_API_KEY below, or a machine-wide Claude Code
+		     Supply an Anthropic credential (an ANTHROPIC_API_KEY, or a machine-wide Claude Code
 		     login) and/or Codex auth (a `~/.codex` login this launchd user can read) here, or the
-		     triggered `sparra build`/`role run` calls will fail to authenticate. -->
+		     triggered `sparra build`/`role run` calls will fail to authenticate. To add one, insert a
+		     real key/string pair here after install (it is not part of the auto-rendered template). -->
 		<!-- <key>ANTHROPIC_API_KEY</key> -->
-		<!-- <string>REPLACE_WITH_YOUR_OWN_KEY_OR_OMIT_AND_USE_A_CLAUDE_CODE_LOGIN</string> -->
+		<!-- <string>your-anthropic-key-or-omit-and-use-a-claude-code-login</string> -->
 	</dict>
 
-	<!-- FAKE placeholder log paths — replace the username, or leave as-is if it matches yours. -->
+	<!-- Log paths — the setup script fills these with ~/Library/Logs/sparra-bridge{.log,.err.log}. -->
 	<key>StandardOutPath</key>
 	<string>/Users/example/Library/Logs/sparra-bridge.log</string>
 	<key>StandardErrorPath</key>
