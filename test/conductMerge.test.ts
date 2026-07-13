@@ -45,15 +45,20 @@ function g(dir: string, args: string[]): string {
   return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
 }
 
-/** A throwaway git repo with one commit containing `files`, on branch `main`. */
+/** A throwaway git repo with one commit containing `files`, on branch `main`. Identity is set
+ *  REPO-LOCAL (not just `-c` on the base commit): the PRODUCT code commits in this repo and its
+ *  worktrees too, and an identity-less environment (CI runners) fails `git commit` outright —
+ *  auto-detection only happens to work on a dev macOS box. */
 function makeRepo(files: Record<string, string> = {}): string {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sparra-cmerge-")));
   g(dir, ["init"]);
+  g(dir, ["config", "user.email", "t@t"]);
+  g(dir, ["config", "user.name", "t"]);
   fs.writeFileSync(path.join(dir, ".gitignore"), ".sparra/\n");
   fs.writeFileSync(path.join(dir, "base.txt"), "base\n");
   for (const [f, c] of Object.entries(files)) fs.writeFileSync(path.join(dir, f), c);
   g(dir, ["add", "-A"]);
-  g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"]);
+  g(dir, ["commit", "-m", "base"]);
   g(dir, ["branch", "-M", "main"]);
   return dir;
 }
