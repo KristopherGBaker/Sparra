@@ -49,10 +49,10 @@ and `sparra-run-mcp` package bins on `PATH`.
 
 - **Claude Code:** register `sparra-run-mcp`, add the repo marketplace, install
   `sparra@sparra-skills`, then invoke `/sparra-loop` in the target project.
-- **Codex:** in an interactive session rooted at the Sparra checkout, ask it to install the local
-  plugin using `.codex-plugin/plugin.json`. Start a fresh thread in the target project and ask it to
-  use `sparra-loop`. Reinstall and start another fresh thread whenever the plugin cachebuster
-  changes.
+- **Codex:** register the checkout as a marketplace (`codex plugin marketplace add`), then install
+  with `codex plugin add sparra@sparra-skills`. Start a fresh thread in the target project and ask
+  it to use `sparra-loop`. Whenever the `.codex-plugin/plugin.json` cachebuster changes, run
+  `make update-codex-plugin` and start another fresh thread.
 - **Remote (HTTP bridge):** trigger `sparra` phases/role-runs on another Mac over Tailscale via
   `conductors/http` (Bearer token, path allowlist, holdout wall preserved) — see `docs/http-bridge.md`.
 - **Pi:** `pi install ./conductors/pi` (from the Sparra checkout) — the package ships the Pi-native

@@ -118,10 +118,11 @@ satisfy its approval gate. Approve the call in an interactive Codex session, or 
 JSON CLI path above. If the server cannot start or `sparra-run-mcp` is missing, return to the
 Sparra clone and run `npm link`.
 
-**Picking up plugin edits.** A Codex plugin install is a cached snapshot. After its
-`.codex-plugin/plugin.json` semver/cachebuster changes, open a Codex session in the updated checkout
-and ask `Reinstall the local Sparra plugin from this checkout using .codex-plugin/plugin.json.`
-Then start a fresh thread; an existing thread keeps the old skills and MCP tools loaded.
+**Picking up plugin edits.** A Codex plugin install is a cached snapshot keyed on
+`.codex-plugin/plugin.json`'s semver/cachebuster version. After bumping it, run
+`make update-codex-plugin` from the Sparra checkout (`codex plugin remove` + `add` of
+`sparra@sparra-skills`). Then start a fresh thread; an existing thread keeps the old skills and
+MCP tools loaded.
 
 ## Two surfaces, one runner
 
