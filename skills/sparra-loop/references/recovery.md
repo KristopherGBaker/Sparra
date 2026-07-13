@@ -16,8 +16,8 @@ Classify from the canonical summary before changing the artifact:
   is not behavioral FAIL feedback.
 - `hitMaxTurns: true`: resume the same role/session with a short “continue where you left off”
   brief. Do not pivot. A recovered report does not clear `hitMaxTurns`. To avoid the cap up front on
-  a known verify-heavy role, size it via the CLI/JSON path: `sparra role run … --max-turns <n>`
-  (MCP `run_role` has no turn override — it uses `build.maxTurnsPerSession`).
+  a known verify-heavy role, pre-size it: MCP `run_role`'s `maxTurns` (positive integer) or the
+  CLI/JSON path `sparra role run … --max-turns <n>`, both overriding `build.maxTurnsPerSession`.
 - `sameModelGrade: true`: reject the grade as cross-model evidence and choose a distinct grader.
 - `verifyGateWarning`: enable the named configured gates with `allowVerify`/`--verify` before
   trusting verification claims.

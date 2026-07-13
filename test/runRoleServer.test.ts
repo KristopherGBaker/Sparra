@@ -286,6 +286,31 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
     expect(req.priorBlockingPaths).toBeUndefined();
   });
 
+  it("forwards a valid (positive integer) maxTurns override", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator", brief: "build", maxTurns: 12 });
+    expect(req.maxTurns).toBe(12);
+  });
+
+  it("leaves maxTurns undefined when omitted (config fallback preserved)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator" });
+    expect(req.maxTurns).toBeUndefined();
+  });
+
+  it("drops maxTurns:0 to undefined (0 is NOT an unlimited sentinel, unlike maxBudgetUsd)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator", maxTurns: 0 });
+    expect(req.maxTurns).toBeUndefined();
+  });
+
+  it("drops a negative maxTurns to undefined (config fallback)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator", maxTurns: -3 });
+    expect(req.maxTurns).toBeUndefined();
+  });
+
+  it("drops a fractional maxTurns to undefined (config fallback)", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "generator", maxTurns: 2.5 });
+    expect(req.maxTurns).toBeUndefined();
+  });
+
   it("forwards the rest of the overrides verbatim", () => {
     const req = toRunRoleRequest(ctx, {
       roleKind: "generator",

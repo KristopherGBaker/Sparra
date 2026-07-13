@@ -33,6 +33,9 @@ export interface RunRoleToolArgs {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   out?: string;
   maxBudgetUsd?: number;
+  /** Per-call turn-cap override (overrides `build.maxTurnsPerSession`). POSITIVE INTEGER only;
+   *  unlike `maxBudgetUsd`'s `0` (unlimited), `0`/negative/fractional/absent fall back to config. */
+  maxTurns?: number;
   allowVerify?: boolean;
   worktree?: boolean;
   keepWorktree?: boolean;
@@ -74,6 +77,14 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     effort: args.effort,
     out: args.out,
     maxBudgetUsd: args.maxBudgetUsd,
+    // Turn cap: forward only a POSITIVE INTEGER (matching `parseMaxTurns` in phases/role.ts and the
+    // RoleRunRequest.maxTurns doc-comment); `0`/negative/fractional/absent → undefined so the
+    // `req.maxTurns ?? build.maxTurnsPerSession` fallback at the session-build site applies. Unlike
+    // `maxBudgetUsd`, `0` is NOT an unlimited sentinel here (an unbounded turn cap is a footgun).
+    maxTurns:
+      typeof args.maxTurns === "number" && Number.isInteger(args.maxTurns) && args.maxTurns >= 1
+        ? args.maxTurns
+        : undefined,
     allowVerify: args.allowVerify,
     useWorktree: args.worktree,
     keepWorktree: args.keepWorktree,
@@ -241,6 +252,10 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .number()
         .optional()
         .describe("Per-call USD budget override for THIS run; overrides build.maxBudgetUsdPerItem. 0 = unlimited. Omit to use the config default."),
+      maxTurns: z
+        .number()
+        .optional()
+        .describe("Per-call turn-cap override for THIS run; overrides build.maxTurnsPerSession. POSITIVE INTEGER only — unlike maxBudgetUsd's 0=unlimited, a 0/negative/fractional value is NOT a sentinel and falls back to the config default. Omit to use the config default. Pre-size verify-heavy roles here."),
       allowVerify: z
         .boolean()
         .optional()

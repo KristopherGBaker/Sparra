@@ -138,7 +138,7 @@ output). Wire it into Claude Code pointed at your project:
 ```
 
 Then the model calls `run_role({ roleKind, brief|briefPath, contractPath, workspace,
-holdoutPath, backend, model, effort, out, maxBudgetUsd, allowVerify, worktree, keepWorktree,
+holdoutPath, backend, model, effort, out, maxBudgetUsd, maxTurns, allowVerify, worktree, keepWorktree,
 unitWorktree, expectedHead, evalBaseRef, crossModelBaseline })`.
 `worktree` (read-only judge roles — `evaluator`, `reviewer`, **and `contract-evaluator`**) runs the
 eval/review/critique in a **temporary, throwaway linked git worktree** snapshotted from `workspace`'s
@@ -218,6 +218,10 @@ sparra eval . --eval-base HEAD~5 --baseline-command "npm test"
 overrides the role's configured reasoning effort for that one call — handy to raise an
 adversarial pass (e.g. `xhigh`) without editing config. `maxBudgetUsd` overrides
 `build.maxBudgetUsdPerItem` for that one call (`0` = unlimited; omit to use the config cap).
+`maxTurns` overrides `build.maxTurnsPerSession` for that one call — pre-size a verify-heavy role
+instead of falling back to the config cap. **Unlike `maxBudgetUsd`, a `0` here is NOT an unlimited
+sentinel:** only a positive integer is honored; `0`/negative/fractional (an unbounded turn cap is a
+footgun) falls back to the config default, as does omitting it.
 `allowVerify` (generator-only) lets an **in-place** run — one with no Sparra `build.branch`,
 i.e. the interactive `/sparra-loop` path — auto-run its project's `build.verifyCommands`
 (typecheck/test/build) through the same **strict** allow-hook the build loop uses on a worktree,
