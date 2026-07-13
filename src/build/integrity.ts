@@ -29,6 +29,10 @@ export interface IntegrityDeps {
   writeFile: (absPath: string, content: Buffer) => void;
   /** Delete a file (remove an evaluator-injected file). */
   removeFile: (absPath: string) => void;
+  /** Whether `absPath` is a symlink (lstat, no follow). Optional so in-memory unit fakes need not
+   *  supply it — absent ⇒ treated as "not a symlink" (unchanged non-symlink behavior). Used to
+   *  classify a symlinked top-level `node_modules` as scratch. Real impl: `fs.lstatSync(...).isSymbolicLink()`. */
+  isSymlink?: (absPath: string) => boolean;
 }
 
 export interface SourceSnapshot {
@@ -65,9 +69,30 @@ export function isBuildCachePath(rel: string): boolean {
   return false;
 }
 
-/** The artifact surface minus build-cache paths (applied identically in snapshot + enforce). */
+/**
+ * A top-level `node_modules` that is a SYMLINK is a dependency dir (scratch), not artifact source.
+ * `.gitignore`'s `node_modules/` (dir-ONLY) pattern doesn't match a symlink, so `git ls-files --others
+ * --exclude-standard` surfaces the symlink as an untracked entry. Left unclassified, snapshot can't read
+ * it (a symlink-to-dir yields EISDIR → null → not snapshotted) and enforce then treats it as an
+ * evaluator-injected artifact → deletes the symlink and false-flags an integrity violation. Resolve it
+ * via lstat and exclude it as scratch, applied SYMMETRICALLY in snapshot + enforce.
+ *
+ * Deliberately narrow: ONLY the exact top-level `node_modules` name is classified this way — an
+ * arbitrary symlink (or a differently-named untracked file) is still on the artifact surface, so the
+ * guard does NOT blanket-ignore symlinks/untracked files.
+ */
+export function isScratchDepSymlink(rel: string, workspace: string, deps: IntegrityDeps): boolean {
+  const norm = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (norm !== "node_modules") return false;
+  return deps.isSymlink?.(path.resolve(workspace, rel)) ?? false;
+}
+
+/** The artifact surface minus build-cache paths + scratch dep symlinks (applied identically in
+ *  snapshot + enforce). */
 function artifactSurface(workspace: string, deps: IntegrityDeps): string[] {
-  return deps.listArtifactFiles(workspace).filter((rel) => !isBuildCachePath(rel));
+  return deps
+    .listArtifactFiles(workspace)
+    .filter((rel) => !isBuildCachePath(rel) && !isScratchDepSymlink(rel, workspace, deps));
 }
 
 /** Capture the artifact surface before an exercise that may write. */
@@ -127,6 +152,13 @@ export function realIntegrityDeps(): IntegrityDeps {
         return fs.readFileSync(absPath); // raw Buffer — byte-exact, no encoding
       } catch {
         return null;
+      }
+    },
+    isSymlink: (absPath) => {
+      try {
+        return fs.lstatSync(absPath).isSymbolicLink(); // lstat: don't follow, so a dep symlink is detected
+      } catch {
+        return false;
       }
     },
     writeFile: (absPath, content) => {

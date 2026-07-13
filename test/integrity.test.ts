@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { snapshotArtifact, enforceArtifactIntegrity, isBuildCachePath, type IntegrityDeps } from "../src/build/integrity.ts";
+import {
+  snapshotArtifact,
+  enforceArtifactIntegrity,
+  isBuildCachePath,
+  isScratchDepSymlink,
+  realIntegrityDeps,
+  type IntegrityDeps,
+} from "../src/build/integrity.ts";
 
 /** An in-memory fake IntegrityDeps so the guard is exercised with no real git/fs.
  *  `tracked` is the artifact surface (what `git ls-files …` would list, relative to ws).
@@ -257,5 +267,136 @@ describe("build-cache exclusion (isBuildCachePath + guard integration)", () => {
       expect(ctx.files.get(".claude/settings.json")!.toString()).toBe("CFG");
       expect(ctx.files.has(".claude/skills/aseprite")).toBe(true);
     });
+  });
+});
+
+describe("isScratchDepSymlink (unit)", () => {
+  const symDeps = (symlinks: string[]): IntegrityDeps => ({
+    listArtifactFiles: () => [],
+    readFile: () => null,
+    writeFile: () => {},
+    removeFile: () => {},
+    isSymlink: (abs) => symlinks.includes(abs),
+  });
+  it("classifies a top-level node_modules symlink as scratch, but not a real dir / other names", () => {
+    const ws = "/ws";
+    const deps = symDeps([path.resolve(ws, "node_modules")]);
+    // Top-level node_modules that IS a symlink → scratch.
+    expect(isScratchDepSymlink("node_modules", ws, deps)).toBe(true);
+    expect(isScratchDepSymlink("./node_modules", ws, deps)).toBe(true); // leading ./ normalized
+    // Same name but NOT a symlink (e.g. a real committed dir entry) → not scratch.
+    expect(isScratchDepSymlink("node_modules", ws, symDeps([]))).toBe(false);
+    // Nested node_modules or other names, even if symlinked → not classified (narrow, top-level only).
+    expect(isScratchDepSymlink("pkg/node_modules", ws, symDeps([path.resolve(ws, "pkg/node_modules")]))).toBe(false);
+    expect(isScratchDepSymlink("injected-link", ws, symDeps([path.resolve(ws, "injected-link")]))).toBe(false);
+    expect(isScratchDepSymlink("node_modules/x", ws, symDeps([path.resolve(ws, "node_modules/x")]))).toBe(false);
+  });
+  it("absent isSymlink dep ⇒ treated as not-a-symlink (unchanged non-symlink behavior)", () => {
+    const deps: IntegrityDeps = { listArtifactFiles: () => [], readFile: () => null, writeFile: () => {}, removeFile: () => {} };
+    expect(isScratchDepSymlink("node_modules", "/ws", deps)).toBe(false);
+  });
+});
+
+describe("symlinked top-level node_modules — real git repo + real symlink + realIntegrityDeps", () => {
+  const g = (dir: string, args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+
+  /** A real temp git repo whose top-level `node_modules` is a symlink to a dep dir OUTSIDE the repo
+   *  (containing a real file), plus a tracked `src.ts`. `.gitignore` = `node_modules/` (dir-only). */
+  function tmpRepo(): { ws: string; parent: string; depTarget: string } {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-integ-symlink-"));
+    const ws = path.join(parent, "repo");
+    const depTarget = path.join(parent, "real-node-modules"); // OUTSIDE the repo
+    fs.mkdirSync(ws);
+    fs.mkdirSync(depTarget);
+    fs.writeFileSync(path.join(depTarget, "some-pkg.js"), "module.exports = 1;\n");
+    g(ws, ["init", "-q"]);
+    g(ws, ["config", "user.email", "t@t"]);
+    g(ws, ["config", "user.name", "t"]);
+    fs.writeFileSync(path.join(ws, "src.ts"), "export const x = 1;\n");
+    fs.writeFileSync(path.join(ws, ".gitignore"), "node_modules/\n"); // dir-only pattern
+    g(ws, ["add", "-A"]);
+    g(ws, ["commit", "-q", "-m", "item-start"]);
+    // Top-level node_modules → symlink to the OUTSIDE dep dir.
+    fs.symlinkSync(depTarget, path.join(ws, "node_modules"));
+    return { ws, parent, depTarget };
+  }
+  const cleanup = (parent: string) => fs.rmSync(parent, { recursive: true, force: true });
+
+  it("fixture precondition: git ls-files surfaces the node_modules symlink (triggers the pre-fix false-fail path)", () => {
+    const { ws, parent } = tmpRepo();
+    try {
+      const listed = g(ws, ["ls-files", "--cached", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+      // The dir-only gitignore pattern doesn't match the symlink, so git surfaces it — this is exactly
+      // what made snapshot/enforce false-flag it before the fix.
+      expect(listed).toContain("node_modules");
+      expect(listed).toContain("src.ts");
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("scratch: snapshot→no writes→enforce returns [] (no false violation) and leaves the symlink intact", () => {
+    const { ws, parent, depTarget } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const snap = snapshotArtifact(ws, deps);
+      const mutated = enforceArtifactIntegrity(ws, snap, deps);
+      expect(mutated).toEqual([]); // node_modules symlink classified as scratch, not an artifact
+      // Symlink still exists, still a symlink, still points at the original target.
+      const nm = path.join(ws, "node_modules");
+      expect(fs.existsSync(nm)).toBe(true);
+      expect(fs.lstatSync(nm).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(nm)).toBe(depTarget);
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("scratch write under the symlinked node_modules target between snapshot and enforce is ignored", () => {
+    const { ws, parent, depTarget } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const snap = snapshotArtifact(ws, deps);
+      // A build tool installs a package into the (symlinked) dep dir during the exercise.
+      const written = path.join(depTarget, "installed-pkg.js");
+      fs.writeFileSync(written, "module.exports = 2;\n");
+      const mutated = enforceArtifactIntegrity(ws, snap, deps);
+      expect(mutated).toEqual([]);
+      expect(fs.existsSync(written)).toBe(true); // left in place
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("detection NOT weakened: a tracked src.ts mutation is reported and byte-restored", () => {
+    const { ws, parent } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const snap = snapshotArtifact(ws, deps);
+      fs.writeFileSync(path.join(ws, "src.ts"), "export const x = 999; // HACKED\n"); // graded-source edit
+      const mutated = enforceArtifactIntegrity(ws, snap, deps);
+      expect(mutated).toEqual(["src.ts"]);
+      expect(fs.readFileSync(path.join(ws, "src.ts"), "utf8")).toBe("export const x = 1;\n"); // restored
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("contrasting negative: a NEW non-scratch top-level symlink (injected-link) IS reported and removed", () => {
+    const { ws, parent, depTarget } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const snap = snapshotArtifact(ws, deps);
+      // Evaluator injects a symlink with a NON-ignored, non-scratch name.
+      const injected = path.join(ws, "injected-link");
+      fs.symlinkSync(depTarget, injected);
+      const mutated = enforceArtifactIntegrity(ws, snap, deps);
+      expect(mutated).toEqual(["injected-link"]); // not blanket-ignored just because it's a symlink
+      expect(fs.existsSync(injected)).toBe(false); // removed
+      // The node_modules symlink is still ignored (untouched) in the same run.
+      expect(fs.lstatSync(path.join(ws, "node_modules")).isSymbolicLink()).toBe(true);
+    } finally {
+      cleanup(parent);
+    }
   });
 });

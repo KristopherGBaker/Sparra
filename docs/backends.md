@@ -119,6 +119,14 @@ naming the mutated files. Set `exercise.sandbox: read-only` to keep the strict p
 (scratch-needing tools will `EPERM`). The **Claude** evaluator exercises via an in-process runner
 and is unaffected.
 
+A **symlinked top-level `node_modules`** (a dep dir linked in from outside the repo) is a special
+case: `.gitignore`'s `node_modules/` is a **dir-only** pattern, so it does **not** match a symlink,
+and `git ls-files --others` surfaces the symlink as an untracked entry. The guard **canonicalizes**
+it (via `lstat`) and treats it as **scratch** — it is never snapshotted, reverted, deleted, or
+flagged as an integrity violation. This is deliberately narrow: only the exact top-level
+`node_modules` name is classified this way, so an arbitrary injected symlink (or any other
+non-scratch untracked file) is still on the artifact surface and still reverted.
+
 The "isolated-checkout boundary" is **a Sparra build branch (`state.build.branch`) OR a linked
 git worktree** (`isLinkedWorktree`) — not specifically `build.branch`. So a standalone `sparra
 eval`/`run_role` on a git worktree gets writable scratch **without editing `state.json`**. A plain
