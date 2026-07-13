@@ -55,6 +55,12 @@ export interface UnitStateEntry {
   error?: string;
   /** Every judgment-point decision surfaced for this unit (park/timeout/auto), in order. */
   decisions?: DecisionRecord[];
+  /** Opt-in `--commit`: the `sparra/<name>` branch tip (40-hex) after the unit's WIP was committed.
+   *  Absent when the flags are off, or the unit produced no committable WIP. */
+  committedSha?: string;
+  /** Opt-in `--merge`: the target branch this accepted unit was merged into (`sparra/<runId>` or the
+   *  current non-default branch). Absent when only `--commit`, or the merge parked/failed. */
+  mergedInto?: string;
 }
 
 /** Overall run status. `running` and `pending` are NON-final; the rest are terminal. */

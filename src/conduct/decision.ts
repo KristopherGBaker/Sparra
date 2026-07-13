@@ -5,19 +5,23 @@ import type { ParentSummary } from "../../conductors/core/index.ts";
  * engine and conductor brain.
  *
  * A "judgment point" is a moment where an experienced human conducting /sparra-loop would pause and
- * choose. There are five (the FIXED set): contract non-convergence, unit exhaustion, cross-model
- * gate collapse, budget/limit recovery, and a borderline final accept. At each, the run surfaces a
- * {@link DecisionRequest} — built ONLY from holdout-safe, `ParentSummary`-derived material, so a
- * request/record can never quote holdout evidence.
+ * choose. Five arise DURING a unit's build (the fixed loop set): contract non-convergence, unit
+ * exhaustion, cross-model gate collapse, budget/limit recovery, and a borderline final accept. A
+ * sixth, `merge-blocked`, arises AFTER acceptance in the opt-in `--merge` landing phase (a merge
+ * conflict or a dirty merge target). At each, the run surfaces a {@link DecisionRequest} — built ONLY
+ * from holdout-safe, `ParentSummary`-derived material, so a request/record can never quote holdout
+ * evidence.
  */
 
-/** The five fixed judgment points. */
+/** The judgment points. The first five arise in a unit's build loop; `merge-blocked` in the
+ *  post-accept `--merge` landing phase (conflict / dirty target). */
 export type JudgmentKind =
   | "contract-nonconvergence"
   | "unit-exhausted"
   | "gate-collapse"
   | "recovery"
-  | "borderline-accept";
+  | "borderline-accept"
+  | "merge-blocked";
 
 /**
  * Where a resolved decision's answer came from — a CLOSED enum covering every resolution path:
@@ -102,6 +106,10 @@ export const JUDGMENT_OPTIONS: Record<JudgmentKind, { options: string[]; default
   "gate-collapse": { options: ["abandon", "accept-anyway", "retry"], default: "abandon" },
   "recovery": { options: ["wait", "fallback", "abandon"], default: "wait" },
   "borderline-accept": { options: ["accept", "revise", "abandon"], default: "accept" },
+  // Merge landing blocked (conflict / dirty target). Both options leave the target byte-identical and
+  // keep the unit's worktree+branch: `skip-unit` skips just this unit; `abort-merge` stops merging
+  // the rest of the run's accepted units too. Default keeps the unit for the human to merge by hand.
+  "merge-blocked": { options: ["skip-unit", "abort-merge"], default: "skip-unit" },
 };
 
 /** A one-line question for each judgment kind (no holdout material). */
@@ -117,6 +125,8 @@ export function judgmentQuestion(kind: JudgmentKind, unit: string): string {
       return `Unit ${unit}: a provider limit/budget issue with no clean recovery — wait, fall back, or abandon?`;
     case "borderline-accept":
       return `Unit ${unit}: the verdict is a borderline pass — accept, revise once more, or abandon?`;
+    case "merge-blocked":
+      return `Unit ${unit}: the merge is blocked (conflict or a dirty target) — skip this unit (keep its worktree) or abort the merge?`;
   }
 }
 

@@ -258,6 +258,82 @@ export function mergeFfOnly(
   return run(root, ["merge", "--ff-only", source]);
 }
 
+/**
+ * Rebase the branch checked out in `worktreeDir` onto `onto` (`git rebase <onto>`), so the branch's
+ * commits replay linearly on top of `onto`'s tip. Only the branch checked out in `worktreeDir` is
+ * moved; `onto` is read as a ref (shared object store), so it may be checked out in another worktree.
+ * On a conflict (or any failure) git leaves the rebase mid-flight — callers MUST `abortRebase` to
+ * restore the branch. Used by the conduct `--merge` path (rebase+ff preferred).
+ *
+ * `run` is an injectable git runner (default = real `git`) so the seam is unit-testable.
+ */
+export function rebaseBranch(
+  worktreeDir: string,
+  onto: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  return run(worktreeDir, ["rebase", onto]);
+}
+
+/** Abort an in-progress rebase in `worktreeDir` (`git rebase --abort`), restoring the branch to its
+ *  pre-rebase state. Best-effort: a no-op error (no rebase in progress) is harmless. */
+export function abortRebase(
+  worktreeDir: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  return run(worktreeDir, ["rebase", "--abort"]);
+}
+
+/**
+ * Merge `source` into the branch ALREADY checked out in `targetDir`. `noFf` forces a merge commit
+ * (`--no-ff`); otherwise a fast-forward-only merge (`--ff-only`) is attempted (used after a rebase
+ * made `source` a strict descendant of the target). On a conflict git leaves the merge mid-flight —
+ * callers MUST `abortMerge` to restore the target. Never force, never `--allow-unrelated-histories`.
+ *
+ * `run` is an injectable git runner (default = real `git`) so the seam is unit-testable.
+ */
+export function mergeCheckedOut(
+  targetDir: string,
+  source: string,
+  opts: { noFf?: boolean; message?: string } = {},
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  const args = ["merge"];
+  if (opts.noFf) args.push("--no-ff");
+  else args.push("--ff-only");
+  if (opts.message) args.push("-m", opts.message);
+  args.push(source);
+  return run(targetDir, args);
+}
+
+/** Abort an in-progress merge in `targetDir` (`git merge --abort`), restoring the target's tip,
+ *  index, and working tree. Best-effort: a no-op error (no merge in progress) is harmless. */
+export function abortMerge(
+  targetDir: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  return run(targetDir, ["merge", "--abort"]);
+}
+
+/**
+ * True iff `dir` has an in-progress rebase or merge (a mid-operation git state): a `.git/MERGE_HEAD`,
+ * or a `rebase-merge/` / `rebase-apply/` state dir under the resolved git dir. Used by the conduct
+ * merge path's post-resolution cleanliness checks (and available to callers verifying no operation
+ * was left mid-flight). Resolves the real git dir first so it works in a linked worktree too.
+ */
+export function mergeOrRebaseInProgress(dir: string): boolean {
+  if (!isGitRepo(dir) && !isLinkedWorktree(dir)) {
+    // fall through — rev-parse below still works for linked worktrees whose `.git` is a file
+  }
+  const gd = git(dir, ["rev-parse", "--git-dir"]);
+  if (!gd.ok) return false;
+  const gitDir = path.resolve(dir, gd.out.trim());
+  if (exists(path.join(gitDir, "MERGE_HEAD"))) return true;
+  if (exists(path.join(gitDir, "rebase-merge"))) return true;
+  if (exists(path.join(gitDir, "rebase-apply"))) return true;
+  return false;
+}
+
 // ── Clean seam (prune stale Sparra worktrees/branches). Read-only listers + a merge check. ──
 
 /**

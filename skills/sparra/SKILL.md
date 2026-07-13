@@ -102,10 +102,15 @@ resumes — passed/abandoned/budget_exceeded items are skipped.
 prompt (no `sparra init` needed): decompose → per unit contract-negotiate → generate → cross-model
 evaluate → decide, all through the isolated `role run … --json` machinery. Flags:
 `--max-units N` (default 4), `--concurrency N` (default 2), `--budget <usd>` (0 = unlimited),
-`--max-turns <n>`, `--dry-run` (decompose + briefs only, no role spend beyond the decomposer). Writes
-`.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating each unit on
-its own `sparra/<name>` worktree — nothing lands on your branch, and `run.json` reports each accepted
-unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
+`--max-turns <n>`, `--dry-run` (decompose + briefs only, no role spend beyond the decomposer), plus the
+opt-in landing flags `--commit` (commit an accepted unit's WIP onto its `sparra/<name>` branch — message
+carries the unit's score + conduct `runId`) and `--merge` (implies `--commit`: integrate accepted
+branches into a safe target — a run branch `sparra/<runId>` when started on the default branch, else the
+current branch, **never** the default branch — rebase+ff preferred with a merge-commit fallback,
+conflicts/dirty target parked, merged worktrees torn down; `run.json` records `committedSha`/`mergedInto`).
+Writes `.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating each unit
+on its own `sparra/<name>` worktree — by default nothing is committed or merged and the default branch is
+never touched; `run.json` reports each accepted unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
 decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
 an inline TTY prompt, `sparra conduct --decide <runId> <seq> <answer>` in another terminal, or the HTTP

@@ -35,6 +35,9 @@ import {
   type TtySeam,
 } from "./decisionEngine.ts";
 import { buildUnitRoleSpecs, resolveSparraBin, type UnitRoleSpecs } from "./roleSpecs.ts";
+import { landAcceptedUnits, type LandingDeps, type LandingGit } from "./merge.ts";
+import type { ConductCommitGit } from "./commit.ts";
+import type { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { conductRunDir, RunStateWriter } from "./runState.ts";
 import { deterministicStrategy, type JudgmentStrategy } from "./strategy.ts";
 import type { RecoveryCaps } from "./recovery.ts";
@@ -69,6 +72,11 @@ export interface ConductOptions {
   surface?: "park" | "park-timeout" | "auto";
   /** Seconds a parked decision waits before auto-resolving under `park-timeout`. */
   timeoutSec?: number;
+  /** Opt-in: after a unit is ACCEPTED, commit its worktree WIP onto its `sparra/<name>` branch. */
+  commit?: boolean;
+  /** Opt-in (implies `commit`): integrate accepted branches into a safe target (never the default
+   *  branch). Rebase+ff preferred, merge-commit fallback, conflicts/dirty target parked. */
+  merge?: boolean;
 }
 
 export interface ConductDeps {
@@ -100,6 +108,16 @@ export interface ConductDeps {
   onDecisionRequest?: (requestPath: string) => void;
   /** Test seam: every brain prompt (holdout-safety assertions). */
   onBrainPrompt?: (prompt: string) => void;
+
+  // ── commit/merge landing seams (all injectable so tests run with real-git fakes, no model calls) ──
+  /** Injectable git seam for the merge path (rebase/ff/merge/abort/target selection). */
+  landingGit?: Partial<LandingGit>;
+  /** Injectable git seam for the commit path (changedFiles/diff/commit/rev-parse). */
+  commitGit?: Partial<ConductCommitGit>;
+  /** Committer session runner (agent-commit mode). Distinct from the decomposer's `runSessionFn`. */
+  committerSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+  /** Unit-worktree teardown seam (default real `removeUnitWorktree`). */
+  removeUnitWorktreeFn?: typeof removeUnitWorktree;
 }
 
 /** The result of a conduct run: the final run state + where it lives. */
@@ -240,6 +258,11 @@ export async function runConduct(
     return summary;
   };
 
+  // Run-global decision sequence + the conductor brain, both shared between the per-unit brain path
+  // and the post-accept merge-landing decisions (so seq never collides across the two).
+  const seqRef = { n: 0 };
+  const brain = await buildConductBrain(ctx, opts, deps, runDir);
+
   if (opts.brain) {
     // 3b/4b/5b. Conductor-brain path: hybrid/llm per-unit orchestration + the decision engine.
     state.brain = opts.brain;
@@ -255,6 +278,8 @@ export async function runConduct(
       strategy,
       sparraBin,
       trackedRunRole,
+      brain,
+      seqRef,
     });
   } else {
     // 4. Deterministic path (U1): one bounded-concurrent core `runUnit` per unit.
@@ -276,6 +301,37 @@ export async function runConduct(
         finalizeFromResult(entry, res.result);
       }
     }
+  }
+
+  // 5. Opt-in commit/merge landing (no flags → this block never runs; behavior is byte-identical to
+  // today). `--merge` implies `--commit`. Serialized across accepted units.
+  if (opts.commit || opts.merge) {
+    const surface = opts.surface ?? ctx.config.conduct.decisions.surface;
+    const timeoutSec = opts.timeoutSec ?? ctx.config.conduct.decisions.timeoutSec;
+    const nowMs = deps.now ?? (() => Date.now());
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const landingDeps: LandingDeps = {
+      mode: opts.merge ? "merge" : "commit",
+      runId,
+      runDir,
+      writer,
+      state,
+      ...(hasHoldout(ctx) ? { holdoutPaths: [ctx.paths.holdout, ctx.paths.frozenHoldout] } : {}),
+      ...(deps.landingGit ? { git: deps.landingGit } : {}),
+      ...(deps.commitGit ? { commitGit: deps.commitGit } : {}),
+      ...(deps.committerSessionFn ? { runSessionFn: deps.committerSessionFn } : {}),
+      ...(deps.removeUnitWorktreeFn ? { removeUnitWorktreeFn: deps.removeUnitWorktreeFn } : {}),
+      surface,
+      nowMs,
+      sleep,
+      ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
+      timeoutSec,
+      ...(brain ? { brainJudge: (r) => brain.judge(r) } : {}),
+      ...(deps.tty ? { tty: deps.tty } : {}),
+      ...(deps.onDecisionRequest ? { onDecisionRequest: deps.onDecisionRequest } : {}),
+      seqRef,
+    };
+    await landAcceptedUnits(ctx, landingDeps);
   }
 
   state.status = "completed";
@@ -370,12 +426,44 @@ interface BrainRunParams {
   strategy: JudgmentStrategy;
   sparraBin: string;
   trackedRunRole: RoleRunner;
+  /** The conductor brain (built once in `runConduct`), or undefined for deterministic policy. */
+  brain: Brain | undefined;
+  /** Run-global monotonic decision sequence (shared with the landing phase so seq never collides). */
+  seqRef: { n: number };
 }
 
 /**
- * The conductor-brain path: build the brain once (holdout-safe, read-only), then run each unit's
- * hybrid/llm orchestration bounded-concurrently, wiring the decision engine (park/timeout/auto) at
- * each judgment point and recording every decision into `run.json`.
+ * Build the conductor brain once (holdout-safe, read-only), shared by the per-unit brain path and
+ * the post-accept merge-landing decisions. `deps.brain === null` forces NO brain (deterministic
+ * policy at every judgment point); a supplied `deps.brain` is used as-is; otherwise one is built from
+ * `deps.brainSessionFn` (real `runSession` by default) when `opts.brain` is set.
+ */
+async function buildConductBrain(
+  ctx: Ctx,
+  opts: ConductOptions,
+  deps: ConductDeps,
+  runDir: string,
+): Promise<Brain | undefined> {
+  if (!opts.brain) return undefined;
+  if (deps.brain === null) return undefined;
+  if (deps.brain) return deps.brain;
+  return makeBrain({
+    runSessionFn: deps.brainSessionFn ?? runSession,
+    role: ctx.config.roles.conductor,
+    systemPrompt: await loadPrompt(ctx.paths, "conductor"),
+    cwd: runDir,
+    traceDir: runDir,
+    jsonReask: ctx.config.build.jsonReask,
+    env: mergedBuildEnv(ctx.config),
+    ...(deps.onBrainPrompt ? { onPrompt: deps.onBrainPrompt } : {}),
+  });
+}
+
+/**
+ * The conductor-brain path: run each unit's hybrid/llm orchestration bounded-concurrently, wiring the
+ * decision engine (park/timeout/auto) at each judgment point and recording every decision into
+ * `run.json`. The brain + decision-sequence counter are supplied by `runConduct` (shared with the
+ * landing phase).
  */
 async function runBrainUnits(
   ctx: Ctx,
@@ -388,27 +476,8 @@ async function runBrainUnits(
   const nowMs = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  // Build the brain once. `null` forces NO brain (deterministic policy at judgment points).
-  let brain: Brain | undefined;
-  if (deps.brain === null) {
-    brain = undefined;
-  } else if (deps.brain) {
-    brain = deps.brain;
-  } else {
-    brain = makeBrain({
-      runSessionFn: deps.brainSessionFn ?? runSession,
-      role: ctx.config.roles.conductor,
-      systemPrompt: await loadPrompt(ctx.paths, "conductor"),
-      cwd: p.runDir,
-      traceDir: p.runDir,
-      jsonReask: ctx.config.build.jsonReask,
-      env: mergedBuildEnv(ctx.config),
-      ...(deps.onBrainPrompt ? { onPrompt: deps.onBrainPrompt } : {}),
-    });
-  }
-
-  let seq = 0;
-  const nextSeq = () => (seq += 1);
+  const brain = p.brain;
+  const nextSeq = () => (p.seqRef.n += 1);
 
   const runOne = async (unit: ConductUnit): Promise<void> => {
     const entry = p.entryByUnit.get(unit.id)!;

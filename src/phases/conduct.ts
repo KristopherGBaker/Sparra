@@ -55,6 +55,10 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
     return { ok: false, error: brain };
   }
 
+  // `--merge` implies `--commit` (merge integrates the branches it first commits).
+  const merge = flags["merge"] === true;
+  const commit = merge || flags["commit"] === true;
+
   const opts: ConductOptions = {
     prompt: trimmed,
     maxUnits,
@@ -66,6 +70,8 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
   if (brain === "hybrid" || brain === "llm") opts.brain = brain;
   // `--auto` forces the never-park surface for this run.
   if (flags["auto"] === true) opts.surface = "auto";
+  if (commit) opts.commit = true;
+  if (merge) opts.merge = true;
   return { ok: true, opts };
 }
 
@@ -161,6 +167,7 @@ export async function cmdConduct(
     `prompt="${parsed.opts.prompt.slice(0, 80)}${parsed.opts.prompt.length > 80 ? "…" : ""}" ` +
       `max-units=${parsed.opts.maxUnits} concurrency=${parsed.opts.concurrency} ` +
       `brain=${parsed.opts.brain} decisions=${parsed.opts.surface}` +
+      (parsed.opts.merge ? " merge" : parsed.opts.commit ? " commit" : "") +
       (parsed.opts.dryRun ? " (dry-run)" : ""),
   );
   const result = await runConductFn(ctx, parsed.opts, conductDeps);

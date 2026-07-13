@@ -16,7 +16,7 @@ config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` 
 
 ```bash
 sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] \
-                          [--brain <hybrid|llm>] [--auto] [--dry-run]
+                          [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
 ```
 
@@ -30,6 +30,8 @@ sparra conduct --decide <runId> <seq> <answer> [--note "…"]
 | `--max-turns <n>` | (config) | Per-role-run turn cap. Must be a positive integer. |
 | `--brain <hybrid\|llm>` | `hybrid` | Conductor-brain mode (see below). `hybrid` = deterministic loop + LLM at judgment points; `llm` = the brain drives turn-by-turn. Invalid values are rejected before any spend. |
 | `--auto` | off | Never park a decision — the brain decides everything (`surface: "auto"` for the run). |
+| `--commit` | off | After a unit is **accepted**, commit its worktree WIP onto its own `sparra/<name>` branch — the `committer` role (when `git.agentCommits: "agent"`) or a deterministic template message (`"template"`), mirroring `src/build`'s `commitItem` (incl. holdout exclusion). The message carries the unit's **score** and the conduct **`runId`**. `run.json` records `committedSha`. Worktree + branch are kept. |
+| `--merge` | off | **Implies `--commit`.** Integrate each accepted unit's branch into a **safe target** — a run branch `sparra/<runId>` when conduct started from the default branch, or the current **non-default** branch otherwise; **never** the default branch. Prefers **rebase + fast-forward**, falling back to a **merge commit**. A merge conflict or a dirty target **parks** a `merge-blocked` decision (`skip-unit` / `abort-merge`) through the same decision engine. On a **successful** merge the unit worktree is **torn down** (existing rm-worktree machinery); `run.json` records `mergedInto`. Merges are **serialized** across concurrently-completing units. |
 | `--dry-run` | off | Decompose + write briefs only — **no role spend beyond the decomposer**. |
 
 ## Conductor-brain modes
@@ -99,6 +101,36 @@ A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--conc
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the
 offending flag and creates no run directory.
 
+## Commit & merge landing (`--commit` / `--merge`)
+
+By default `conduct` is **report-only**: it leaves every accepted unit on its own `sparra/<name>`
+worktree and touches no history. The opt-in landing flags change that **after** a unit is accepted:
+
+- **`--commit`** commits the unit's worktree WIP onto its `sparra/<name>` branch (mirroring the build
+  loop's `commitItem`: `committer`-role plan when `git.agentCommits: "agent"`, else a deterministic
+  template commit — with the holdout excluded from the diff/plan/commit). The message carries the
+  unit's **score** and the conduct **`runId`**. `run.json` gets `committedSha`. The worktree/branch
+  are **kept**.
+- **`--merge`** (implies `--commit`) then integrates each committed branch into a **safe target**:
+  - started **on the default branch** → a new/reused **run branch `sparra/<runId>`** in a sibling
+    worktree (cut from the default tip; the default branch is never modified);
+  - started **on a non-default branch** → **that branch**, in place.
+  - It **never** merges into the default branch — that final land stays yours.
+  - It prefers **rebase + fast-forward** (linear history); if the rebase can't apply it falls back to
+    a **merge commit**.
+  - A **merge conflict** or a **dirty merge target** is surfaced as a **`merge-blocked`** parked
+    decision through the same decision engine (options `skip-unit` — keep this unit's worktree and
+    move on — or `abort-merge` — stop merging the remaining accepted units). `--auto`/a brain resolves
+    it without parking; the target is left **byte-identical** and the unit's worktree + branch remain.
+  - On a **successful** merge the unit worktree is **torn down** via the existing rm-worktree
+    machinery (force-removed only once its branch is merged into the target), and `run.json` records
+    `mergedInto`.
+  - Merges into the shared target are **serialized** across concurrently-completing units — no lost
+    update, no duplicate.
+
+Without either flag, behavior is **byte-identical to today** (no commit, no merge, no teardown, and
+`run.json` unit entries carry neither `committedSha` nor `mergedInto`).
+
 ## Artifacts layout
 
 Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source of truth):
@@ -106,6 +138,7 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
 ```
 .sparra/conduct/<runId>/
   run.json                 # units, per-unit outcome/score/cost/branch/worktree, overall status
+                           #   + committedSha/mergedInto when landed with --commit/--merge
   <unit-id>/
     brief.md               # the unit's brief (written from the decomposition)
     contract.md            # the finalized (agreed or forced) contract
@@ -126,10 +159,13 @@ still inspectable: completed units carry their fields and the overall `status` s
   The conduct process never reads or inlines holdout content; conductor-visible state (`run.json`,
   the in-memory state) carries only holdout-safe `ParentSummary`-derived fields. Generator, contract,
   and decomposer specs never receive a holdout path.
-- **Git safety.** `conduct` never lands anything on your checked-out branch or the default branch.
-  Each unit generates on its **own persistent** `sparra/<name>` unit worktree; `run.json` reports each
-  accepted unit's branch + worktree. Merge orchestration is a later unit — `conduct` reports branches
-  and leaves them.
+- **Git safety.** `conduct` **never** touches the repo's **default branch** — that land is always
+  yours. By default (no `--commit`/`--merge`) it also never commits or merges anything: each unit
+  generates on its **own persistent** `sparra/<name>` unit worktree and `run.json` reports each
+  accepted unit's branch + worktree, left for you. The opt-in `--commit`/`--merge` flags (below)
+  commit accepted WIP onto its own `sparra/<name>` branch and integrate accepted branches into a
+  **safe target that is never the default branch** — a run branch `sparra/<runId>` when conduct
+  started from the default branch, or your current (non-default) branch otherwise.
 
 ## What it reuses
 

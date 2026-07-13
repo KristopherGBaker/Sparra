@@ -26,7 +26,7 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["test/**/*.test.ts", "conductors/**/*.test.ts"],
-          exclude: ["test/unitWorktree.test.ts", "node_modules/**"],
+          exclude: ["test/unitWorktree.test.ts", "test/conductMerge.test.ts", "node_modules/**"],
           environment: "node",
           sequence: { groupOrder: 0 },
           // Headroom for the many subprocess-spawning tests in this project (git, execFileSync,
@@ -38,7 +38,7 @@ export default defineConfig({
       {
         test: {
           name: "real-git",
-          include: ["test/unitWorktree.test.ts"],
+          include: ["test/unitWorktree.test.ts", "test/conductMerge.test.ts"],
           environment: "node",
           // Group 1 is not dispatched until group 0 fully drains (see comment above), so real git
           // worktree removal never contends with the parallel unit files for CPU. Kept single-file
