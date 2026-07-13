@@ -311,8 +311,16 @@ describe("conduct core — contract negotiation (generator-driven)", () => {
       expect(u.contractForced).toBe(true);
       // Ran the full round cap of contract-generator drafts.
       expect(genRound).toBe(rounds);
-      // Round 2's contract-generator argv carries round 1's critique path (threaded).
-      expect(argVals(genArgsByRound[1]!, "--prior-critique")).toContain(critiquePaths[0]);
+      // The runner REJECTS --prior-critique for contract-generators ("provide … Drop it.", exit 1
+      // — live-fire regression), so round 2 must NOT carry it; instead it gets a composite
+      // revision brief: a NEW file whose content inlines round 1's critique text + the original.
+      expect(argVals(genArgsByRound[1]!, "--prior-critique")).toHaveLength(0);
+      const r1Brief = argVal(genArgsByRound[0]!, "--brief")!;
+      const r2Brief = argVal(genArgsByRound[1]!, "--brief")!;
+      expect(r2Brief).not.toBe(r1Brief);
+      const r2Text = fs.readFileSync(r2Brief, "utf8");
+      expect(r2Text).toContain("nope"); // round-1 critique text inlined
+      expect(r2Text).toContain(fs.readFileSync(r1Brief, "utf8").trim()); // original brief preserved
       // Forced finalization persists the LATEST generated proposal text.
       const finalContract = fs.readFileSync(u.contractPath!, "utf8");
       expect(finalContract).toBe(`PROPOSAL-ROUND-${rounds}`);
