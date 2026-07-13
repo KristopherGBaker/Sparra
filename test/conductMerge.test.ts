@@ -5,7 +5,10 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { loadCtxForRole, type Ctx } from "../src/context.ts";
-import { runConduct, type ConductDeps, type ConductOptions } from "../src/conduct/run.ts";
+import { runConduct, resumeConduct, type ConductDeps, type ConductOptions } from "../src/conduct/run.ts";
+import { conductRunDir, runStatePath } from "../src/conduct/runState.ts";
+import type { ConductRunState, UnitStateEntry } from "../src/conduct/types.ts";
+import type { EnsureUnitWorktreeResult } from "../src/build/unitWorktree.ts";
 import { commitUnit } from "../src/conduct/commit.ts";
 import {
   conductRunBranch,
@@ -819,6 +822,166 @@ describe("conduct --merge (real git)", () => {
       expect(plain.ok).toBe(false);
     } finally {
       cleanup(repo, ...cleanupDirs);
+    }
+  });
+});
+
+/**
+ * `conduct --resume` composed with `--commit`/`--merge`, exercised against REAL git in a throwaway
+ * repo. A crashed run is simulated by hand-writing `run.json` + the unit brief/contract, then
+ * resumed. `agentCommits: template` (via makeCtx) means no committer session ever runs; the worktree
+ * reuse/recreate seam is faked so the generator fakeRunner creates the real unit worktree exactly once.
+ */
+
+/** Seed a persisted (crashed) conduct run under `<repo>/.sparra/conduct/<runId>/`: run.json + the
+ *  unit's brief + an AGREED contract file, so resume re-enters the unit straight at generate. */
+function seedResumableRun(
+  ctx: Ctx,
+  runId: string,
+  units: Array<{ id: string; title: string }>,
+): string {
+  const runDir = conductRunDir(ctx.paths.dir, runId);
+  const entries: UnitStateEntry[] = units.map((u) => {
+    const unitDir = path.join(runDir, u.id);
+    fs.mkdirSync(unitDir, { recursive: true });
+    const briefPath = path.join(unitDir, "brief.md");
+    fs.writeFileSync(briefPath, `# ${u.title}\n\nbrief for ${u.id}\n`);
+    const contractPath = path.join(unitDir, "contract.md");
+    fs.writeFileSync(contractPath, "AGREED CONTRACT\n");
+    return { id: u.id, title: u.title, outcome: "error", briefPath, contractPath, contractAgreed: true };
+  });
+  const state: ConductRunState = {
+    runId,
+    prompt: "resumed prompt",
+    status: "running",
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z",
+    maxUnits: 4,
+    concurrency: 2,
+    dryRun: false,
+    units: entries,
+  };
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(runStatePath(runDir), JSON.stringify(state, null, 2));
+  return runDir;
+}
+
+/** A worktree reuse/recreate seam that DOESN'T touch git — it reports "reused" so the generator
+ *  fakeRunner is the one that actually creates the real unit worktree (exactly once). */
+const passthroughEnsureWt: NonNullable<ConductDeps["ensureUnitWorktreeFn"]> = (async (
+  _ctx: Ctx,
+  name: string,
+  src: string,
+): Promise<EnsureUnitWorktreeResult> => ({
+  dir: defaultUnitWorktreeDir(src, name),
+  branch: `sparra/${name}`,
+  src,
+  created: false,
+})) as NonNullable<ConductDeps["ensureUnitWorktreeFn"]>;
+
+describe("conduct --resume (real git)", () => {
+  it("assertion 11: --commit on resume lands the re-run unit's WIP on its sparra/<name> branch (committedSha == tip); no mergedInto; default untouched", GIT_IT, async () => {
+    const repo = makeRepo();
+    const wts: string[] = [];
+    try {
+      const ctx = await makeCtx(repo);
+      const mainTipBefore = revParse(repo, "main");
+      const runId = "conduct-resume-commit";
+      seedResumableRun(ctx, runId, [{ id: "unit-001", title: "Resumed unit" }]);
+      const res = await resumeConduct(
+        ctx,
+        runId,
+        { surface: "auto", commit: true },
+        {
+          runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+          ensureUnitWorktreeFn: passthroughEnsureWt,
+          brain: null,
+          now: () => Date.now(),
+          sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+        },
+      );
+      expect(res.status).toBe("resumed");
+      const entry = (res.status === "resumed" ? res.state : undefined)!.units[0]!;
+      expect(entry.outcome).toBe("accepted");
+      expect(entry.committedSha).toMatch(/^[0-9a-f]{40}$/);
+      expect(entry.mergedInto).toBeUndefined(); // --commit only, never merged
+      // committedSha equals the unit branch tip; the WIP file is in the committed tree.
+      expect(revParse(repo, entry.branch!)).toBe(entry.committedSha);
+      expect(g(repo, ["ls-tree", "-r", "--name-only", entry.branch!])).toContain("f-unit-001.txt");
+      // Default branch NEVER touched.
+      expect(revParse(repo, "main")).toBe(mainTipBefore);
+      wts.push(defaultUnitWorktreeDir(repo, entry.worktree!));
+    } finally {
+      cleanup(repo, ...wts);
+    }
+  });
+
+  it("assertion 12 (default branch): --merge on resume records mergedInto=sparra/<runId>; default branch is NEVER the target and its tip is unchanged", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    try {
+      const ctx = await makeCtx(repo); // on the default branch (main)
+      const mainTipBefore = revParse(repo, "main");
+      const runId = "conduct-resume-merge";
+      seedResumableRun(ctx, runId, [{ id: "unit-001", title: "Resumed unit" }]);
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${runId}`));
+      const res = await resumeConduct(
+        ctx,
+        runId,
+        { surface: "auto", merge: true },
+        {
+          runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+          ensureUnitWorktreeFn: passthroughEnsureWt,
+          brain: null,
+          now: () => Date.now(),
+          sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+        },
+      );
+      expect(res.status).toBe("resumed");
+      const entry = (res.status === "resumed" ? res.state : undefined)!.units[0]!;
+      const target = conductRunBranch(runId);
+      expect(entry.committedSha).toMatch(/^[0-9a-f]{40}$/); // --merge implies commit
+      expect(entry.mergedInto).toBe(target);
+      // The target is the run branch, NEVER the default branch.
+      expect(target).not.toBe("main");
+      expect(entry.mergedInto).not.toBe("main");
+      // The unit's commit is reachable from the run branch; default branch tip is untouched.
+      expect(g(repo, ["ls-tree", "-r", "--name-only", target])).toContain("f-unit-001.txt");
+      expect(isAncestor(repo, entry.committedSha!, target)).toBe(true);
+      expect(revParse(repo, "main")).toBe(mainTipBefore);
+    } finally {
+      cleanup(repo, ...runWts);
+    }
+  });
+
+  it("assertion 12 (feature branch): --merge on resume lands on the current non-default branch; default branch never targeted, tip unchanged", GIT_IT, async () => {
+    const repo = makeRepo();
+    try {
+      g(repo, ["checkout", "-b", "feature"]); // start (and resume) on a non-default branch
+      const ctx = await makeCtx(repo);
+      const mainTipBefore = revParse(repo, "main");
+      const runId = "conduct-resume-merge-feat";
+      seedResumableRun(ctx, runId, [{ id: "unit-001", title: "Resumed unit" }]);
+      const res = await resumeConduct(
+        ctx,
+        runId,
+        { surface: "auto", merge: true },
+        {
+          runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+          ensureUnitWorktreeFn: passthroughEnsureWt,
+          brain: null,
+          now: () => Date.now(),
+          sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+        },
+      );
+      const entry = (res.status === "resumed" ? res.state : undefined)!.units[0]!;
+      expect(entry.mergedInto).toBe("feature");
+      expect(entry.mergedInto).not.toBe("main");
+      expect(g(repo, ["ls-tree", "-r", "--name-only", "feature"])).toContain("f-unit-001.txt");
+      // Default branch untouched.
+      expect(revParse(repo, "main")).toBe(mainTipBefore);
+    } finally {
+      cleanup(repo);
     }
   });
 });

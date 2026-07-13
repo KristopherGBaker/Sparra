@@ -307,6 +307,105 @@ describe("ensureUnitWorktree — self-heal (registry-race adoption)", () => {
   });
 });
 
+describe("ensureUnitWorktree — reverifyReuse (resume reuse-or-recreate)", () => {
+  const wtDir = "/x/proj-unit-u1"; // fixed fake path — fakes below mean no real fs/git touches it
+
+  async function makeCtx2(): Promise<{ ctx: Ctx; root: string }> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-unitwt-reverify-"));
+    return { ctx: await makeCtx(root), root };
+  }
+
+  it("REUSES a registered entry that git confirms is a LIVE worktree on the expected branch (no recreate)", async () => {
+    const { ctx, root } = await makeCtx2();
+    try {
+      // Pre-seed the registry as if a prior run created the tree.
+      ctx.store.data.build.unitWorktrees = { u1: { dir: wtDir, branch: "sparra/u1", src: root } };
+      const wt = await ensureUnitWorktree(ctx, "u1", root, {
+        reverifyReuse: true,
+        existsFn: (p) => p === wtDir,
+        worktreeDirFn: () => wtDir,
+        listWorktreesFn: () => [{ path: wtDir, branch: "sparra/u1" }],
+        addWorktreeFn: () => {
+          throw new Error("must NOT recreate a live worktree");
+        },
+        addExistingBranchWorktreeFn: () => {
+          throw new Error("must NOT re-attach a live worktree");
+        },
+      });
+      expect(wt).toEqual({ dir: wtDir, branch: "sparra/u1", src: root, created: false });
+      expect(ctx.store.data.build.unitWorktrees!.u1).toEqual({ dir: wtDir, branch: "sparra/u1", src: root });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("RECREATES when the registered directory no longer exists (stale entry, branch also gone)", async () => {
+    const { ctx, root } = await makeCtx2();
+    try {
+      ctx.store.data.build.unitWorktrees = { u1: { dir: wtDir, branch: "sparra/u1", src: root } };
+      const created: Array<{ dir: string; branch: string }> = [];
+      let pruned = 0;
+      const wt = await ensureUnitWorktree(ctx, "u1", root, {
+        reverifyReuse: true,
+        existsFn: () => false, // dir gone
+        worktreeDirFn: () => wtDir,
+        listWorktreesFn: () => [], // git has no live worktree there
+        branchExistsFn: () => false, // branch gone too → fresh -b create
+        pruneWorktreesFn: () => { pruned += 1; return { ok: true, out: "" }; },
+        addWorktreeFn: (_s, dir, branch) => { created.push({ dir, branch }); return { ok: true, out: "" }; },
+        addExistingBranchWorktreeFn: () => { throw new Error("branch gone → must not re-attach"); },
+      });
+      expect(wt.created).toBe(true); // RECREATED, not returned as created:false for a nonexistent dir
+      expect(created).toEqual([{ dir: wtDir, branch: "sparra/u1" }]);
+      expect(pruned).toBe(1);
+      expect(ctx.store.data.build.unitWorktrees!.u1).toEqual({ dir: wtDir, branch: "sparra/u1", src: root });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("REPAIRS by re-attaching the SURVIVING branch when the dir vanished but the branch (with WIP) lived", async () => {
+    const { ctx, root } = await makeCtx2();
+    try {
+      ctx.store.data.build.unitWorktrees = { u1: { dir: wtDir, branch: "sparra/u1", src: root } };
+      const attached: Array<{ dir: string; branch: string }> = [];
+      const wt = await ensureUnitWorktree(ctx, "u1", root, {
+        reverifyReuse: true,
+        existsFn: () => false, // dir gone
+        worktreeDirFn: () => wtDir,
+        listWorktreesFn: () => [],
+        branchExistsFn: () => true, // branch SURVIVED (committed WIP) → re-attach, don't -b
+        pruneWorktreesFn: () => ({ ok: true, out: "" }),
+        addWorktreeFn: () => { throw new Error("branch survived → must re-attach, not create a new branch"); },
+        addExistingBranchWorktreeFn: (_s, dir, branch) => { attached.push({ dir, branch }); return { ok: true, out: "" }; },
+      });
+      expect(wt.created).toBe(true);
+      expect(attached).toEqual([{ dir: wtDir, branch: "sparra/u1" }]); // branch tip preserved
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("RECREATES when the registered dir is now a worktree on a DIFFERENT branch (stale reuse must not adopt)", async () => {
+    const { ctx, root } = await makeCtx2();
+    try {
+      ctx.store.data.build.unitWorktrees = { u1: { dir: wtDir, branch: "sparra/u1", src: root } };
+      // The dir exists but git reports it checked out on some OTHER branch → NOT a valid reuse.
+      // With the dir occupied, the recreate path must refuse to adopt foreign state (throws).
+      await expect(
+        ensureUnitWorktree(ctx, "u1", root, {
+          reverifyReuse: true,
+          existsFn: (p) => p === wtDir,
+          worktreeDirFn: () => wtDir,
+          listWorktreesFn: () => [{ path: wtDir, branch: "sparra/some-other" }],
+        })
+      ).rejects.toThrow(/already exists and is not a registered unit worktree/i);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("removeUnitWorktree — WIP-safe teardown", () => {
   it("refuses a DIRTY tree by default, force removes it, deregisters", GIT_IT, async () => {
     const repo = makeRepo();

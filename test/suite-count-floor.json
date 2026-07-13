@@ -1,0 +1,6 @@
+{
+  "floor": 1993,
+  "measuredWith": "npm test",
+  "measuredAt": "2026-07-13",
+  "note": "Builder-measured FULL-SUITE test count BEFORE the conduct --resume parked-decision-recovery change (98 files, all passing). The full-suite no-decrease requirement (contract assertion 19 / verify step 3) is: the `Tests N passed` count reported by `npm test` MUST be >= this floor. This is a FLOOR, not an exact pin — the count only ever grows as tests are added. Bump this floor only when intentionally REMOVING tests, never to chase an exact current count."
+}
