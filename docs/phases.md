@@ -94,7 +94,7 @@ sparra finish [--pr | --merge --yes] [--teardown] [--force] [--branch <name>] [-
   before any side effect**.
 
 **Holdout safety:** `HOLDOUT.md` is archived privately into the cycle dir and **never** rides
-into a PR or a merge. `.sparra/` is gitignored, so the normal case is already safe; if a
+into a PR or a merge. `HOLDOUT.md` is normally untracked and the Sparra-owned `.sparra/.gitignore` allowlist never tracks holdout-bearing `.sparra` content (only `config.yaml`/`prompts/`/`calibration/`), so the normal case is already safe; if a
 `HOLDOUT.md` is a *tracked* file a `--pr`/`--merge` would carry, finish **hard-stops the land
 before any PR/merge** (it refuses loudly and tells you to `git rm --cached` it and add it to
 `.gitignore`) — the cycle is still archived privately, but no land proceeds while the holdout is

@@ -317,6 +317,25 @@ your-project/
    └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, HOLDOUT, contracts, verdicts, …) — see `sparra new` / `sparra finish`
 ```
 
+### Durable vs. volatile `.sparra/` (sharing config across machines)
+
+`sparra init` writes a **Sparra-owned nested `.sparra/.gitignore`** — a **fail-closed allowlist**:
+it ignores everything under `.sparra/` and then re-includes only the **durable** set, so the
+machine-local and holdout-bearing rest (and *any future dir*) stays ignored by construction. It is
+written **only when absent** — a `.sparra/.gitignore` you have edited is never overwritten.
+
+| | Rides git (durable, shareable) | Stays local / never committed (volatile) |
+|---|---|---|
+| **Contents** | `.gitignore`, `config.yaml`, `prompts/` (incl. `.baseline.json`), `calibration/` | `state.json` (machine-local absolute paths), `environment.md`, `memory.md`, `frozen/` (holds `HOLDOUT.frozen.md`), `traces/`, `verdicts/`, `runs/`, `conduct/`, `reflect/`, `cycles/`, `snapshots/`, `contracts/`, `reviews/`, `proposals/`, `workitems/`, `measure/`, and **any future dir** |
+| **Why** | role/model config + prompt overrides + taste samples are the same everywhere | absolute paths, per-machine toolchain, and every **holdout-derived** artifact must not travel |
+
+**Working across machines.** Commit the human-facing docs (`CODEBASE_MAP.md`, `PLAN.md`,
+`CHANGELOG.md`) plus the durable `.sparra/` set, and a second machine picks up your config with no
+`sparra init` reconfiguration. To opt in, **drop any top-level `.sparra/` ignore line** in your
+project's root `.gitignore` (Sparra never edits your top-level `.gitignore`); the nested allowlist
+then keeps the volatile set ignored on its own. **Never commit `HOLDOUT.md`** — it is evaluator-only,
+and `sparra finish` **refuses to land** while a tracked `HOLDOUT.md` would ride into a PR/merge.
+
 Beyond the per-project `.sparra/`, reflect keeps a **user-level inbox** for findings about *Sparra
 itself* — `~/.sparra/reflections/` (override the root with the **`SPARRA_HOME`** env var). Each
 `sparra reflect` that surfaces a harness-level finding drops a uniquely-named file there, with each
