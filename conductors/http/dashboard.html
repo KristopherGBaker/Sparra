@@ -422,6 +422,12 @@
     background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 5px;
     padding: 4px 6px; font-size: 11px;
   }
+  .conduct-row .conduct-resume { align-items: stretch; }
+  .conduct-row .conduct-resume-id {
+    flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 5px;
+    padding: 6px 8px; font-size: 11px;
+  }
 
   /* ---------- decision card (parked conduct decision) ---------- */
   .decision-card {
@@ -776,6 +782,9 @@ const state = {
   maxUnits: 4,           // conduct: clamp on the decomposition
   conductMode: 'hybrid', // conduct: --brain hybrid | llm
   conductAuto: false,    // conduct: --auto (never park a decision)
+  conductCommit: false,  // conduct: --commit (self-land accepted units onto their branch)
+  conductMerge: false,   // conduct: --merge (implies --commit; integrate onto the run branch)
+  conductResumeId: '',   // conduct: --resume <runId> (continue a crashed/parked run remotely)
   decisionNote: '',      // decision card: optional note for POST /jobs/:id/decision
   pollTimer: null,
 };
@@ -937,7 +946,17 @@ function renderTargets() {
             <div class="toggle-fresh ${state.conductAuto?'on':''}" data-action="toggle-conduct-auto">
               <span class="switch"></span> auto — never park a decision
             </div>
+            <div class="toggle-fresh ${state.conductCommit?'on':''}" data-action="toggle-conduct-commit">
+              <span class="switch"></span> commit — self-land accepted units
+            </div>
+            <div class="toggle-fresh ${state.conductMerge?'on':''}" data-action="toggle-conduct-merge">
+              <span class="switch"></span> merge — integrate onto the run branch (implies commit)
+            </div>
             <button class="btn primary" data-action="run-conduct" data-root="${escapeHtml(t.root)}">conduct</button>
+          </div>
+          <div class="conduct-ctrls conduct-resume">
+            <input class="mono conduct-resume-id" data-action="set-conduct-resume" placeholder="resume runId — continue a crashed/parked run" value="${escapeHtml(state.conductResumeId)}"/>
+            <button class="btn" data-action="run-conduct-resume" data-root="${escapeHtml(t.root)}">${IC.resume} resume run</button>
           </div>
         </div>
         <div class="controls">
@@ -998,11 +1017,13 @@ function runUnit(root){
 }
 
 /** `POST /conduct` — decompose the prompt into units and drive each through the loop. The prompt is
- *  read from the card's textarea at click time; mode/auto/maxUnits/budget come from the card controls.
- *  An empty prompt is a no-op toast (the server would 400 it — surface it locally first). */
-function runConduct(root){
-  const ta = document.querySelector('.conduct-prompt');
-  const prompt = (ta && ta.value || '').trim();
+ *  read from the CLICKED card's textarea at click time (scoped to that card, never the page-global
+ *  first `.conduct-prompt`, so a second target's conduct sends its own prompt); mode/auto/maxUnits/
+ *  budget come from the card controls. An empty prompt is a no-op toast (the server would 400 it —
+ *  surface it locally first). */
+function runConduct(el){
+  const root = el.dataset.root;
+  const prompt = cardScopedValue(el, '.conduct-prompt');
   if (!prompt) { toast('<span class="code">conduct</span> enter a prompt first'); return; }
   triggerConduct(controllerDeps(), {
     root,
@@ -1011,6 +1032,27 @@ function runConduct(root){
     mode: state.conductMode,
     maxUnits: state.maxUnits,
     budget: state.budget,
+    ...(state.conductCommit ? { commit: true } : {}),
+    ...(state.conductMerge ? { merge: true } : {}),
+  });
+}
+
+/** `POST /conduct` RESUME — continue a persisted `<runId>` in place. The runId is read from the CLICKED
+ *  card's own input at click time (scoped to that `.target` card via `cardScopedValue`, NOT the
+ *  page-global first `.conduct-resume-id` — so with several targets rendered, the second card's resume
+ *  action sends the second card's runId, not the first's); ONLY resume-compatible fields (auto + the
+ *  commit/merge toggles) ride along, so the server never 400s a run-shaping field alongside `resume`.
+ *  An empty runId is a local no-op toast. */
+function runConductResume(el){
+  const root = el.dataset.root;
+  const resume = cardScopedValue(el, '.conduct-resume-id');
+  if (!resume) { toast('<span class="code">resume</span> enter a runId first'); return; }
+  triggerConduct(controllerDeps(), {
+    root,
+    resume,
+    auto: state.conductAuto,
+    ...(state.conductCommit ? { commit: true } : {}),
+    ...(state.conductMerge ? { merge: true } : {}),
   });
 }
 
@@ -1347,12 +1389,15 @@ wireDelegatedClicks(document.getElementById('targetList'), {
   'trigger': (el) => trigger(el.dataset.root, el.dataset.phase),
   'run-unit': (el) => runUnit(el.dataset.root),
   'run-role': (el) => runRole(el.dataset.root),
-  'run-conduct': (el) => runConduct(el.dataset.root),
+  'run-conduct': (el) => runConduct(el),
+  'run-conduct-resume': (el) => runConductResume(el),
   'step-budget': (el) => stepBudget(Number(el.dataset.delta)),
   'step-turns': (el) => stepTurns(Number(el.dataset.delta)),
   'step-units': (el) => stepUnits(Number(el.dataset.delta)),
   'toggle-fresh': () => { state.fresh = !state.fresh; renderTargets(); },
   'toggle-conduct-auto': () => { state.conductAuto = !state.conductAuto; renderTargets(); },
+  'toggle-conduct-commit': () => { state.conductCommit = !state.conductCommit; renderTargets(); },
+  'toggle-conduct-merge': () => { state.conductMerge = !state.conductMerge; renderTargets(); },
 });
 document.getElementById('targetList').addEventListener('change', (event) => {
   if (event.target.matches('[data-action="set-budget"]')) {
@@ -1363,6 +1408,8 @@ document.getElementById('targetList').addEventListener('change', (event) => {
     state.maxUnits = Math.max(1, Number(event.target.value) || 1);
   } else if (event.target.matches('[data-action="set-conduct-mode"]')) {
     state.conductMode = event.target.value === 'llm' ? 'llm' : 'hybrid';
+  } else if (event.target.matches('[data-action="set-conduct-resume"]')) {
+    state.conductResumeId = event.target.value || '';
   }
 });
 

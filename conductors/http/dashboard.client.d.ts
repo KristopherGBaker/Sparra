@@ -30,6 +30,13 @@ export interface ApiCallResult {
 export function apiCall(method: string, endpoint: string, opts?: ApiCallOpts): Promise<ApiCallResult>;
 export function projectSummary(payload: unknown): Record<string, unknown>;
 
+/** A minimal element shape `cardScopedValue` walks — the browser's real `Element` satisfies it, and a
+ *  test can pass a plain fake with just `closest`. Loose on purpose (the JS file is the source of truth). */
+export interface CardScopedElement {
+  closest?: (selector: string) => { querySelector?: (selector: string) => { value?: string } | null } | null;
+}
+export function cardScopedValue(el: CardScopedElement | null | undefined, selector: string): string;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ControllerDeps = any;
 

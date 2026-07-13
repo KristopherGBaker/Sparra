@@ -278,14 +278,20 @@ export async function triggerPhase(deps, phase, params) {
 }
 
 /**
- * Build the `POST /conduct` body from ONLY the schema's fields — the prompt + root are required, the
- * rest are copied only when present. An unknown/extra `params` key is never forwarded.
+ * Build the `POST /conduct` body from ONLY the schema's fields — `root` is always sent; EXACTLY ONE of
+ * `prompt` (fresh run) or `resume` (`<runId>`, continue a persisted run) is included per the card's
+ * mode. `commit`/`merge` are opt-in booleans, sent only when ON (omitted when off). Run-shaping fields
+ * (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) are fresh-run only — the caller omits them on a
+ * resume (the server 400s them alongside `resume`). An unknown/extra `params` key is never forwarded.
  */
 function buildConductBody(p) {
   return {
     root: p.root,
-    prompt: p.prompt,
+    ...(p.prompt ? { prompt: p.prompt } : {}),
+    ...(p.resume ? { resume: p.resume } : {}),
     ...(p.auto !== undefined ? { auto: p.auto } : {}),
+    ...(p.commit ? { commit: true } : {}),
+    ...(p.merge ? { merge: true } : {}),
     ...(p.mode !== undefined ? { mode: p.mode } : {}),
     ...(p.maxUnits !== undefined ? { maxUnits: p.maxUnits } : {}),
     ...(p.concurrency !== undefined ? { concurrency: p.concurrency } : {}),
@@ -305,6 +311,24 @@ export async function triggerConduct(deps, params) {
   dispatch(deps, result, (data) => {
     deps.view.recordJob({ phase: "conduct", root: body.root, jobId: data && data.jobId });
   });
+}
+
+/**
+ * Read the trimmed value of the input matching `selector` SCOPED to the target card that owns
+ * `el` (the clicked control) — walk up to the enclosing `.target` card via `closest`, then read
+ * THAT card's own field. This is what makes the conduct prompt/resume affordances multi-target
+ * safe: with several allowlisted targets rendered, a page-global `document.querySelector(selector)`
+ * would always read the FIRST card's field, so clicking the second card's "resume run" button would
+ * silently send the FIRST card's runId. Returns `""` when the card or field is absent.
+ *
+ * DOM-free by the same rule as the rest of this module: it touches ONLY the element passed in (via
+ * `closest`/`querySelector`), never the global `document`/`window` — so a test can drive it with a
+ * plain fake element and assert per-card resolution without a browser.
+ */
+export function cardScopedValue(el, selector) {
+  const card = el && typeof el.closest === "function" ? el.closest(".target") : null;
+  const node = card && typeof card.querySelector === "function" ? card.querySelector(selector) : null;
+  return ((node && node.value) || "").trim();
 }
 
 /** Trigger one ad-hoc `/role` run (the dashboard's "run role" summary readout). */

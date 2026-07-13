@@ -6,7 +6,11 @@
  * {@link TargetLock}, server-built argv from a STRICT zod body), and — because a conduct run parks
  * important decisions — parses the child's run-START announcement (`src/conduct/announce.ts`) from
  * stdout to associate the job with its run. `GET /jobs/:id` then surfaces that run's still-parked
- * `pendingDecisions` (see `conductors/http/decisions.ts` + `server.ts`).
+ * `pendingDecisions` (see `conductors/http/decisions.ts` + `server.ts`). The one endpoint serves both a
+ * FRESH run (`prompt`, optionally self-landing via `commit`/`merge`) and a RESUME of a crashed/parked
+ * run (`resume: "<runId>"`); EXACTLY ONE of `prompt` | `resume` is required, and a resume body may
+ * carry only `root, resume, commit, merge, auto`. A resumed run re-announces, so `pendingDecisions` +
+ * `POST /jobs/:id/decision` work identically on it.
  *
  * `POST /jobs/:id/decision` answers a parked decision IN-PROCESS via U2's engine
  * (`writeDecisionAnswer` + `applyFileDecisionToRunState`) — it never shells out to `conduct --decide`
@@ -28,6 +32,7 @@ import {
   requestExists,
   writeDecisionAnswer,
 } from "../../../src/conduct/decisionEngine.ts";
+import { isSafeRunId } from "../../../src/conduct/runState.ts";
 import type { Job } from "../jobs.ts";
 import { resolveWithinAllowlist } from "../paths.ts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../server.ts";
@@ -50,18 +55,47 @@ const positiveInt = z.number().int().positive();
 /** A CLI-meaningful non-negative number (`--budget`; `0` = unlimited). */
 const nonNegativeNumber = z.number().nonnegative();
 
+/** The run-shaping fields the CLI's `--resume` refuses (it accepts only `--commit|--merge|--auto`) —
+ *  so a resume body carrying any of them is a fail-closed `400`, never a silently-ignored spawn. */
+const RESUME_INCOMPATIBLE_FIELDS = ["mode", "maxUnits", "concurrency", "budget", "maxTurns"] as const;
+
 const conductSchema = z
   .object({
     root: z.string(),
-    prompt: z.string().min(1),
+    // EXACTLY ONE of `prompt` | `resume` (enforced below). `prompt` starts a fresh run; `resume`
+    // continues a persisted `<runId>` in place. Run-shaping fields are fresh-run only.
+    prompt: z.string().min(1).optional(),
+    resume: z.string().min(1).optional(),
     auto: z.boolean().optional(),
+    // Landing flags forwarded verbatim to the CLI (which owns `--merge` ⇒ `--commit`); valid on both
+    // fresh and resume runs.
+    commit: z.boolean().optional(),
+    merge: z.boolean().optional(),
     mode: z.enum(["hybrid", "llm"]).optional(),
     maxUnits: positiveInt.optional(),
     concurrency: positiveInt.optional(),
     budget: nonNegativeNumber.optional(),
     maxTurns: positiveInt.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((b, ctx) => {
+    const hasPrompt = b.prompt !== undefined;
+    const hasResume = b.resume !== undefined;
+    // EXACTLY ONE of `prompt` | `resume` — both or neither is a 400 (fail-closed).
+    if (hasPrompt === hasResume) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "exactly one of `prompt` or `resume` is required" });
+      return;
+    }
+    // A resume body may carry ONLY `root, resume, commit, merge, auto` — any run-shaping field
+    // alongside `resume` is a 400 (the CLI's `--resume` accepts only `--commit|--merge|--auto`).
+    if (hasResume) {
+      for (const field of RESUME_INCOMPATIBLE_FIELDS) {
+        if (b[field] !== undefined) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `\`${field}\` is not allowed with \`resume\`` });
+        }
+      }
+    }
+  });
 
 const decisionSchema = z
   .object({
@@ -77,15 +111,26 @@ function invalidBody(): RouteResult {
 }
 
 /** Build the `sparra conduct` argv from a validated body — ONLY server-mapped flags, never client
- *  text beyond the prompt positional and enum/numeric values. */
+ *  text beyond the prompt/runId positional and enum/numeric values. `--commit`/`--merge` are forwarded
+ *  verbatim (the CLI owns `--merge` ⇒ `--commit`; the bridge never synthesizes one from the other). A
+ *  `resume` body maps to `["conduct","--resume",<runId>, …resume-compatible flags]`. */
 function buildConductArgv(b: z.infer<typeof conductSchema>): string[] {
-  const argv = ["conduct", b.prompt];
+  if (b.resume !== undefined) {
+    const argv = ["conduct", "--resume", b.resume];
+    if (b.auto) argv.push("--auto");
+    if (b.commit) argv.push("--commit");
+    if (b.merge) argv.push("--merge");
+    return argv;
+  }
+  const argv = ["conduct", b.prompt!];
   if (b.auto) argv.push("--auto");
   if (b.mode !== undefined) argv.push("--brain", b.mode);
   if (b.maxUnits !== undefined) argv.push("--max-units", String(b.maxUnits));
   if (b.concurrency !== undefined) argv.push("--concurrency", String(b.concurrency));
   if (b.budget !== undefined) argv.push("--budget", String(b.budget));
   if (b.maxTurns !== undefined) argv.push("--max-turns", String(b.maxTurns));
+  if (b.commit) argv.push("--commit");
+  if (b.merge) argv.push("--merge");
   return argv;
 }
 
@@ -145,6 +190,12 @@ export function createConductRoutes(deps: ConductRouteDeps): RouteDefinition[] {
       handler: (ctx: RouteContext): RouteResult => {
         const parsed = conductSchema.safeParse(ctx.body);
         if (!parsed.success) return invalidBody();
+        // A `resume` runId must be a safe, single-segment id BEFORE any lock or spawn — an unsafe id
+        // (`..`, a path separator, arg-injection) is a 400 with ZERO side effects. The CLI re-validates,
+        // but the bridge must not spawn a child just to have it exit 1.
+        if (parsed.data.resume !== undefined && !isSafeRunId(parsed.data.resume)) {
+          return invalidBody();
+        }
         // Resolve the root through the guard BEFORE any lock or spawn — a bad root throws (→400/403)
         // and the spawner is never called.
         const root = resolveWithinAllowlist(parsed.data.root, ctx.config.roots);
