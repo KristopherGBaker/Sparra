@@ -40,6 +40,8 @@ No build step — bins run the TypeScript directly via `tsx` (`type: module`, `.
 
 Vitest, in `test/`. Tests **inject dependencies** (e.g. `BuildDeps`, `runSessionFn`) and **never make live API/model calls** — fake the session and assert on the request/flow. Add tests with each feature; mirror the existing patterns (`build.test.ts`, `review.test.ts`, `skills.test.ts`).
 
+Argv-building spec builders (`src/conduct/roleSpecs.ts`, the bridge conductor handler, the Pi role-run builders) are drift-proofed against the real CLI parser by the **argv-acceptance seam** (`test/helpers/argvAcceptance.ts`, exercised in `test/argvAcceptance.test.ts`): it runs a produced `role run …`/`eval …` argv through the SAME `parse` + pre-model role-run validation (`validateRoleRunFlags` in `src/phases/role.ts`) the real bin uses, in-process and spend-free, so a builder that emits parser-rejected argv (e.g. a `contract-evaluator` missing `--brief`) fails a test instead of a live run.
+
 The phase logger (`src/util/log.ts`) is **silenced under vitest** (gated on `process.env.VITEST`) so the runner's pass/fail summary isn't buried in phase-log noise; set `SPARRA_LOG_IN_TESTS=1` to restore log output for debugging (a test asserting on log output must set this escape hatch).
 
 ## Git

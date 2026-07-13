@@ -285,7 +285,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // Regenerated 2026-07-13 (U2 conduct-brain): a NEW non-reflector prompt — `conductor` — was added
     // to DEFAULT_PROMPTS (the `sparra conduct` hybrid/llm brain), so the sorted non-reflector set grew
     // from 13 to 14 and this digest changed. No existing prompt was edited.
-    expect(h.digest("hex")).toBe("3825b76ba7ec3fab66c7b57d5d65b7c989fedc10eedab215ae9b625c5712250d");
+    // Regenerated 2026-07-13 (U2 argv-acceptance fold): the CONTRACT-GENERATOR prompt's DEFEAT
+    // DEGENERATE/NO-OP bullet gained the argv-acceptance-test requirement (produced argv must be
+    // ACCEPTED by the real parser/validation layer, not merely flag-content-asserted), so the hash
+    // over non-reflector prompts changed. Only that one existing prompt was edited (no new prompt).
+    expect(h.digest("hex")).toBe("f2a7151d8ec3f5b8d570a1714248f2fd7e8fe1c02416c083911a710a57e089f1");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

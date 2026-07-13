@@ -105,6 +105,13 @@ const unitSchema = z
   .strict()
   .refine((b) => b.root !== undefined || b.workspace !== undefined, {
     message: "one of `root` or `workspace` is required",
+  })
+  // A /unit run ALWAYS negotiates a contract first, and the contract-evaluator (like every non-
+  // `evaluator` role) requires a brief. Reject a request that supplies neither `briefPath` nor an
+  // inline `brief` up front (→ 400) — before any job/lock/runUnit launch — rather than letting the
+  // contract-evaluator argv fail the pre-model validation deep inside the unit.
+  .refine((b) => b.briefPath !== undefined || b.brief !== undefined, {
+    message: "one of `brief` or `briefPath` is required (the contract-evaluator needs a brief)",
   });
 
 function invalidBody(): RouteResult {
@@ -138,8 +145,10 @@ export function projectRunUnit(result: RunUnitResult): UnitProjection {
 }
 
 /** Build the `/role` RunRoleSpec, resolving EVERY path field through the guard before it is threaded
- *  into argv. Throws `PathGuardError` (→ 400/403) before the core runner is reached. */
-function buildRoleSpec(
+ *  into argv. Throws `PathGuardError` (→ 400/403) before the core runner is reached. Exported for the
+ *  argv-acceptance seam test (`test/argvAcceptance.test.ts`), which feeds its emitted argv through the
+ *  real CLI parser/validator. */
+export function buildRoleSpec(
   b: z.infer<typeof roleSchema>,
   roots: string[],
 ): { spec: RunRoleSpec; target: string } {
@@ -172,8 +181,9 @@ function buildRoleSpec(
 }
 
 /** Build the `/unit` RunUnitConfig, resolving every path field through the guard up front. The three
- *  specs it produces drive the core `runUnit`'s contract-evaluator → generator → evaluator roles. */
-function buildUnitConfig(
+ *  specs it produces drive the core `runUnit`'s contract-evaluator → generator → evaluator roles.
+ *  Exported for the argv-acceptance seam test (`test/argvAcceptance.test.ts`). */
+export function buildUnitConfig(
   b: z.infer<typeof unitSchema>,
   roots: string[],
 ): { config: RunUnitConfig; target: string } {
@@ -197,6 +207,12 @@ function buildUnitConfig(
     contract: {
       contractEvaluatorSpec: (ctx: ContractRoundContext): RunRoleSpec => {
         const args = ["role", "run", "--kind", "contract-evaluator", "--backend", backend, "--model", evalModel];
+        // The runner requires a brief for every kind except `evaluator`; a contract-evaluator argv
+        // without a brief is rejected pre-model. Thread the request's brief — `--brief <path>` for a
+        // briefPath, `--brief-text <s>` for an inline brief — so the emitted argv is accepted by the
+        // real CLI parser/validator. The unitSchema refine guarantees at least one is present.
+        if (brief !== undefined) args.push("--brief", brief);
+        if (b.brief !== undefined) args.push("--brief-text", b.brief);
         if (contract !== undefined) args.push("--contract", contract);
         args.push("--json", ...ctx.priorCritiquePaths.flatMap((p) => ["--prior-critique", p]));
         return { args, cwd: target };

@@ -310,7 +310,7 @@ describe("/unit — config drives contract-evaluator → generator → evaluator
     const routes = createConductorRoutes({ lock: new TargetLock(), runUnit: runUnit as never });
     await expect(
       getHandler(routes, "POST", "/unit")(
-        makeCtx(baseConfig([root]), new JobStore(), { workspace: root, contractPath: "/etc/evil.md" }),
+        makeCtx(baseConfig([root]), new JobStore(), { workspace: root, brief: "do the thing", contractPath: "/etc/evil.md" }),
       ),
     ).rejects.toBeInstanceOf(PathGuardError);
     expect(runUnit).not.toHaveBeenCalled();
@@ -322,9 +322,20 @@ describe("/unit — config drives contract-evaluator → generator → evaluator
     const routes = createConductorRoutes({ lock: new TargetLock(), runUnit: runUnit as never });
     await expect(
       getHandler(routes, "POST", "/unit")(
-        makeCtx(baseConfig([root]), new JobStore(), { workspace: root, root: "/etc/evil" }),
+        makeCtx(baseConfig([root]), new JobStore(), { workspace: root, brief: "do the thing", root: "/etc/evil" }),
       ),
     ).rejects.toBeInstanceOf(PathGuardError);
+    expect(runUnit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a /unit request with NEITHER brief nor briefPath with 400 and never launches runUnit", async () => {
+    const root = tmpRoot();
+    const runUnit = vi.fn();
+    const routes = createConductorRoutes({ lock: new TargetLock(), runUnit: runUnit as never });
+    const res = (await getHandler(routes, "POST", "/unit")(
+      makeCtx(baseConfig([root]), new JobStore(), { workspace: root, contractPath: join(root, "CONTRACT.md") }),
+    )) as RouteResult;
+    expect(res.status).toBe(400);
     expect(runUnit).not.toHaveBeenCalled();
   });
 });
@@ -343,7 +354,7 @@ describe("/unit — holdout-safe projection", () => {
     } as unknown as RunUnitResult;
     const routes = createConductorRoutes({ lock: new TargetLock(), runUnit: async () => raw });
     const res = (await getHandler(routes, "POST", "/unit")(
-      makeCtx(baseConfig([root]), jobs, { workspace: root }),
+      makeCtx(baseConfig([root]), jobs, { workspace: root, brief: "do the thing" }),
     )) as RouteResult;
     expect(res.body).toEqual({ outcome: "contract-not-agreed", contract: { agreed: false, rounds: 1 } });
     expect(res.body).not.toHaveProperty("cycle");
@@ -387,7 +398,7 @@ describe("/unit — holdout-safe projection", () => {
     // Exact projected key set at the endpoint.
     const routes = createConductorRoutes({ lock: new TargetLock(), runUnit: async () => raw });
     const res = (await getHandler(routes, "POST", "/unit")(
-      makeCtx(baseConfig([root]), new JobStore(), { workspace: root }),
+      makeCtx(baseConfig([root]), new JobStore(), { workspace: root, brief: "do the thing" }),
     )) as RouteResult;
     expect(Object.keys(res.body as object).sort()).toEqual(["contract", "cycle", "outcome"]);
     expect(Object.keys((res.body as { cycle: object }).cycle).sort()).toEqual(["finalVerdict", "outcome", "rounds"]);

@@ -53,34 +53,15 @@ async function runRoleCommand(
   autoProbe: typeof autoProbeCtx
 ): Promise<RoleRunResult | undefined> {
   banner("sparra role run");
-  const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
-  if (!VALID_KINDS.includes(kind)) {
-    err(`--kind must be one of: ${VALID_KINDS.join(", ")}`);
-    process.exitCode = 1;
-    return;
-  }
-  const briefText = typeof flags["brief-text"] === "string" ? (flags["brief-text"] as string) : undefined;
-  const briefPath = typeof flags.brief === "string" ? (flags.brief as string) : undefined;
-  // The evaluator can grade a WIP tree with a default brief; other roles need one.
-  if (!briefText && !briefPath && kind !== "evaluator") {
-    err("provide a brief: --brief <file> or --brief-text \"…\"");
-    process.exitCode = 1;
-    return;
-  }
-
-  const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
-
-  // Validate eval-provenance params (and baselineCommand) BEFORE the deferred auto-permission probe
-  // (a live SDK query): a bad `--expected-head`/`--eval-base`/`--baseline-command` must abort with
-  // ZERO model tokens. Then run the probe (idempotent) only for a valid request.
+  let req: RoleRunRequest;
   try {
-    validateEvalProvenance(req);
-    validateBaselineCommand(req);
+    req = validateRoleRunFlags(ctx, flags);
   } catch (e) {
     err((e as Error).message);
     process.exitCode = 1;
     return;
   }
+  const kind = req.roleKind;
   await autoProbe(ctx);
 
   info(`role=${kind} backend=${req.backend ?? ctx.config.roles[specKey(kind)]?.backend ?? "claude"} workspace=${req.workspace ?? ctx.root}`);
@@ -141,6 +122,54 @@ export async function cmdRoleRemoveWorktree(
     warn(res.message);
     process.exitCode = 1;
   }
+}
+
+/**
+ * The PURE pre-model validation prefix of a `role run` invocation — the ONE source of truth shared by
+ * `cmdRoleRun` (the real CLI path) and the test-only argv-acceptance seam (`test/helpers/argvAcceptance`).
+ * Given already-parsed `flags`, it enforces exactly what `cmdRoleRun` enforces BEFORE any live SDK
+ * probe / model call: a valid `--kind`, the brief-required-unless-evaluator rule, then
+ * `validateEvalProvenance` + `validateBaselineCommand` on the mapped request. THROWS on the first
+ * violation (message identical to the CLI's surfaced error); returns the `RoleRunRequest` on success.
+ * No session, no tokens, no subprocess, no FS writes — only the same reads the validators already do.
+ */
+export function validateRoleRunFlags(
+  ctx: Ctx,
+  flags: Record<string, string | boolean | string[]>
+): RoleRunRequest {
+  const kind = String(flags.kind ?? flags.role ?? "") as RoleKind;
+  if (!VALID_KINDS.includes(kind)) {
+    throw new Error(`--kind must be one of: ${VALID_KINDS.join(", ")}`);
+  }
+  const briefText = typeof flags["brief-text"] === "string" ? (flags["brief-text"] as string) : undefined;
+  const briefPath = typeof flags.brief === "string" ? (flags.brief as string) : undefined;
+  // The evaluator can grade a WIP tree with a default brief; other roles need one.
+  if (!briefText && !briefPath && kind !== "evaluator") {
+    throw new Error('provide a brief: --brief <file> or --brief-text "…"');
+  }
+  const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
+  // Validate eval-provenance params (and baselineCommand) BEFORE the deferred auto-permission probe
+  // (a live SDK query): a bad `--expected-head`/`--eval-base`/`--baseline-command` must abort with
+  // ZERO model tokens.
+  validateEvalProvenance(req);
+  validateBaselineCommand(req);
+  return req;
+}
+
+/**
+ * The `sparra eval [dir] …` → `role run --kind evaluator …` alias mapping — the ONE source of truth
+ * used by BOTH `src/cli.ts` (the real bin) and the argv-acceptance seam, so the alias never forks.
+ * Given the parsed `positionals` + `flags`, returns the flags with `kind: "evaluator"` and (unless a
+ * `--workspace` was already given) the first positional arg (`positionals[1]`, the `[dir]`) mapped to
+ * `workspace`. Does not mutate its input.
+ */
+export function evalAliasFlags(
+  positionals: string[],
+  flags: Record<string, string | boolean | string[]>
+): Record<string, string | boolean | string[]> {
+  const evalFlags: Record<string, string | boolean | string[]> = { ...flags, kind: "evaluator" };
+  if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
+  return evalFlags;
 }
 
 /**

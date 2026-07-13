@@ -43,6 +43,11 @@ export interface RunSparraRoleForToolDeps {
   runRole?: typeof coreRunRole;
 }
 
+// `buildSpec` is a GENERIC passthrough: it forwards `input.args` verbatim (only appending
+// `--holdout <path>`) and does NOT itself choose or shape the `role run`/`eval` command — the caller
+// supplies the full argv. The argv-acceptance seam therefore exercises it with a representative
+// `["role","run",…]` input to prove the passthrough emits parser-acceptable argv, rather than asserting
+// any command-selection logic it doesn't own.
 function buildSpec(input: SparraRoleToolInput): RunRoleSpec {
   const args = input.holdoutPath ? [...input.args, "--holdout", input.holdoutPath] : [...input.args];
   const spec: RunRoleSpec = { args };

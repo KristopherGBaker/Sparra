@@ -173,6 +173,11 @@ export function buildRunUnitConfig(
           parsed.backend,
           "--model",
           parsed.evaluatorModel,
+          // The runner requires a brief for every kind except `evaluator`; a contract-evaluator argv
+          // without --brief is rejected pre-model (the historical missing-`--brief` bug). Thread the
+          // parsed brief path so the emitted argv is accepted by the real CLI parser/validator.
+          "--brief",
+          parsed.brief,
           "--contract",
           parsed.contract,
           "--out",

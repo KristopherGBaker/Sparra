@@ -16,7 +16,7 @@ import { cmdNew } from "./phases/new.ts";
 import { cmdFinish } from "./phases/finish.ts";
 import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
-import { cmdRoleRun, cmdRoleRemoveWorktree } from "./phases/role.ts";
+import { cmdRoleRun, cmdRoleRemoveWorktree, evalAliasFlags } from "./phases/role.ts";
 import {
   cmdConduct,
   cmdConductDecide,
@@ -140,10 +140,9 @@ async function main(): Promise<void> {
       });
     } else {
       // alias: `sparra eval [dir] [--contract f] [--holdout f] [--backend b] [--out f]`
-      // — a standalone evaluator on a WIP tree (defaults the brief).
-      const evalFlags: Record<string, string | boolean | string[]> = { ...flags, kind: "evaluator" };
-      if (typeof evalFlags.workspace !== "string" && positionals[1]) evalFlags.workspace = positionals[1];
-      await cmdRoleRun(roleCtx, evalFlags);
+      // — a standalone evaluator on a WIP tree (defaults the brief). The alias→flags mapping lives in
+      // `evalAliasFlags` (role.ts) so the argv-acceptance seam normalizes `eval` exactly as the bin does.
+      await cmdRoleRun(roleCtx, evalAliasFlags(positionals, flags));
     }
     return;
   }
