@@ -114,8 +114,16 @@ never touched; `run.json` reports each accepted unit's branch/worktree. Two brai
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
 decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
 an inline TTY prompt, `sparra conduct --decide <runId> <seq> <answer>` in another terminal, or the HTTP
-bridge (`POST /jobs/:id/decision`). Full reference:
-**[docs/conduct.md](../../docs/conduct.md)**.
+bridge (`POST /jobs/:id/decision`). **Resume a crashed/interrupted run in place** with
+`sparra conduct --resume <runId> [--commit|--merge] [--auto]` (any prompt arg is ignored): it skips
+already-accepted/dry-run units, re-enters pending/running/error units at the right stage (agreed/forced
+contract → straight to generate, no re-negotiation; else renegotiate from the persisted brief), reuses
+or recreates each unit worktree by stable name, and **appends to the same `run.json`** (monotonic
+decision seq + a `resumedAt` stamp); prior parked decisions stay answerable and unresolved ones re-park.
+Unknown runId → exit 1 (no side effects); a terminal all-accepted run → no-op. Multi-round re-grades
+(normal AND resumed) thread each prior round's redacted `verdictPath` onto the next evaluator as
+repeatable `--prior-blocking` (paths only) so settled blocking ground is verified, not re-litigated.
+Full reference: **[docs/conduct.md](../../docs/conduct.md)**.
 
 **Starting the next feature in the same project:** run `sparra new ["<title>"]`. It archives
 the finished cycle's working set (PLAN, frozen input, workitems, contracts, verdicts, reviews,

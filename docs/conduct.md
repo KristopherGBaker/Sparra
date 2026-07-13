@@ -18,7 +18,12 @@ config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` 
 sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] \
                           [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
+sparra conduct --resume <runId> [--commit] [--merge] [--auto]   # continue a crashed/interrupted run in place
 ```
+
+> A prompt is **required only for a fresh run**. With `--resume <runId>` any prompt argument is
+> **optional and ignored** (the run's persisted `prompt` stands). No prompt **and** no `--resume` is
+> the usage error.
 
 ### Flags
 
@@ -131,14 +136,80 @@ worktree and touches no history. The opt-in landing flags change that **after** 
 Without either flag, behavior is **byte-identical to today** (no commit, no merge, no teardown, and
 `run.json` unit entries carry neither `committedSha` nor `mergedInto`).
 
+## Resuming a crashed / interrupted run (`--resume`)
+
+A conduct run whose process died (crash, `Ctrl-C`, machine reboot, budget cap) leaves a complete
+`run.json` on disk. `sparra conduct --resume <runId>` **reloads and continues it IN PLACE** — it never
+starts a second run directory:
+
+```bash
+sparra conduct --resume conduct-2026-07-13T03-12-36   # any trailing prompt argument is ignored
+```
+
+- **No decomposer ever runs.** The unit list, briefs, and contracts are read back from
+  `.sparra/conduct/<runId>/`.
+- **Appends to the SAME `run.json`.** A per-resume `resumedAt` timestamp is recorded and the decision
+  `seq` continues **monotonically** from the persisted maximum (a resumed decision never re-uses a
+  prior seq).
+- **Composes with `--commit`/`--merge` and the decision engine unchanged.** A decision that was still
+  **parked** (unresolved) when the process died is **recovered on resume**: it is re-surfaced under a
+  **fresh `seq` above the persisted maximum** and resolved through the same decision engine, so it
+  stays answerable by the real `sparra conduct --decide <runId> <seq> <answer>` path (or the bridge).
+  Under `park` this **blocks** the resume until answered; under `--auto`/`park-timeout` it
+  auto-resolves. The stale pending record is retired in place (carrying the same answer + a recovery
+  note). The recovered **answer is applied to control flow**: a recovered `abandon` **stops** the unit
+  (marked `abandoned`, not re-run), and a recovered `accept`/`accept-anyway` **finalizes** it as
+  `accepted` without re-running generation — it is never resolved-and-then-ignored. Landing
+  (`--commit`/`--merge`) touches **only the units continued this resume** — units already
+  accepted/landed in the earlier process are left as they were.
+
+### Unit re-entry state matrix
+
+| Persisted unit outcome | On `--resume` |
+| --- | --- |
+| `accepted` | **Skipped** — no role runs. |
+| `dry-run` | **Skipped** — no role runs. |
+| `pending` / `running` / `error` | **Re-entered** at the correct stage (below). |
+| deliberate terminals (`abandoned` / `exhausted` / `inconclusive` / `grade-not-independent` / `contract-not-agreed`) | **Skipped** — the run already reached a decision for them. |
+
+A re-entered unit picks up at the right stage:
+
+- **Contract file present AND `contractAgreed`/`contractForced` recorded** → straight to **generate**
+  (NO contract-generator / contract-evaluator run); the generator carries `--contract <persisted path>`.
+- **Otherwise** → **renegotiate** the contract from the persisted **brief**.
+
+Its **unit worktree** is **reused** when the stable `<runId>-<unitId>` tree is verified still **live**
+(directory present, checked out on the expected `sparra/<name>` branch — its prior WIP is intact) and
+**recreated/repaired under the same identity** otherwise (a stale registry entry pointing at a removed
+directory is pruned and the tree re-created, re-attaching a surviving branch so committed WIP is kept).
+
+The `runId` itself is validated as an **opaque, single-segment identifier** before any path is built
+from it — a `../`, separator, or otherwise-unsafe id is rejected as an unknown run (exit 1, zero side
+effects), so `--resume`/`--decide` can never escape `.sparra/conduct/` or touch an unrelated `run.json`.
+
+If **no** unit is re-enterable (e.g. a terminal all-accepted `completed` run), `--resume` is a
+**no-op**: it reports there is nothing to do and exits 0. An **unknown** `runId` exits **1** naming it
+and creates **no** side effects (no run dir, no permission probe, no spend).
+
+### Prior-blocking threading across rounds
+
+Whenever a unit runs **more than one** evaluation round — a normal multi-round re-grade **or** a
+resumed re-grade — each prior round's runner-persisted **redacted** verdict path is threaded onto the
+next round's evaluator as a repeatable `--prior-blocking <verdictPath>` (in round order, **paths only,
+never contents** — the verdict file is already holdout-redacted). The evaluator therefore **verifies
+settled blocking ground** rather than whipsaw-bouncing an already-accepted fix. These per-round paths
+are persisted as each unit's `verdictPaths`, so a resumed re-grade threads exactly the same settled
+ground the crashed process had established.
+
 ## Artifacts layout
 
 Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source of truth):
 
 ```
 .sparra/conduct/<runId>/
-  run.json                 # units, per-unit outcome/score/cost/branch/worktree, overall status
+  run.json                 # units, per-unit outcome/score/cost/branch/worktree/verdictPaths, status
                            #   + committedSha/mergedInto when landed with --commit/--merge
+                           #   + resumedAt[] (one stamp per --resume)
   <unit-id>/
     brief.md               # the unit's brief (written from the decomposition)
     contract.md            # the finalized (agreed or forced) contract
@@ -146,8 +217,12 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
 ```
 
 `run.json` is written **incrementally** and **atomically** (temp-file + rename), so a crashed run is
-still inspectable: completed units carry their fields and the overall `status` stays non-final
-(`running`) until the run finishes (`completed`).
+both **inspectable and resumable**: completed units carry their fields and the overall `status` stays
+non-final (`running`) until the run finishes (`completed`) — and a crashed/interrupted run is
+continued in place with [`sparra conduct --resume <runId>`](#resuming-a-crashed--interrupted-run---resume)
+rather than restarted from scratch. Each unit entry also records `verdictPaths` (the per-round
+runner-persisted **redacted** verdict paths, in round order) and the run records one `resumedAt`
+timestamp per resume.
 
 ## Safety properties
 

@@ -69,7 +69,9 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 > lands on your branch). Two brain modes (`--brain hybrid` = deterministic loop + an LLM conductor at
 > the judgment points, `--brain llm` = the brain drives turn-by-turn) plus a decision engine that
 > parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` — or the HTTP
-> bridge's `POST /jobs/:id/decision` — to answer).
+> bridge's `POST /jobs/:id/decision` — to answer). A crashed or interrupted run is **continued in
+> place** with `sparra conduct --resume <runId>` (skips already-accepted units, re-enters the rest at
+> the right stage, appends to the same `run.json`), not restarted.
 > Flags + artifacts + safety properties: [docs/conduct.md](docs/conduct.md).
 
 > **Remote conductor (HTTP bridge).** Trigger `sparra` phases and role-runs on another Mac over
