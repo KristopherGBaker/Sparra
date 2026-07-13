@@ -597,6 +597,13 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
       // Evaluator carries the generator identity as the cross-model baseline.
       const ev = runner.specs.find((s) => kindOf(s.args) === "evaluator")!;
       expect(argVal(ev.args, "--baseline-model")).toBe(ctx.config.roles.generator.model);
+      // The runner rejects any non-`evaluator` role-run without a brief ("provide a brief" exit 1),
+      // so every other spawned kind MUST carry --brief on its argv (live-fire regression: the
+      // contract-evaluator spec omitted it and the first real conduct run crashed both units).
+      for (const kind of ["contract-generator", "contract-evaluator", "generator"] as const) {
+        const spec = runner.specs.find((s) => kindOf(s.args) === kind)!;
+        expect(argVal(spec.args, "--brief"), `${kind} --brief`).toBeTruthy();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

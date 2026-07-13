@@ -148,6 +148,10 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
       "--kind",
       "contract-evaluator",
       ...roleFlags(p.roles.contractEvaluator),
+      // The runner requires a brief for every kind except `evaluator`; the critique also needs it
+      // to judge the contract against what was actually asked.
+      "--brief",
+      p.briefPath,
       "--contract",
       p.contractPath,
       "--out",
