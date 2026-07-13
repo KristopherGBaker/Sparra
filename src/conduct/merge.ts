@@ -109,6 +109,10 @@ export interface LandingDeps {
   onDecisionRequest?: (requestPath: string) => void;
   /** Run-global monotonic decision sequence (shared with the brain path so seq never collides). */
   seqRef: { n: number };
+  /** RESUME only: restrict landing to these unit ids (the ones re-run this invocation), so a resume
+   *  never re-commits/re-merges units already landed in a prior process. Absent on a fresh run —
+   *  every accepted unit is landed, unchanged. */
+  restrictTo?: Set<string>;
 }
 
 /** The resolved merge target for this run. */
@@ -129,7 +133,9 @@ type MergeStatus = "merged" | "parked" | "skipped" | "no-op";
  * stay committed-only); `skip-unit` skips just the current one.
  */
 export async function landAcceptedUnits(ctx: Ctx, deps: LandingDeps): Promise<void> {
-  const accepted = deps.state.units.filter((u) => u.outcome === "accepted");
+  const accepted = deps.state.units.filter(
+    (u) => u.outcome === "accepted" && (!deps.restrictTo || deps.restrictTo.has(u.id)),
+  );
   if (accepted.length === 0) return;
 
   const gi: LandingGit = { ...realLandingGit, ...deps.git };

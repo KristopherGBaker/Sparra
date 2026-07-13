@@ -63,6 +63,14 @@ export interface ConductUnitDeps {
   passThreshold: number;
   /** A PASS whose score is within this many points of threshold is a BORDERLINE accept. */
   borderlineMargin: number;
+  /** RESUME: when set, the contract phase is SKIPPED — the persisted contract file is reused as-is
+   *  (its agreement/forced state carried here), so a resumed unit re-enters straight at generate with
+   *  NO contract-generator/contract-evaluator run. Absent on a fresh run (negotiate as normal). */
+  resumeContract?: { agreed: boolean; forced: boolean };
+  /** RESUME: prior rounds' persisted redacted verdict paths (from the unit's run.json entry), used to
+   *  SEED the re-grade `--prior-blocking` threading so a resumed re-grade verifies settled ground.
+   *  Paths only — never contents. Absent/[] on a fresh run. */
+  seedVerdictPaths?: string[];
 }
 
 /** A PASS within `margin` points of the (per-verdict or configured) threshold is borderline. */
@@ -95,20 +103,29 @@ async function recover(
   return { summary: retried };
 }
 
+/** RESUME: synthesize a settled `ContractNegotiationResult` from persisted state WITHOUT running any
+ *  contract role — the persisted contract file is reused in place. */
+function resumedContract(r: { agreed: boolean; forced: boolean }): ContractNegotiationResult {
+  return { agreed: r.agreed, rounds: [], critiquePaths: [] };
+}
+
 /** hybrid: deterministic loop + brain/decision-engine at the five judgment points. */
 export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitResult> {
-  const contract = await negotiateContract(
-    { runRole: deps.runRole },
-    {
-      contractGeneratorSpec: deps.specs.contractGeneratorSpec,
-      contractEvaluatorSpec: deps.specs.contractEvaluatorSpec,
-      maxRounds: deps.contractMaxRounds,
-    },
-  );
+  // RESUME: skip the contract phase entirely when re-entering at generate (persisted contract reused).
+  const contract = deps.resumeContract
+    ? resumedContract(deps.resumeContract)
+    : await negotiateContract(
+        { runRole: deps.runRole },
+        {
+          contractGeneratorSpec: deps.specs.contractGeneratorSpec,
+          contractEvaluatorSpec: deps.specs.contractEvaluatorSpec,
+          maxRounds: deps.contractMaxRounds,
+        },
+      );
 
   let brief: string | undefined;
-  let contractForced = false;
-  if (!contract.agreed) {
+  let contractForced = deps.resumeContract?.forced ?? false;
+  if (!deps.resumeContract && !contract.agreed) {
     const res = await deps.judge("contract-nonconvergence", contract.rounds.at(-1)?.evaluator);
     if (res.answer === "abandon") {
       return { outcome: "abandoned", contractAgreed: false, contractForced: false };
@@ -141,9 +158,12 @@ async function runHybridRounds(
   let genRole = deps.generatorRole;
   let brief = briefOverride;
   let lastEval: ParentSummary | undefined;
+  // Prior rounds' persisted verdict paths threaded onto each re-grade as `--prior-blocking`. Seeded
+  // from run.json on a RESUME (verify settled ground), then extended per graded round.
+  const priorVerdictPaths: string[] = [...(deps.seedVerdictPaths ?? [])];
 
   while (round <= deps.maxRounds) {
-    const ctx = { round, feedback, pivoting };
+    const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     const genSpec = deps.specs.generatorSpecFor(genRole, ctx, brief);
     const genRaw = await deps.runRole(genSpec);
     const genRec = await recover(deps, genSpec, genRaw);
@@ -155,6 +175,7 @@ async function runHybridRounds(
     if (evalRec.abandon) return { outcome: "abandoned", finalVerdict: evalRec.summary };
     const evalSummary = evalRec.summary;
     lastEval = evalSummary;
+    if (evalSummary.verdictPath) priorVerdictPaths.push(evalSummary.verdictPath);
 
     const decision = deps.decide(
       evalSummary,
@@ -221,19 +242,23 @@ async function runHybridRounds(
 
 /** llm: the brain drives turn-by-turn, hard-bounded by the round budget. */
 export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResult> {
-  const contract = await negotiateContract(
-    { runRole: deps.runRole },
-    {
-      contractGeneratorSpec: deps.specs.contractGeneratorSpec,
-      contractEvaluatorSpec: deps.specs.contractEvaluatorSpec,
-      maxRounds: deps.contractMaxRounds,
-    },
-  );
+  // RESUME: skip the contract phase (persisted contract reused in place).
+  const contract = deps.resumeContract
+    ? resumedContract(deps.resumeContract)
+    : await negotiateContract(
+        { runRole: deps.runRole },
+        {
+          contractGeneratorSpec: deps.specs.contractGeneratorSpec,
+          contractEvaluatorSpec: deps.specs.contractEvaluatorSpec,
+          maxRounds: deps.contractMaxRounds,
+        },
+      );
 
   let round = 1;
   let genRole = deps.generatorRole;
   let last: ParentSummary | undefined;
-  const contractForced = !contract.agreed;
+  const contractForced = deps.resumeContract?.forced ?? !contract.agreed;
+  const priorVerdictPaths: string[] = [...(deps.seedVerdictPaths ?? [])];
 
   while (round <= deps.maxRounds) {
     const driveCtx: DriveContext = {
@@ -267,9 +292,10 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
     // run / revise / pivot / escalate / finalize → run ONE generate+evaluate round.
     const pivoting = action === "pivot";
     const feedback = action === "revise" && d?.feedback ? [d.feedback] : pivoting ? last?.blocking ?? [] : [];
-    const ctx = { round, feedback, pivoting };
+    const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     await deps.runRole(deps.specs.generatorSpecFor(genRole, ctx));
     last = await deps.runRole(deps.specs.evaluatorSpec(ctx));
+    if (last.verdictPath) priorVerdictPaths.push(last.verdictPath);
     round += 1;
   }
 

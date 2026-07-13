@@ -407,6 +407,26 @@ export function addNamedWorktree(srcDir: string, wtDir: string, branch: string):
   return git(srcDir, ["worktree", "add", "-b", branch, wtDir, "HEAD"]);
 }
 
+/**
+ * Re-attach a linked worktree at `wtDir` to an ALREADY-EXISTING branch (`git worktree add <wtDir>
+ * <branch>`, NO `-b`). Used to REPAIR a unit worktree whose directory was removed out from under us
+ * (e.g. `rm -rf`) while its `sparra/<name>` branch — carrying the generator's committed WIP — survived:
+ * we recreate the tree checked out on that same branch, preserving the branch tip. Refuses if the
+ * target dir already exists (never adopts a foreign dir).
+ */
+export function addExistingBranchWorktree(srcDir: string, wtDir: string, branch: string): { ok: boolean; out: string } {
+  if (!isGitRepo(srcDir) || !hasCommits(srcDir)) return { ok: false, out: `${srcDir} is not a git repo with commits` };
+  if (exists(wtDir)) return { ok: false, out: `worktree target already exists: ${wtDir}` };
+  return git(srcDir, ["worktree", "add", wtDir, branch]);
+}
+
+/** Prune git's registry of worktrees whose working directories have disappeared (`git worktree
+ *  prune`). Best-effort — a stale registration otherwise blocks re-adding at the same path. */
+export function pruneWorktrees(root: string): { ok: boolean; out: string } {
+  if (!isGitRepo(root)) return { ok: false, out: `${root} is not a git repo` };
+  return git(root, ["worktree", "prune"]);
+}
+
 // ── Temp WIP-snapshot worktrees (the `sparra eval --worktree` isolation seam). ──
 
 /**

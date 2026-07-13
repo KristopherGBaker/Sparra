@@ -17,7 +17,7 @@ import { cmdFinish } from "./phases/finish.ts";
 import { cmdClean } from "./phases/clean.ts";
 import { cmdPrompts } from "./phases/prompts.ts";
 import { cmdRoleRun, cmdRoleRemoveWorktree } from "./phases/role.ts";
-import { cmdConduct, cmdConductDecide } from "./phases/conduct.ts";
+import { cmdConduct, cmdConductDecide, cmdConductResume } from "./phases/conduct.ts";
 import { cmdMeasure } from "./phases/measure.ts";
 import { promptDrift, summarizePromptDrift } from "./prompts.ts";
 import { parse } from "./util/args.ts";
@@ -57,10 +57,12 @@ ${color.bold("Commands")}
                                                 grade a work-in-progress tree with a standalone evaluator (alias for: role run --kind evaluator; --worktree gives the exercise writable scratch in a temp worktree that mirrors your WIP; --max-turns overrides build.maxTurnsPerSession for this call, positive integers only; --expected-head <sha> aborts before launch if the graded HEAD isn't the one cited; --eval-base <ref> scopes scope/deviation judgment to <ref>..HEAD + WIP so foreign uncommitted WIP doesn't fail assertions; --baseline-command <cmd> injects a runner-owned [VERIFIED BASELINE] block at --eval-base's SHA, non-gameable)
   measure [dir] [--worktree [--keep-worktree]] [--set-baseline] [--out f]
                                                 run the project's own measure.command on a tree, parse its JSON metrics, diff against the baseline (in .sparra/measure/), flag regressions — a signal, never a gate (default compare-only; --set-baseline updates the baseline; --worktree mirrors your WIP)
-  conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]
+  conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]  (a prompt is required UNLESS --resume is given)
                                                 headless conductor: decompose a prompt into 1..N units, then per unit negotiate contract → generate → cross-model evaluate → decide, all through the isolated role-run machinery (works without 'sparra init'). Writes .sparra/conduct/<runId>/ (run.json + per-unit briefs/contracts); each unit generates on its own sparra/<name> worktree and by default (no --commit/--merge) nothing is committed or merged and the default branch is never touched. --max-units clamps the decomposition (default 4); --concurrency bounds units run at once (default 2); --budget/--max-turns cap each role-run (--budget 0 = unlimited); --brain picks the conductor mode (hybrid = deterministic loop + LLM at judgment points [default], llm = brain drives turn-by-turn); --auto never parks a decision (the brain decides everything); --commit commits an ACCEPTED unit's worktree WIP onto its own sparra/<name> branch (committer role or template per git.agentCommits; message carries the unit's score + conduct runId); --merge (implies --commit) integrates accepted branches into a SAFE target — a run branch sparra/<runId> when conduct started from the default branch, else the current branch, NEVER the default branch (that land stays yours) — rebase+ff preferred with a merge-commit fallback, a conflict/dirty target parks as a decision, and a merged unit's worktree is torn down; without --commit/--merge nothing is committed or merged (report-only, identical to before); --dry-run decomposes + writes briefs only (no role spend beyond the decomposer)
   conduct --decide <runId> <seq> <answer> [--note …]
                                                 answer a parked conductor decision from another terminal (or over the HTTP bridge via POST /jobs/:id/decision): writes .sparra/conduct/<runId>/decisions/<seq>.decision.json where the run's poller looks (unknown run/seq → non-zero, no spend)
+  conduct --resume <runId> [--commit] [--merge] [--auto]
+                                                reload .sparra/conduct/<runId>/run.json and CONTINUE the crashed/interrupted run IN PLACE (any prompt argument is ignored): accepted/dry-run units are skipped; pending/running/error units re-enter at the right stage (an agreed/forced contract → straight to generate, no re-negotiation; else renegotiate from the persisted brief); each unit worktree is reused-or-recreated by its stable name; the SAME run.json is appended to (decision seq stays monotonic, a resumedAt timestamp is recorded). Prior parked decisions stay answerable via 'conduct --decide' and a resume re-parks anything unresolved. Composes with --commit/--merge (lands only the units continued this resume). Unknown runId → exit 1 naming it, no side effects; a terminal all-accepted run → no-op
   resume                                        continue whatever phase you're in, from disk
   help                                          this
 
@@ -150,6 +152,13 @@ async function main(): Promise<void> {
       const answer = typeof flags.decide === "string" ? (positionals[2] ?? "") : (positionals[3] ?? "");
       const note = typeof flags.note === "string" ? flags.note : undefined;
       await cmdConductDecide(conductCtx, runId, seq, answer, note);
+      return;
+    }
+    // `--resume <runId>` reloads and CONTINUES a persisted run in place (the prompt is optional and
+    // ignored). An unknown runId exits 1 with zero side effects.
+    if (flags.resume !== undefined) {
+      const runId = typeof flags.resume === "string" ? flags.resume : (positionals[1] ?? "");
+      await cmdConductResume(conductCtx, runId, flags);
       return;
     }
     await cmdConduct(conductCtx, positionals.slice(1).join(" "), flags);

@@ -1,8 +1,16 @@
 import { autoProbeCtx, type Ctx } from "../context.ts";
 import { banner, detail, err, info, ok } from "../util/log.ts";
 import { exists } from "../util/io.ts";
-import { runConduct, type ConductDeps, type ConductOptions, type ConductResult } from "../conduct/run.ts";
-import { conductRunDir, runStatePath } from "../conduct/runState.ts";
+import {
+  runConduct,
+  resumeConduct,
+  type ConductDeps,
+  type ConductOptions,
+  type ConductResult,
+  type ResumeConductOptions,
+  type ResumeConductResult,
+} from "../conduct/run.ts";
+import { conductRunDir, isSafeRunId, runStatePath } from "../conduct/runState.ts";
 import { requestExists, writeDecisionAnswer } from "../conduct/decisionEngine.ts";
 
 /**
@@ -121,7 +129,29 @@ function parseOptionalBudget(v: Flags[string] | undefined): number | undefined |
 /** Injectable seams for `cmdConduct` (tests inject fakes so validation is exercised with no spend). */
 export interface CmdConductDeps extends ConductDeps {
   runConductFn?: (ctx: Ctx, opts: ConductOptions, deps: ConductDeps) => Promise<ConductResult>;
+  resumeConductFn?: (
+    ctx: Ctx,
+    runId: string,
+    opts: ResumeConductOptions,
+    deps: ConductDeps,
+  ) => Promise<ResumeConductResult>;
   autoProbe?: typeof autoProbeCtx;
+}
+
+/** Project the injectable seams down to the `ConductDeps` the conductor / resume paths consume. */
+function toConductDeps(deps: CmdConductDeps): ConductDeps {
+  return {
+    ...(deps.runRole ? { runRole: deps.runRole } : {}),
+    ...(deps.runSessionFn ? { runSessionFn: deps.runSessionFn } : {}),
+    ...(deps.strategy ? { strategy: deps.strategy } : {}),
+    ...(deps.sparraBin ? { sparraBin: deps.sparraBin } : {}),
+    ...(deps.brain !== undefined ? { brain: deps.brain } : {}),
+    ...(deps.brainSessionFn ? { brainSessionFn: deps.brainSessionFn } : {}),
+    ...(deps.tty ? { tty: deps.tty } : {}),
+    ...(deps.ensureUnitWorktreeFn ? { ensureUnitWorktreeFn: deps.ensureUnitWorktreeFn } : {}),
+    ...(deps.landingGit ? { landingGit: deps.landingGit } : {}),
+    ...(deps.commitGit ? { commitGit: deps.commitGit } : {}),
+  };
 }
 
 /**
@@ -153,15 +183,7 @@ export async function cmdConduct(
   if (parsed.opts.timeoutSec === undefined) parsed.opts.timeoutSec = ctx.config.conduct.decisions.timeoutSec;
 
   const runConductFn = deps.runConductFn ?? runConduct;
-  const conductDeps: ConductDeps = {
-    ...(deps.runRole ? { runRole: deps.runRole } : {}),
-    ...(deps.runSessionFn ? { runSessionFn: deps.runSessionFn } : {}),
-    ...(deps.strategy ? { strategy: deps.strategy } : {}),
-    ...(deps.sparraBin ? { sparraBin: deps.sparraBin } : {}),
-    ...(deps.brain !== undefined ? { brain: deps.brain } : {}),
-    ...(deps.brainSessionFn ? { brainSessionFn: deps.brainSessionFn } : {}),
-    ...(deps.tty ? { tty: deps.tty } : {}),
-  };
+  const conductDeps = toConductDeps(deps);
 
   info(
     `prompt="${parsed.opts.prompt.slice(0, 80)}${parsed.opts.prompt.length > 80 ? "…" : ""}" ` +
@@ -172,6 +194,73 @@ export async function cmdConduct(
   );
   const result = await runConductFn(ctx, parsed.opts, conductDeps);
   detail(`run: ${result.runId} → ${result.runDir}`);
+  for (const u of result.state.units) {
+    detail(
+      `  ${u.id} [${u.outcome}]` +
+        (u.score !== undefined ? ` score=${u.score}` : "") +
+        (u.branch ? ` branch=${u.branch}` : "") +
+        (u.worktree ? ` worktree=${u.worktree}` : ""),
+    );
+  }
+  return result;
+}
+
+/**
+ * `sparra conduct --resume <runId> [--commit|--merge] [--auto]` — reload a persisted run's `run.json`
+ * and CONTINUE it in place: accepted/dry-run units are skipped, pending/running/error units re-enter
+ * at the correct stage (an agreed/forced contract → straight to generate; else renegotiate from the
+ * persisted brief), worktrees are reused-or-recreated by stable name, and the SAME run.json is
+ * appended to (monotonic decision seq + a per-resume `resumedAt`). A missing runId → usage error; an
+ * unknown runId → exit 1 naming it with ZERO side effects (no run dir, no auto-permission probe, no
+ * spend); a run with nothing to continue is a no-op. Composes with `--commit`/`--merge` + parking.
+ */
+export async function cmdConductResume(
+  ctx: Ctx,
+  runId: string,
+  flags: Flags,
+  deps: CmdConductDeps = {},
+): Promise<ResumeConductResult | undefined> {
+  banner("sparra conduct --resume");
+  if (!runId) {
+    err('conduct --resume: a runId is required — usage: sparra conduct --resume <runId>');
+    process.exitCode = 1;
+    return undefined;
+  }
+
+  // Unsafe or unknown runId → exit 1 naming it, with ZERO side effects: validate the id as an opaque
+  // identifier (rejecting `../`/separators so it can't escape `.sparra/conduct/`) BEFORE touching the
+  // filesystem, the live-SDK probe, or any run-state write (mirrors the malformed-flag fast-path).
+  const runDir = conductRunDir(ctx.paths.dir, runId);
+  if (!isSafeRunId(runId) || !exists(runStatePath(runDir))) {
+    err(`conduct --resume: no such run "${runId}" (looked in ${runDir})`);
+    process.exitCode = 1;
+    return { status: "unknown-run", runId, runDir };
+  }
+
+  const merge = flags["merge"] === true;
+  const commit = merge || flags["commit"] === true;
+  const resumeOpts: ResumeConductOptions = {
+    ...(commit ? { commit: true } : {}),
+    ...(merge ? { merge: true } : {}),
+    ...(flags["auto"] === true ? { surface: "auto" } : {}),
+  };
+
+  // Probe permissions only AFTER the run is known to exist (an unknown run spends zero tokens).
+  await (deps.autoProbe ?? autoProbeCtx)(ctx);
+
+  const resumeFn = deps.resumeConductFn ?? resumeConduct;
+  const result = await resumeFn(ctx, runId, resumeOpts, toConductDeps(deps));
+  if (result.status === "unknown-run") {
+    // Defensive: the pre-check above should already have handled this.
+    err(`conduct --resume: no such run "${runId}" (looked in ${result.runDir})`);
+    process.exitCode = 1;
+    return result;
+  }
+  if (result.status === "nothing-to-do") {
+    detail(`run: ${result.runId} → ${result.runDir} (nothing to resume)`);
+    return result;
+  }
+  detail(`run: ${result.runId} → ${result.runDir} (resumed)`);
   for (const u of result.state.units) {
     detail(
       `  ${u.id} [${u.outcome}]` +
@@ -209,7 +298,7 @@ export async function cmdConductDecide(
     return;
   }
   const runDir = conductRunDir(ctx.paths.dir, runId);
-  if (!exists(runDir) || !exists(runStatePath(runDir))) {
+  if (!isSafeRunId(runId) || !exists(runDir) || !exists(runStatePath(runDir))) {
     err(`conduct --decide: no such run "${runId}" (looked in ${runDir})`);
     process.exitCode = 1;
     return;

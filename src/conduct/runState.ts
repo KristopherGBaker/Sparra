@@ -13,6 +13,23 @@ import type { ConductRunState } from "./types.ts";
  * complete one, never a torn write.
  */
 
+/**
+ * Validate a `runId` as an OPAQUE, single-segment identifier BEFORE any path is built from it — the
+ * guard that keeps `conduct --resume <runId>` / `--decide <runId>` from escaping `.sparra/conduct/`
+ * or mutating an unrelated `run.json`. Rejects: empty, any path separator (`/`, `\`), `..` (traversal),
+ * absolute paths, a leading `-` (arg-injection), and anything outside `[A-Za-z0-9._-]` (`newRunId`
+ * only ever emits that set). An allowlist — default-deny. Pure (no I/O), so a bad id is refused with
+ * zero side effects.
+ */
+export function isSafeRunId(runId: unknown): runId is string {
+  if (typeof runId !== "string" || runId.length === 0) return false;
+  if (/[/\\]/.test(runId)) return false;
+  if (runId.includes("..")) return false;
+  if (path.isAbsolute(runId)) return false;
+  if (runId.startsWith("-")) return false;
+  return /^[A-Za-z0-9._-]+$/.test(runId);
+}
+
 /** The run directory for a conduct run: `<root>/.sparra/conduct/<runId>/`. */
 export function conductRunDir(sparraDir: string, runId: string): string {
   return path.join(sparraDir, "conduct", runId);
