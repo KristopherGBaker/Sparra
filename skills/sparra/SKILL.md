@@ -44,18 +44,19 @@ If `sparra` isn't on PATH, run via `node "$SPARRA_REPO/bin/sparra.mjs"`.
 
 ## Installing the interactive conductor
 
-Both hosts require `npm install && npm link` in the Sparra checkout; the link exposes the `sparra`
-and `sparra-run-mcp` package bins on `PATH`.
+Both hosts require `npm install && npm link` in the Sparra checkout (`make link`); the link exposes
+the `sparra` and `sparra-run-mcp` package bins on `PATH`.
 
-- **Claude Code:** register `sparra-run-mcp`, add the repo marketplace, install
-  `sparra@sparra-skills`, then invoke `/sparra-loop` in the target project.
-- **Codex:** register the checkout as a marketplace (`codex plugin marketplace add`), then install
-  with `codex plugin add sparra@sparra-skills`. Start a fresh thread in the target project and ask
-  it to use `sparra-loop`. Whenever the `.codex-plugin/plugin.json` cachebuster changes, run
+- **Claude Code:** `make setup-claude` — registers `sparra-run-mcp`, adds the repo marketplace,
+  installs `sparra@sparra-skills`; then invoke `/sparra-loop` in the target project.
+- **Codex:** `make setup-codex` — registers the checkout as a marketplace and installs
+  `sparra@sparra-skills`. Start a fresh thread in the target project and ask it to use
+  `sparra-loop`. Whenever the `.codex-plugin/plugin.json` cachebuster changes, run
   `make update-codex-plugin` and start another fresh thread.
 - **Remote (HTTP bridge):** trigger `sparra` phases/role-runs on another Mac over Tailscale via
   `conductors/http` (Bearer token, path allowlist, holdout wall preserved) — see `docs/http-bridge.md`.
-- **Pi:** `pi install ./conductors/pi` (from the Sparra checkout) — the package ships the Pi-native
+- **Pi:** `make setup-pi` (= `pi install ./conductors/pi`, loads live from the checkout) — the
+  package ships the Pi-native
   `sparra-loop` conductor skill + `sparra_role` tool + `/sparra-loop` command, and references this
   `sparra` skill. Then say "conduct a Sparra loop …" or `/skill:sparra-loop`.
 

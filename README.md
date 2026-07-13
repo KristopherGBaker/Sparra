@@ -42,6 +42,9 @@ claude plugin marketplace add "$PWD"
 claude plugin install sparra@sparra-skills                 # gives you /sparra-loop and /sparra
 ```
 
+(Or let the Makefile drive both steps: `make link setup-claude` — plus `make setup-codex` /
+`make setup-pi` for the other conductor hosts. `make help` lists everything.)
+
 Open Claude Code **in your project** and type `/sparra-loop`. The conductor sets the project up
 (`sparra init`, per-role backend/model split, optional holdout) and drives the loop:
 

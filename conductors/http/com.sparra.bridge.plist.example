@@ -2,13 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Sample launchd LaunchAgent for the Sparra HTTP bridge. EVERY path/value below is a FAKE
-  placeholder — copy this file, replace the placeholders with your own, and install it as:
+  placeholder — `make bridge-install` copies this file to ~/Library/LaunchAgents, waits for you to
+  replace the placeholders, then loads it on the second run (refusing while placeholders remain).
+  Or by hand:
 
     cp conductors/http/com.sparra.bridge.plist.example \
        ~/Library/LaunchAgents/com.sparra.bridge.plist
     launchctl load ~/Library/LaunchAgents/com.sparra.bridge.plist
 
-  See conductors/http/README.md for the full walkthrough (token generation, bridge.yaml, uninstall).
+  See conductors/http/README.md for the full walkthrough (token generation, bridge.yaml, uninstall;
+  make bridge-update / bridge-status / bridge-logs / bridge-remove cover the rest of the lifecycle).
 -->
 <plist version="1.0">
 <dict>

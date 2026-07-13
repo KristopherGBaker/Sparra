@@ -35,6 +35,9 @@ claude plugin marketplace add "$PWD"              # assumes cwd is the Sparra re
 claude plugin install sparra@sparra-skills        # gives you /sparra-loop
 # (or, without the plugin: ln -s /path/to/Sparra/skills/sparra-loop ~/.claude/skills/sparra-loop)
 ```
+(`make link setup-claude` runs all of the above; `make setup-codex` / `make setup-pi` set up the
+other conductor hosts.)
+
 Then, in any project, invoke **`/sparra-loop`** — it runs `sparra init`, helps set the
 per-role backend/model split, optionally scaffolds a holdout, and drives the loop. (No
 plugin? Use `sparra role run` / `sparra eval` directly — no `sparra init` required for

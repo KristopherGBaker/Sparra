@@ -80,9 +80,20 @@ the full discovery semantics (skip-list, symlink handling, result cap).
 
 ### 3. Install the launchd agent
 
-Copy the example plist, fill in ITS placeholders (node path, bin path, working directory, the token,
-the config path, log paths, and an agent-backend credential — see the comments in the file), then
-load it:
+The Makefile wraps the whole lifecycle:
+
+```bash
+make bridge-install   # first run copies the plist template to ~/Library/LaunchAgents and stops;
+                      # edit EVERY placeholder (node path, bin path, working directory, the token —
+                      # `make bridge-token` generates one — config path, log paths, an agent-backend
+                      # credential), then re-run to load. Refuses to load while placeholders remain.
+make bridge-update    # restart the service (unload + load) to pick up new code/config
+make bridge-status    # launchctl status
+make bridge-logs      # tail the stdout/stderr logs named in the plist
+make bridge-remove    # unload + delete the plist
+```
+
+Or by hand:
 
 ```bash
 cp conductors/http/com.sparra.bridge.plist.example ~/Library/LaunchAgents/com.sparra.bridge.plist
