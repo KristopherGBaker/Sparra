@@ -3,6 +3,7 @@ import {
   reportReaskOverrides,
   REPORT_REASK_PROMPT,
   REPORT_REASK_MAX_TURNS,
+  VERDICT_REASK_PROMPT,
 } from "../src/build/jsonReask.ts";
 
 describe("reportReaskOverrides", () => {
@@ -32,6 +33,17 @@ describe("reportReaskOverrides", () => {
     expect(o.mcpServers).toBeUndefined();
     expect("allowedTools" in o).toBe(true);
     expect(o.allowedTools).toBeUndefined();
+  });
+
+  it("prompt override → the evaluator verdict re-ask uses VERDICT_REASK_PROMPT (shared literal, not a roleRun fork)", () => {
+    const o = reportReaskOverrides({ ...base, role: "role-run-evaluator-reask", tightCap: { maxBudgetUsd: 0.5 }, prompt: VERDICT_REASK_PROMPT });
+    expect(o.prompt).toBe(VERDICT_REASK_PROMPT);
+    expect(VERDICT_REASK_PROMPT).toContain("Re-emit ONLY the JSON verdict block");
+    expect(VERDICT_REASK_PROMPT).not.toBe(REPORT_REASK_PROMPT); // verdict-specific, not the generator report prompt
+    // still a genuinely text-only tightCap turn
+    expect(o.tools).toEqual([]);
+    expect(o.readOnly).toBe(true);
+    expect(o.maxTurns).toBe(REPORT_REASK_MAX_TURNS);
   });
 
   it("(#5) NO tightCap → exactly {role, prompt, resume}: none of the tightCap-only keys present", () => {

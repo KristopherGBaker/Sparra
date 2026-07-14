@@ -2389,6 +2389,134 @@ describe("runRole — turn-cap report re-ask (U-D)", () => {
   });
 });
 
+// ── U2: one-shot VERDICT re-ask on a cap-killed EVALUATOR (build.jsonReask, interactive path) ──
+
+describe("runRole — cap-death verdict re-ask (evaluator)", () => {
+  /** A turn-cap death (OUR own cap — no provider limitHit) carrying `resultText`, evaluator session. */
+  const turnCap = (resultText: string): Partial<RunResult> => ({
+    ok: false,
+    subtype: "error_max_turns",
+    resultText,
+    hitMaxTurns: true,
+    sessionId: "sess-eval",
+    errors: ["error_max_turns"],
+  });
+  /** A budget-cap death (OUR own cap — no provider limitHit), evaluator session. */
+  const budgetCap = (resultText: string): Partial<RunResult> => ({
+    ok: false,
+    subtype: "error_max_budget_usd",
+    resultText,
+    hitBudget: true,
+    sessionId: "sess-eval",
+    errors: ["error_max_budget_usd"],
+  });
+  const RECOVERED: Partial<RunResult> = { ok: true, subtype: "success", resultText: EVAL_JSON, sessionId: "sess-eval", tokens: 9, costUsd: 0.02 };
+
+  it("(#2/#3) turn-cap + no verdict → ONE tightCap verdict-only resume; recovered verdict surfaces, hitMaxTurns STAYS, telemetry accrues", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.maxBudgetUsdPerItem = 5; // the original (large) per-item cap
+    const rec = seqSession([turnCap("I was mid-grade when the turn cap hit…"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    // exactly two calls; the second RESUMES the dying session with a verdict-only prompt.
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("sess-eval");
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON verdict block");
+    expect(rec.calls[1]!.prompt).not.toContain("grade"); // never replays the grading task
+    // tightCap text-only turn: 1 turn, tighter budget, tool-stripping + read-only (NOT plan mode).
+    expect(rec.calls[1]!.maxTurns).toBe(1);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(0.5);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
+    expect(rec.calls[1]!.tools).toEqual([]);
+    expect(rec.calls[1]!.permissionMode).toBe("default"); // NOT plan
+    expect(rec.calls[1]!.readOnly).toBe(true);
+    expect(rec.calls[1]!.hooks).toBeUndefined();
+    // recovered verdict surfaces (NOT the forced-fail "no verdict parsed" shape); cap stays truthful.
+    expect(r.verdict?.verdict).toBe("pass");
+    expect(r.verdict?.scores.design).toBe(90);
+    expect(r.verdict?.notes).not.toBe("no verdict parsed");
+    expect(r.hitMaxTurns).toBe(true);
+    expect(r.sessionId).toBe("sess-eval");
+    expect(r.errors.some((e) => /re-ask/i.test(e))).toBe(true); // recovery note recorded, truthfully
+    expect(r.tokens).toBeGreaterThanOrEqual(9); // retry tokens accrued
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) budget-cap variant → re-ask fires identically; hitBudget STAYS true", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([budgetCap(""), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.resume).toBe("sess-eval");
+    expect(rec.calls[1]!.prompt).toContain("Re-emit ONLY the JSON verdict block");
+    expect(r.verdict?.verdict).toBe("pass");
+    expect(r.hitBudget).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#5) unrecovered → today's forced-fail verdict, cap flags still set, exactly two calls, no third", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("prose, no verdict"), { ...turnCap("still garbage, no JSON at all") }]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(2); // re-asked exactly once, never a third
+    expect(r.verdict?.verdict).toBe("fail");
+    expect(r.verdict?.notes).toBe("no verdict parsed"); // today's forced-fail shape
+    expect(r.verdict?.scores.design).toBe(0);
+    expect(r.hitMaxTurns).toBe(true); // cap telemetry preserved
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#6) build.jsonReask disabled → NO re-ask (exactly one call), today's forced-fail verdict", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.build.jsonReask = false;
+    const rec = seqSession([turnCap("prose, no verdict"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1); // disabled → no re-ask
+    expect(r.verdict?.notes).toBe("no verdict parsed");
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#7) provider-limit + cap flag + no verdict → NO re-ask (exactly one call); limitHit surfaces", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    ctx.config.roles.evaluator = { backend: "claude", model: "opus" }; // no fallback → surfaces the limit
+    const rec = seqSession([{ ...budgetCap("no verdict"), limitHit: { kind: "usage", raw: "limited" } }, RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1); // resuming a limited session is futile → no re-ask
+    expect(r.limitHit).toBeDefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#8) cap-killed but a valid verdict IS present → NO re-ask (one call), that verdict surfaces, cap flag stays", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap(EVAL_JSON), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1); // verdict already present → nothing to recover
+    expect(r.verdict?.verdict).toBe("pass");
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#9) cap-killed with incidental NON-verdict JSON → STILL re-asks (predicate pins to verdict shape, not any JSON)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap('progress so far ```json\n{"cmd":"npm test","exit":0}\n```'), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(2); // incidental JSON is not a verdict → re-ask fires
+    expect(r.verdict?.verdict).toBe("pass"); // the retry verdict surfaces
+    expect(r.hitMaxTurns).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(mutation guard b) a CLEAN evaluator run (no cap, no limit) with no verdict → NO re-ask, exactly one call", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    // No cap flags, no limit, just unparseable output — the cap-death requirement must gate this out.
+    const rec = seqSession([{ ok: true, subtype: "success", resultText: "prose, no verdict at all", sessionId: "sess-eval" }]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
+    expect(rec.calls).toHaveLength(1); // clean run → the cap requirement gates the re-ask out
+    expect(r.verdict?.notes).toBe("no verdict parsed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // ── Item B: anchored functionality cap — parity with the autonomous evaluate.ts path ──
 
 /** An evaluator reply with a controllable assertion set + functionality score. */
