@@ -60,6 +60,42 @@ export type DeviationStrictness = "strict" | "moderate" | "free";
 export type GitStrategy = "worktree" | "branch" | "inplace";
 export type PermissionPreset = "auto" | "acceptEdits" | "plan" | "safe-auto" | "default" | "bypass";
 
+/**
+ * Harness lifecycle points a user script may hook. NOT to be confused with `src/sdk/hooks.ts`,
+ * the unrelated Claude Agent SDK per-tool-call permission decider — different concept, kept
+ * under the distinct `scriptHooks` name to avoid colliding with it.
+ */
+export type ScriptHookEvent =
+  | "onRunStart"
+  | "onRunComplete"
+  | "onPhaseStart"
+  | "onPhaseEnd"
+  | "onUnitStart"
+  | "onUnitComplete"
+  | "onDecisionParked";
+
+/**
+ * One hook: either a bare command string (argv-tokenized on whitespace, no shell), or an object
+ * with the same `run` command plus optional gating/timeout/cwd overrides.
+ */
+export type ScriptHookSpec =
+  | string
+  | {
+      /** The command; argv-tokenized on whitespace, no shell. */
+      run: string;
+      /** Only meaningful on a "before" event (onRunStart/onPhaseStart/onUnitStart): a
+       *  non-zero exit or timeout GATES the lifecycle step. Default false. */
+      required?: boolean;
+      /** Per-hook timeout override (seconds). Default falls back to the runner's constant. */
+      timeoutSec?: number;
+      /** Working directory for the spawn. Default is the harness's target root. */
+      cwd?: string;
+    };
+
+/** Map from lifecycle event to the ordered list of hooks to run for it. Every event optional —
+ *  an absent event runs no hooks. */
+export type ScriptHooks = { [K in ScriptHookEvent]?: ScriptHookSpec[] };
+
 export interface SparraConfig {
   /** Per-role models + reasoning effort. The whole point of the harness is mixing models. */
   roles: {
@@ -527,6 +563,14 @@ export interface SparraConfig {
    * `sparra init --docs <dir>`. (.sparra/ machinery is unaffected.)
    */
   docsDir: string;
+
+  /**
+   * User-configurable external scripts run at harness lifecycle points (whole run, phase
+   * boundaries, per-unit, decision-parked). Opt-in default `{}` — an absent/empty
+   * `scriptHooks` key is a strict no-op (config-less behavior unchanged). See
+   * `src/scriptHooks.ts` (`runScriptHooks`) and docs/configuration.md.
+   */
+  scriptHooks: ScriptHooks;
 }
 
 function role(model: ModelRef, effort?: RoleConfig["effort"]): RoleConfig {
@@ -636,6 +680,7 @@ export function defaultConfig(): SparraConfig {
       decisions: { surface: "park-timeout", timeoutSec: 1800 },
     },
     docsDir: "",
+    scriptHooks: {},
   };
 }
 
@@ -666,6 +711,7 @@ export async function loadConfig(paths: Paths): Promise<SparraConfig> {
     throw new Error(`Could not parse ${paths.config}: ${(e as Error).message}`);
   }
   validateBuildEnv(parsed, paths.config);
+  validateScriptHooks(parsed, paths.config);
   return deepMerge(def, parsed);
 }
 
@@ -683,6 +729,76 @@ function validateBuildEnv(parsed: unknown, configPath: string): void {
     if (typeof value !== "string") {
       throw new Error(`Invalid ${configPath}: build.env.${key} must be a string`);
     }
+  }
+}
+
+/** Closed set of allowed `scriptHooks` event names — the single source of truth for validation. */
+const SCRIPT_HOOK_EVENTS: readonly ScriptHookEvent[] = [
+  "onRunStart",
+  "onRunComplete",
+  "onPhaseStart",
+  "onPhaseEnd",
+  "onUnitStart",
+  "onUnitComplete",
+  "onDecisionParked",
+];
+
+/** Validate one `ScriptHookSpec` (string or `{run, required?, timeoutSec?, cwd?}`). Returns a
+ *  human-readable reason string on failure, or null when valid. */
+function invalidScriptHookSpecReason(spec: unknown, pathLabel: string): string | null {
+  if (typeof spec === "string") return null;
+  if (spec == null || typeof spec !== "object" || Array.isArray(spec)) {
+    return `${pathLabel} must be a string or an object with a "run" command`;
+  }
+  const obj = spec as Record<string, unknown>;
+  if (typeof obj.run !== "string" || obj.run.trim() === "") {
+    return `${pathLabel}.run must be a non-empty string`;
+  }
+  if (obj.required !== undefined && typeof obj.required !== "boolean") {
+    return `${pathLabel}.required must be a boolean`;
+  }
+  if (obj.timeoutSec !== undefined) {
+    if (typeof obj.timeoutSec !== "number" || !Number.isFinite(obj.timeoutSec) || obj.timeoutSec <= 0) {
+      return `${pathLabel}.timeoutSec must be a positive finite number`;
+    }
+  }
+  if (obj.cwd !== undefined && typeof obj.cwd !== "string") {
+    return `${pathLabel}.cwd must be a string`;
+  }
+  return null;
+}
+
+/** Mirrors `validateBuildEnv`: hand-rolled, tolerant of a totally-absent `scriptHooks` key,
+ *  REJECTS a malformed one with `Invalid <configPath>: <reason>` naming the offending key.
+ *
+ *  IMPORTANT (null-vs-absent, U1 assertion 3b): a genuinely ABSENT key is the only thing that
+ *  bypasses validation and defaults to `{}` — checked via `=== undefined` on the accessed value
+ *  (an absent key reads as `undefined`), NOT `== null`, which would wrongly also swallow an
+ *  EXPLICITLY PRESENT `scriptHooks: null` (since `typeof null === "object"`, a loose
+ *  `scriptHooks == null` guard conflates "key not there" with "key there, value null" and would
+ *  silently accept the latter instead of rejecting it). */
+function validateScriptHooks(parsed: unknown, configPath: string): void {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  const scriptHooks = (parsed as Record<string, unknown>).scriptHooks;
+  // Absent key (property access on a missing key is `undefined`) — accepted, deepMerge yields
+  // `{}`. Deliberately NOT `scriptHooks == null`: that loose check is also true for an
+  // EXPLICITLY PRESENT `scriptHooks: null` (since `typeof null === "object"`), which must instead
+  // fall through to the type check below and be REJECTED, not silently treated as absent.
+  if (scriptHooks === undefined) return;
+  if (scriptHooks === null || typeof scriptHooks !== "object" || Array.isArray(scriptHooks)) {
+    throw new Error(`Invalid ${configPath}: scriptHooks must be a map of event name to a list of hooks`);
+  }
+  for (const [event, specs] of Object.entries(scriptHooks as Record<string, unknown>)) {
+    if (!SCRIPT_HOOK_EVENTS.includes(event as ScriptHookEvent)) {
+      throw new Error(`Invalid ${configPath}: scriptHooks.${event} is not a known event (expected one of ${SCRIPT_HOOK_EVENTS.join(", ")})`);
+    }
+    if (!Array.isArray(specs)) {
+      throw new Error(`Invalid ${configPath}: scriptHooks.${event} must be an array of hooks`);
+    }
+    specs.forEach((spec, i) => {
+      const reason = invalidScriptHookSpecReason(spec, `scriptHooks.${event}[${i}]`);
+      if (reason) throw new Error(`Invalid ${configPath}: ${reason}`);
+    });
   }
 }
 

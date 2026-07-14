@@ -233,6 +233,8 @@ review:                                    # opt-in agent code-review gate (off 
   blockOn: high                            # high (security/correctness/dead-code) | all | none
 
 batch: { K: 3 }
+
+scriptHooks: {}                            # user scripts at lifecycle points; {} = no hooks (default). See "Script hooks" below.
 ```
 
 ## Notes on a few knobs
@@ -271,6 +273,67 @@ batch: { K: 3 }
 - **`build.env`** — a string map of environment variables injected into the build's real execution surfaces: agent SDK sessions, evaluator `mcp__exercise__run_command` spawns, and the harness verify/measure command executor. Values must be strings; `FOO: 1`, booleans, objects, and null are rejected at config load with the key named. Sparra merges this map over `process.env` before injection because both shipped SDKs replace inherited env when an env object is supplied; `PATH`, auth variables, and other process env entries are preserved unless a `build.env` key intentionally overrides them. Empty/missing `env` preserves prior behavior.
 - **default writable-scratch env layer (all sandboxed build sessions)** — the **evaluator**, the **contract-evaluator**, the **generator/writer**, and the **contract-negotiation** sessions run under a native sandbox / an unwritable `$HOME`, which EPERMs otherwise-innocent tooling *before any Sparra code runs*: Vitest's `node_modules/.vite-temp` + `/var/folders` temp writes, the tsx launcher's IPC socket **path** under `os.tmpdir()`, and clang's `~/.cache/clang/ModuleCache`. (The redirect fixes the socket *path*'s writability only — the sandbox still denies unix-socket `listen(2)` as **policy**; so the judge/evaluator sessions ALSO set **`SPARRA_JUDGE_SANDBOX=1`**, under which every real-CLI/tsx-subprocess suite vitest-SKIPS visibly (shared `test/helpers/judgeEnv.ts`), leaving the full suite EXPECTED green and a nonzero exit a REAL signal — no longer UN-RUN / mixed; see [backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).) So for those sessions Sparra injects a **default env layer** (`src/build/judgeScratch.ts`, `createSandboxSessionEnv`) that redirects `TMPDIR`, `CLANG_MODULE_CACHE_PATH`, and `SWIFTPM_CACHE_DIR`. `TMPDIR` + `CLANG_MODULE_CACHE_PATH` point at a fresh **per-run writable scratch dir** (`<tmp>/sprj-<hex>/…`, regenerable), while **`SWIFTPM_CACHE_DIR`** points at a **durable, worktree-local** cache (`<tmp>/sparra-swiftpm/<hash>`, keyed on the workspace) so an **offline** `swift build` reuses what the provisioning-time **SwiftPM prewarm** (`git.provisionDeps.swiftPackages`) resolved. **Precedence** (lowest→highest): `process.env` → the scratch defaults → your `build.env` — so a `build.env` override of any of those keys still wins, unrelated process env is preserved, and (unlike `build.env`, which can be empty) the scratch keys always reach the SDK. Reviewer/contract-generator roles are untouched (they get the plain merged `build.env`, no scratch keys added). This is independent of `exercise.sandbox`: it only redirects temp/cache roots, it never widens write scope over the tracked source. See [backends](backends.md#per-role-sandbox-codex--the-worktree-safety-gate).
 - **`build.extraReadDirs`** — extra directories the build (generator **and** evaluator) may **read**, beyond the work dir and repo root — added to each backend's `additionalDirectories`. For large assets you don't want in git: pre-stage them once (e.g. a face-recognition model under `~/.cache/…`) and list the dir here, so the sandboxed build reads it **without committing it or opening network**. Paths may be absolute, `~`-prefixed, or relative to the repo root. (Codex grants read+write to these within its sandbox; Claude grants read with writes still gated — treat as read-only intent.)
+
+## Script hooks (`scriptHooks`)
+User-configurable **external scripts** run at harness lifecycle points. `{}` (default) — a config
+without a `scriptHooks` key, or with it empty — runs zero hooks and is byte-identical to today.
+This is the **harness-side foundation** (config surface + runner, `src/scriptHooks.ts`); the actual
+lifecycle FIRE POINTS that call the runner (whole run, phase boundaries, per-unit, decision-parked)
+land in a later unit. Do not confuse this with `src/sdk/hooks.ts`, the unrelated Claude Agent SDK
+per-tool-call permission decider — different concept, kept under the distinct `scriptHooks` name to
+avoid colliding with it. Also distinct from the HTTP **bridge's own events log** (a separate,
+bridge-owned feature built elsewhere — see docs/http-bridge.md) — `scriptHooks` runs YOUR scripts;
+the bridge events log just records what happened.
+
+```yaml
+scriptHooks:
+  onRunStart:
+    - "notify-send 'Sparra run starting'"        # plain string spec: argv-tokenized, no shell
+    - run: ./scripts/preflight.sh
+      required: true                              # a non-zero exit/timeout GATES the run (before-event only)
+      timeoutSec: 60
+      cwd: /path/to/project
+  onRunComplete:
+    - "./scripts/notify-done.sh"                  # after-event: best-effort, never gates
+  onPhaseStart: []
+  onPhaseEnd: []
+  onUnitStart: []
+  onUnitComplete:
+    - run: ./scripts/log-unit.sh
+  onDecisionParked:
+    - run: ./scripts/page-me.sh
+```
+
+**Events** (exactly these seven — an unknown name is rejected at config load):
+- **Before-events** — `onRunStart`, `onPhaseStart`, `onUnitStart`. Awaited; a `required: true` hook
+  that exits non-zero or times out **stops the rest of that event's hooks** and gates the lifecycle
+  step (the run/phase/unit does not proceed). A non-required failure only warns and continues.
+- **After-events** — `onRunComplete`, `onPhaseEnd`, `onUnitComplete`, `onDecisionParked`. Every hook
+  is awaited and run regardless of prior failures; a failure (even `required: true`) only logs a
+  warning and never gates — gating a lifecycle step that has already completed is meaningless.
+
+**Hook spec** — either a bare command **string** (argv-tokenized on whitespace, **no shell** — no
+`&&`/`;`/`|`/redirects/expansion) or an object:
+- `run` (string, required) — the command.
+- `required` (boolean, default `false`) — only meaningful on a before-event; see above.
+- `timeoutSec` (number) — per-hook timeout override; default reuses the harness executor's
+  `EXEC_TIMEOUT_MS` magnitude (5 minutes).
+- `cwd` (string) — spawn working directory. Precedence: `spec.cwd` > the lifecycle context's `root`
+  > `process.cwd()`.
+
+**Env vars + stdin contract** — each hook gets the parent environment plus `SPARRA_HOOK_EVENT`
+always, and — only when the corresponding context field is present for that call —
+`SPARRA_HOOK_PHASE`, `SPARRA_HOOK_ROOT`, `SPARRA_HOOK_RUN_ID`, `SPARRA_HOOK_RUN_DIR`,
+`SPARRA_HOOK_UNIT`, `SPARRA_HOOK_STATUS`, `SPARRA_HOOK_DECISION_SEQ`, `SPARRA_HOOK_DECISION_KIND`.
+The full lifecycle context is ALSO written to the hook's **stdin** as one JSON line (then stdin is
+closed) — this is the only place `question` (parked-decision text) appears; it is deliberately never
+put in an env var. A hook that doesn't read stdin is unaffected. Output (stdout+stderr) is captured
+but capped (reusing the harness executor's `EXEC_OUTPUT_CAP` magnitude) so a chatty hook can never
+balloon memory.
+
+**Safety** — hooks are the user's OWN trusted commands from their own config, so they are **not**
+routed through the harness verify executor's argv[0] allowlist (`build.verifyCommands`'s safety
+rules); the only protections applied are: no shell, a per-hook timeout, and the output cap.
 
 ## On-disk artifacts
 The filesystem is the source of truth and the only shared state — inspectable, diffable, resumable.

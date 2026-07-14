@@ -321,6 +321,16 @@ The few that matter most:
 - **`build.extraReadDirs`** — extra dirs the build (generator + evaluator) may READ (added to
   `additionalDirectories`). For big assets you don't want in git (e.g. a model): pre-stage once,
   list the dir, no commit/network. Absolute, `~`, or repo-relative.
+- **`scriptHooks`** — user-configurable **external scripts** at harness lifecycle points
+  (`onRunStart`/`onRunComplete`/`onPhaseStart`/`onPhaseEnd`/`onUnitStart`/`onUnitComplete`/
+  `onDecisionParked`). `{}` (default) = no hooks, byte-identical to today. Each hook is a bare
+  command string or `{run, required?, timeoutSec?, cwd?}` — argv-tokenized, no shell. Before-events
+  (`onRunStart`/`onPhaseStart`/`onUnitStart`) can GATE on a `required: true` hook's non-zero
+  exit/timeout (stops remaining hooks for that event); after-events are best-effort (warn only,
+  never gate). Hooks get `SPARRA_HOOK_*` env vars for present context fields plus the full context
+  as one JSON line on stdin (parked-decision `question` text is stdin-only, never an env var). This
+  unit ships the config + runner (`src/scriptHooks.ts`) only — no fire points wired yet. See
+  `docs/configuration.md` → "Script hooks".
 
 ### Cross-backend (Codex builds, Claude judges)
 A genuine quality lever — independent model families catch each other's blind spots.
