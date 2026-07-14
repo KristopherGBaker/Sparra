@@ -269,10 +269,12 @@ The few that matter most:
   cache so an **offline** `swift build` reuses what the provisioning-time **SwiftPM prewarm** resolved
   (`git.provisionDeps.swiftPackages`, default on). Precedence:
   `process.env` → scratch defaults → `build.env` (override wins). This fixes **path writability only** —
-  the sandbox still denies unix-socket `listen(2)` as **policy**, so a tsx socket smoke still UN-RUNs
-  under a sandboxed judge; that known limit is surfaced up front via the injected
-  **known-capability matrix** (`sandboxCapabilityNotes`) so socket-dependent gates are classified
-  UN-RUN, not re-proved. The contract-evaluator additionally
+  the sandbox still denies unix-socket `listen(2)` as **policy**. So every judge/evaluator session env
+  ALSO sets **`SPARRA_JUDGE_SANDBOX=1`** (never the generator): under it every suite that spawns the
+  real CLI / a tsx subprocess **vitest-SKIPS visibly** (shared `test/helpers/judgeEnv.ts`), so the full
+  suite is EXPECTED green and a nonzero full-suite exit is a REAL signal (no longer UN-RUN / mixed). That
+  behavior + the residual capability matrix are surfaced up front via the injected
+  **known-capability matrix** (`sandboxCapabilityNotes`). The contract-evaluator additionally
   relaxes to `workspace-write` (network off, integrity-guarded) on an isolated checkout so it can
   prove the contract's verify commands run; `--worktree` now accepts it. The read-only proposer roles
   (reviewer, contract-generator) keep the plain merged `build.env`. See

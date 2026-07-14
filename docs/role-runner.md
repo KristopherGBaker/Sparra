@@ -166,13 +166,17 @@ instead of failing — no manual `--workspace` resume needed to recover a droppe
 evaluator will **exercise** the tree (run `npm test`/builds), or a **contract-evaluator** will run
 the contract's verify commands to prove they're runnable: it gives the exercise/probe writable
 scratch + provisioned deps, whereas an in-place `run_role` eval stays read-only and false-blocks on
-scratch writes (EPERM on `node_modules/.vite-temp` etc.). **Sandbox-capability notes:** a Codex
-(OS-sandboxed) judge role — `evaluator` or `contract-evaluator` — has a **known-capability matrix**
-injected into its task up front (`sandboxCapabilityNotes`, `src/build/judgeScratch.ts`): it's told
-that e.g. unix-domain-socket `listen(2)` is denied by sandbox **policy** even with a writable scratch
-`TMPDIR`, so a socket-dependent gate is classified **UN-RUN** (environment-blocked, not an artifact
-FAIL) with at most one confirming probe — no re-proving it every round. A Claude judge (no OS sandbox)
-gets no notes. See [backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).
+scratch writes (EPERM on `node_modules/.vite-temp` etc.). **Judge-env skip flag + capability notes:** every
+judge role env — `evaluator` or `contract-evaluator` — sets **`SPARRA_JUDGE_SANDBOX=1`** (never the
+generator), so every suite that spawns the real CLI / a `--import tsx` subprocess **vitest-SKIPS
+visibly** via the shared `test/helpers/judgeEnv.ts` instead of a socket-`listen` EPERM; the full suite
+is then EXPECTED green and a nonzero full-suite exit is a REAL signal. A Codex (OS-sandboxed) judge
+also has a **known-capability matrix** injected up front (`sandboxCapabilityNotes`,
+`src/build/judgeScratch.ts`) stating that behavior; for any OTHER gate that fails only because
+unix-domain-socket `listen(2)` is denied by sandbox **policy** (even with a writable scratch `TMPDIR`),
+it's classified **UN-RUN** (environment-blocked, not an artifact FAIL) with at most one confirming
+probe — no re-proving it every round. A Claude judge (no OS sandbox) gets no notes. See
+[backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).
 
 **Eval provenance (`expectedHead` / `evalBaseRef`, judge roles only).** Two controls that make a
 judge run *deterministic about what it's grading* — verified **before any tokens are spent** (the

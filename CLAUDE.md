@@ -44,6 +44,8 @@ Argv-building spec builders (`src/conduct/roleSpecs.ts`, the bridge conductor ha
 
 The phase logger (`src/util/log.ts`) is **silenced under vitest** (gated on `process.env.VITEST`) so the runner's pass/fail summary isn't buried in phase-log noise; set `SPARRA_LOG_IN_TESTS=1` to restore log output for debugging (a test asserting on log output must set this escape hatch).
 
+Every suite that spawns the **real CLI / a `--import tsx` subprocess** (Unix-socket-dependent — denied by the Codex judge sandbox's `listen(2)` policy) consumes the single shared helper `test/helpers/judgeEnv.ts`: when the evaluator/judge session env sets **`SPARRA_JUDGE_SANDBOX=1`** (wired in `src/build/{evaluate,roleRun,contract}.ts`, **evaluator-only — never the generator's self-verify**) those suites **vitest-SKIP visibly**, so the full suite is expected green under the judge and a nonzero exit is a real signal. Flag absent (CI/local/generator) → byte-identical behavior, suites run. Add a new real-bin/tsx suite → import `judgeEnv` (the behavioral meta-test in `test/judgeEnv.test.ts` fails otherwise); never read `process.env.SPARRA_JUDGE_SANDBOX` per-file.
+
 ## Git
 
 Do feature work on a `sparra/<topic>` branch, then fast-forward merge to `main` (never commit directly to `main`). Use **conventional commits**; end commit messages with the `Claude-Session:` footer. Commit/push only when the user asks.

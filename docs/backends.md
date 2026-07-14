@@ -159,18 +159,29 @@ proposer roles (reviewer, contract-generator) keep the plain merged `build.env`.
 The scratch layer fixes **path writability**, but it does **not** lift the sandbox's seatbelt
 **policy**. The Codex judge sandbox denies **`listen(2)` on a Unix-domain socket** even inside a
 writable scratch `TMPDIR` — proved twice with a raw `net.createServer().listen()` probe (an EPERM
-from policy, not from path permissions). So any exercise needing a socket **listener** (a tsx-launched
-CLI smoke that IPCs over its `.pipe`, a dev server) systematically **UN-RUNs** under a sandboxed
-judge, regardless of `TMPDIR` — the redirect above makes the pipe *path* writable but the bind still
-EPERMs. Because the harness process runs **outside** the judge's sandbox, a **live harness-side probe
-cannot confirm** the judge's capabilities; so Sparra ships a **KNOWN-capability matrix**
+from policy, not from path permissions). Any test suite needing a socket **listener** (a tsx-launched
+CLI smoke that IPCs over its `.pipe`, a dev-server bind) would therefore EPERM under a sandboxed judge
+regardless of `TMPDIR`.
+
+**`SPARRA_JUDGE_SANDBOX=1` judge-env skip flag.** So every **evaluator/judge** session env sets
+`SPARRA_JUDGE_SANDBOX=1` (the build-loop evaluator, the autonomous contract-evaluator, and the
+interactive `run_role`/`sparra eval` judge roles — **never** the generator, whose self-verify keeps
+running everything it can). Under that flag, every suite that spawns the real CLI / a `--import tsx`
+subprocess **vitest-SKIPS visibly** (counted as pending, never silently filtered) via the single
+shared helper `test/helpers/judgeEnv.ts` — the suites are identified by *behavior* (they spawn a real
+`bin/*.mjs` / tsx subprocess), not a hardcoded name list. Because those socket-dependent suites now
+SKIP instead of EPERM-failing, the **full suite is EXPECTED green** under the judge, so a **nonzero
+full-suite exit is a REAL artifact signal** again — no longer auto-classified UN-RUN / "mixed".
+
+Because the harness process runs **outside** the judge's sandbox, a **live harness-side probe cannot
+confirm** the judge's capabilities; so Sparra ships a **KNOWN-capability matrix**
 (`sandboxCapabilityNotes` in `src/build/judgeScratch.ts`) keyed on *(backend OS-sandbox, sandbox mode,
 scratch enabled)* and injects it into every sandboxed judge's task up front (evaluator, autonomous
-artifact evaluator, and contract-negotiation judge). The instruction is **classify, don't re-prove**:
-a gate that fails ONLY on a listed denied capability is **environment-blocked / UN-RUN** (never an
-artifact FAIL), and at most **one** confirming probe is spent — no re-proving the same limitation
-every round. A **Claude** judge has no OS sandbox, so it gets **no** notes; a `danger-full-access`
-sandbox (gated to a worktree/branch) restores socket listen.
+artifact evaluator, and contract-negotiation judge). It states the `SPARRA_JUDGE_SANDBOX=1` behavior
+above and, for any OTHER gate that fails ONLY on a listed denied capability, instructs **classify,
+don't re-prove**: that one is **environment-blocked / UN-RUN** (never an artifact FAIL), at most **one**
+confirming probe spent. A **Claude** judge has no OS sandbox, so it gets **no** notes; a
+`danger-full-access` sandbox (gated to a worktree/branch) restores socket listen.
 
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when
