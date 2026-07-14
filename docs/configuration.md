@@ -277,13 +277,18 @@ scriptHooks: {}                            # user scripts at lifecycle points; {
 ## Script hooks (`scriptHooks`)
 User-configurable **external scripts** run at harness lifecycle points. `{}` (default) — a config
 without a `scriptHooks` key, or with it empty — runs zero hooks and is byte-identical to today.
-This is the **harness-side foundation** (config surface + runner, `src/scriptHooks.ts`); the actual
-lifecycle FIRE POINTS that call the runner (whole run, phase boundaries, per-unit, decision-parked)
-land in a later unit. Do not confuse this with `src/sdk/hooks.ts`, the unrelated Claude Agent SDK
-per-tool-call permission decider — different concept, kept under the distinct `scriptHooks` name to
-avoid colliding with it. Also distinct from the HTTP **bridge's own events log** (a separate,
-bridge-owned feature built elsewhere — see docs/http-bridge.md) — `scriptHooks` runs YOUR scripts;
-the bridge events log just records what happened.
+This is the config surface + runner (`src/scriptHooks.ts`). **Five of the seven lifecycle FIRE
+POINTS are wired**: `onPhaseStart`/`onPhaseEnd` (any hookable CLI phase — `orient`, `plan`,
+`prototype`, `freeze`, `build`, `reflect`, `batch`), `onRunStart`/`onRunComplete` (`sparra conduct`
+run boundaries), and `onUnitStart`/`onUnitComplete` (each conduct unit, both the deterministic and
+brain paths). **`onDecisionParked` is still pending** (lands alongside the bridge decision-park
+announce line in a later unit). See [docs/conduct.md](conduct.md#script-hooks-fire-points) and
+[docs/phases.md](phases.md#script-hooks-fire-points) for exactly which events fire at which
+boundary and the before-event gate semantics. Do not confuse this with `src/sdk/hooks.ts`, the
+unrelated Claude Agent SDK per-tool-call permission decider — different concept, kept under the
+distinct `scriptHooks` name to avoid colliding with it. Also distinct from the HTTP **bridge's own
+events log** (a separate, bridge-owned feature built elsewhere — see docs/http-bridge.md) —
+`scriptHooks` runs YOUR scripts; the bridge events log just records what happened.
 
 ```yaml
 scriptHooks:

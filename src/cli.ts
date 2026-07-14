@@ -1,4 +1,5 @@
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { loadCtx, loadCtxForRole, autoProbeCtx } from "./context.ts";
 import type { Mode } from "./state.ts";
 import { banner, color, err, info } from "./util/log.ts";
@@ -28,6 +29,7 @@ import {
 import { cmdMeasure } from "./phases/measure.ts";
 import { promptDrift, summarizePromptDrift } from "./prompts.ts";
 import { parse } from "./util/args.ts";
+import { withPhaseHooks, type PhaseHooksDeps } from "./phaseHooks.ts";
 
 const HELP = `${color.bold("sparra")} — autonomous build harness on the Claude Agent SDK
 
@@ -79,6 +81,135 @@ ${color.bold("Config:")} .sparra/config.yaml (rubric weights, pivot N/threshold,
         permission mode, exercise mechanism, deviation strictness, git strategy, …)
 
 ${color.bold("Auth:")}  needs an Anthropic credential — set ANTHROPIC_API_KEY or log in via Claude Code.`;
+
+/**
+ * The genuine lifecycle phases that fire `onPhaseStart`/`onPhaseEnd` via `withPhaseHooks` (U2) —
+ * the universal seam: "works for more than conduct". `init`/`help`/`status`/`prompts`/`new`/
+ * `finish`/`log-finding`/`snapshot`/`clean`/`resume` and the standalone `role`/`eval`/`measure`/
+ * `conduct` branches (handled earlier in `main`, before this switch is even reached) are NOT
+ * hookable phases and never fire a phase hook.
+ */
+export const HOOKABLE_PHASES: ReadonlySet<string> = new Set([
+  "orient",
+  "plan",
+  "prototype",
+  "freeze",
+  "build",
+  "reflect",
+  "batch",
+]);
+
+/** The body of one hookable phase — extracted so `dispatchPhase` can wrap it with `withPhaseHooks`
+ *  without duplicating the existing case logic. */
+async function runPhaseBody(
+  cmd: string,
+  ctx: Awaited<ReturnType<typeof loadCtx>>,
+  positionals: string[],
+  flags: Record<string, unknown>,
+): Promise<void> {
+  switch (cmd) {
+    case "orient":
+      await cmdOrient(ctx, { light: !!flags.light });
+      break;
+    case "plan":
+      await cmdPlan(ctx);
+      break;
+    case "prototype":
+      await cmdPrototype(ctx, positionals.slice(1).join(" "));
+      break;
+    case "freeze":
+      await cmdFreeze(ctx);
+      break;
+    case "build":
+      await cmdBuild(ctx, {
+        fresh: !!flags.fresh,
+        only: flags.only as string | undefined,
+        step: flags.step != null ? parseSteps(flags.step as string | boolean | undefined) : undefined,
+      });
+      break;
+    case "reflect":
+      await cmdReflect(ctx, {
+        apply: !!flags.apply,
+        run: flags.run as string | undefined,
+        upstream: !!flags.upstream,
+        clear: !!flags.clear,
+        traces: typeof flags.traces === "string" ? flags.traces : undefined,
+        done: flags.done as string | boolean | undefined,
+        wontdo: flags.wontdo as string | boolean | undefined,
+        reason: typeof flags.reason === "string" ? flags.reason : undefined,
+      });
+      break;
+    case "batch":
+      await cmdBatch(ctx, { k: flags.k ? Number(flags.k) : undefined });
+      break;
+  }
+}
+
+/**
+ * Route ONE post-`loadCtx` command: hookable phases (`HOOKABLE_PHASES`) go through `withPhaseHooks`
+ * (onPhaseStart gate → phase body → onPhaseEnd best-effort); every other command runs exactly as
+ * before, unhooked. Exported + deps-injectable (`deps.runScriptHooksFn`) so tests can drive real
+ * routing without a real spawn or a real phase body running behind a gate failure.
+ */
+export async function dispatchPhase(
+  cmd: string,
+  ctx: Awaited<ReturnType<typeof loadCtx>>,
+  positionals: string[],
+  flags: Record<string, unknown>,
+  deps: PhaseHooksDeps = {},
+): Promise<void> {
+  if (HOOKABLE_PHASES.has(cmd)) {
+    const result = await withPhaseHooks(cmd, ctx, () => runPhaseBody(cmd, ctx, positionals, flags), deps);
+    if (!result.ok) {
+      const gf = result.gateFailure;
+      err(
+        `phase "${cmd}" aborted — required onPhaseStart script hook failed` +
+          (gf ? `: \`${gf.command}\` exited ${gf.exitCode ?? "?"}${gf.timedOut ? " (timed out)" : ""}` : ""),
+      );
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  switch (cmd) {
+    case "log-finding":
+      await cmdLogFinding(ctx, positionals[1]);
+      break;
+    case "snapshot":
+      await cmdSnapshot(ctx);
+      break;
+    case "status":
+      cmdStatus(ctx);
+      break;
+    case "prompts":
+      await cmdPrompts(ctx, positionals.slice(1), flags);
+      break;
+    case "new":
+      await cmdNew(ctx, positionals.slice(1).join(" "));
+      break;
+    case "finish":
+      await cmdFinish(ctx, {
+        pr: !!flags.pr,
+        merge: !!flags.merge,
+        yes: !!flags.yes,
+        teardown: !!flags.teardown,
+        force: !!flags.force,
+        branch: typeof flags.branch === "string" ? flags.branch : undefined,
+        new: flags.new === undefined ? undefined : typeof flags.new === "string" ? flags.new : "",
+      });
+      break;
+    case "clean":
+      await cmdClean(ctx, { yes: !!flags.yes, force: !!flags.force });
+      break;
+    case "resume":
+      await resume(ctx);
+      break;
+    default:
+      err(`Unknown command: ${cmd}`);
+      process.stdout.write("\n" + HELP + "\n");
+      process.exitCode = 1;
+  }
+}
 
 async function main(): Promise<void> {
   const { positionals, flags } = parse(process.argv.slice(2));
@@ -193,74 +324,7 @@ async function main(): Promise<void> {
   // All other commands need an initialized project.
   const ctx = await loadCtx(root);
 
-  switch (cmd) {
-    case "orient":
-      await cmdOrient(ctx, { light: !!flags.light });
-      break;
-    case "plan":
-      await cmdPlan(ctx);
-      break;
-    case "prototype":
-      await cmdPrototype(ctx, positionals.slice(1).join(" "));
-      break;
-    case "log-finding":
-      await cmdLogFinding(ctx, positionals[1]);
-      break;
-    case "snapshot":
-      await cmdSnapshot(ctx);
-      break;
-    case "freeze":
-      await cmdFreeze(ctx);
-      break;
-    case "build":
-      await cmdBuild(ctx, { fresh: !!flags.fresh, only: flags.only as string | undefined, step: flags.step != null ? parseSteps(flags.step as string | boolean | undefined) : undefined });
-      break;
-    case "reflect":
-      await cmdReflect(ctx, {
-        apply: !!flags.apply,
-        run: flags.run as string | undefined,
-        upstream: !!flags.upstream,
-        clear: !!flags.clear,
-        traces: typeof flags.traces === "string" ? flags.traces : undefined,
-        done: flags.done as string | boolean | undefined,
-        wontdo: flags.wontdo as string | boolean | undefined,
-        reason: typeof flags.reason === "string" ? flags.reason : undefined,
-      });
-      break;
-    case "batch":
-      await cmdBatch(ctx, { k: flags.k ? Number(flags.k) : undefined });
-      break;
-    case "status":
-      cmdStatus(ctx);
-      break;
-    case "prompts":
-      await cmdPrompts(ctx, positionals.slice(1), flags);
-      break;
-    case "new":
-      await cmdNew(ctx, positionals.slice(1).join(" "));
-      break;
-    case "finish":
-      await cmdFinish(ctx, {
-        pr: !!flags.pr,
-        merge: !!flags.merge,
-        yes: !!flags.yes,
-        teardown: !!flags.teardown,
-        force: !!flags.force,
-        branch: typeof flags.branch === "string" ? flags.branch : undefined,
-        new: flags.new === undefined ? undefined : typeof flags.new === "string" ? flags.new : "",
-      });
-      break;
-    case "clean":
-      await cmdClean(ctx, { yes: !!flags.yes, force: !!flags.force });
-      break;
-    case "resume":
-      await resume(ctx);
-      break;
-    default:
-      err(`Unknown command: ${cmd}`);
-      process.stdout.write("\n" + HELP + "\n");
-      process.exitCode = 1;
-  }
+  await dispatchPhase(cmd, ctx, positionals, flags);
 }
 
 async function resume(ctx: Awaited<ReturnType<typeof loadCtx>>): Promise<void> {
@@ -284,8 +348,15 @@ async function resume(ctx: Awaited<ReturnType<typeof loadCtx>>): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  err((e as Error).message ?? String(e));
-  if (process.env.SPARRA_DEBUG) console.error(e);
-  process.exitCode = 1;
-});
+// Entry-point guard: `bin/sparra.mjs` runs this file directly via tsx (`process.argv[1]` is this
+// file's own path), so `main()` fires. A test module IMPORTING `cli.ts` for its exported helpers
+// (`HOOKABLE_PHASES`, `dispatchPhase`) does so under a different entry point (vitest's runner), so
+// this comparison is false there and `main()` never auto-runs — no argv parsing / process.exit
+// side effects just from importing.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    err((e as Error).message ?? String(e));
+    if (process.env.SPARRA_DEBUG) console.error(e);
+    process.exitCode = 1;
+  });
+}

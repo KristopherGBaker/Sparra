@@ -278,6 +278,26 @@ timestamp per resume.
   **safe target that is never the default branch** — a run branch `sparra/<runId>` when conduct
   started from the default branch, or your current (non-default) branch otherwise.
 
+## Script hooks fire points
+
+If [`scriptHooks`](configuration.md#script-hooks-scripthooks) is configured, `conduct` fires four of
+the seven events at these boundaries:
+
+| Event | Boundary | Semantics |
+| --- | --- | --- |
+| `onRunStart` | Right after the run-START announcement, **before** decomposition. | **Gate.** A `required: true` hook that fails/times out aborts the run before any role spend — `status` is persisted `"error"` and `onRunComplete` does **not** fire (the run never truly started). |
+| `onRunComplete` | On **every** terminal return of the run — the no-units-decomposed error, `--dry-run`, and the normal completed path. | Best-effort. Carries the run's final `status` (`"error"` / `"dry-run"` / `"completed"`). |
+| `onUnitStart` | Before a unit's build work begins. Deterministic path (no `--brain`): fired for **every** unit in a sequential loop **up front**, before the concurrent batch starts. Brain path (`--brain hybrid\|llm`): fired at the top of **each unit's own** (bounded-concurrent) iteration. | **Gate.** A `required: true` failure marks that unit `"error"`, sets the run `status` to `"error"`, persists it, fires `onRunComplete` (`status:"error"`) exactly once, and returns immediately — the unit batch never runs (deterministic path) or the run never lands/completes (brain path). A gated run can never report `"completed"`. |
+| `onUnitComplete` | After a unit's outcome is finalized (accepted / error / abandoned / exhausted / …). | Best-effort. Carries `status: <the unit's terminal outcome>`. |
+
+`onDecisionParked` is **not yet wired** (a later unit, alongside the bridge's decision-park announce
+line). `--resume` re-entry only gets the **per-unit** hooks (it reuses the same brain-path machinery
+"by construction") — `onRunStart`/`onRunComplete` are scoped to a fresh `runConduct` invocation and do
+not fire again on resume. See [docs/configuration.md → Script hooks](configuration.md#script-hooks-scripthooks)
+for the hook spec, env/stdin contract, and safety notes; see
+[docs/phases.md → Script hooks fire points](phases.md#script-hooks-fire-points) for the phase-boundary
+side (`orient`/`plan`/`prototype`/`freeze`/`build`/`reflect`/`batch`).
+
 ## What it reuses
 
 `conduct` does **not** reimplement the loop. It composes the host-agnostic `conductors/core`:

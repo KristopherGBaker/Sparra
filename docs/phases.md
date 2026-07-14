@@ -121,6 +121,23 @@ sparra clean [--yes] [--force]
 - **Hard invariants:** never removes the main checkout, never deletes the default branch or the
   current branch, never deletes an unmerged branch without `--force`.
 
+## Script hooks fire points
+
+If [`scriptHooks`](configuration.md#script-hooks-scripthooks) is configured, every **hookable**
+phase command — `orient`, `plan`, `prototype`, `freeze`, `build`, `reflect`, `batch` — fires
+`onPhaseStart` **before** the phase runs and `onPhaseEnd` **after** it completes, with
+`{ phase: "<cmd>", root }` context (`onPhaseEnd` also carries `status: "completed"`). This is the
+**universal** fire point — it wraps ANY hookable phase, not just `conduct`. Non-phase commands
+(`init`, `help`, `status`, `prompts`, `new`, `finish`, `log-finding`, `snapshot`, `clean`, `resume`,
+and the standalone `role`/`eval`/`measure`/`conduct` surfaces) never fire a phase hook.
+
+`onPhaseStart` is a **before-event**: a `required: true` hook that fails/times out **gates** the
+phase — the phase body never runs, an error is printed, and the command exits non-zero.
+`onPhaseEnd` is best-effort (only warns on failure, never blocks). `sparra conduct` has its own,
+finer-grained **run**/**unit** fire points (`onRunStart`/`onRunComplete`/`onUnitStart`/
+`onUnitComplete`) — see [docs/conduct.md → Script hooks fire points](conduct.md#script-hooks-fire-points).
+`onDecisionParked` is not yet wired anywhere (a later unit).
+
 ---
 
 ## Greenfield vs. brownfield

@@ -116,6 +116,7 @@ sparra resume        # continue any phase from disk
 - **Bounded & safe by default.** Per-item budgets, sandboxed permissions, and a git-worktree boundary — Sparra never commits to your main branch. → [docs/build-loop.md](docs/build-loop.md#sandbox-first-safety)
 - **Filesystem is the source of truth.** Contracts, verdicts, traces, and memory all live in `.sparra/` on disk — resumable from any point, and it survives provider rate limits unattended. → [docs/configuration.md](docs/configuration.md)
 - **Self-improving.** `sparra reflect` reads build traces, or safe ad-hoc role-run trace bundles, and proposes prompt edits you approve. → [docs/phases.md](docs/phases.md#self-improvement-outer-loop)
+- **Script hooks.** Run your own scripts at phase/run/unit start-and-end lifecycle points (`scriptHooks` config) — a `required` before-hook can gate the step. → [docs/configuration.md](docs/configuration.md#script-hooks-scripthooks)
 
 ## Adapt it to your stack
 

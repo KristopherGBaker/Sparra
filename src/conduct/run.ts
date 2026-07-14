@@ -45,6 +45,7 @@ import { deterministicStrategy, type JudgmentStrategy } from "./strategy.ts";
 import type { RecoveryCaps } from "./recovery.ts";
 import { runUnitHybrid, runUnitLlm, type ConductUnitDeps } from "./unitRunner.ts";
 import type { ConductRunState, ConductUnit, UnitOutcome, UnitStateEntry } from "./types.ts";
+import { runScriptHooks } from "../scriptHooks.ts";
 
 /**
  * `src/conduct/run.ts` — the conductor core: decompose a prompt into units, then per
@@ -124,6 +125,12 @@ export interface ConductDeps {
   /** RESUME: worktree reuse/recreate seam (default real `ensureUnitWorktree`). Used only by
    *  `resumeConduct` to reuse-or-recreate each unit's stable-named worktree before re-entry. */
   ensureUnitWorktreeFn?: typeof ensureUnitWorktree;
+
+  // ── U2 script-hook fire-point seam ──
+  /** The `runScriptHooks` (U1) invocation used at every conduct fire point (onRunStart/onRunComplete/
+   *  onUnitStart/onUnitComplete). Default: the real runner. Injected in tests so the wiring is
+   *  asserted without a real spawn. `onDecisionParked` is OUT of scope for this unit (U4). */
+  runScriptHooksFn?: typeof runScriptHooks;
 }
 
 /** The result of a conduct run: the final run state + where it lives. */
@@ -218,6 +225,7 @@ export async function runConduct(
   const runDir = conductRunDir(ctx.paths.dir, runId);
   const writer = new RunStateWriter(runDir);
   const now = () => new Date().toISOString();
+  const runHooks = deps.runScriptHooksFn ?? runScriptHooks;
 
   // Run-START announcement (BEFORE any unit work): a stable, documented `runId → runDir` line the
   // HTTP bridge parses from child stdout to associate a spawned conduct job with its run — the
@@ -236,6 +244,29 @@ export async function runConduct(
     units: [],
   };
 
+  // onRunStart (gate): fires right after the run-START announcement, before decomposition — the
+  // FIRST possible fire point, so a required hook can veto a run before any role spend. A gate
+  // failure aborts the run entirely; `onRunComplete` is NOT fired here (the run never truly
+  // "started" in the sense the other three terminal returns below represent).
+  const runStartOutcome = await runHooks(
+    "onRunStart",
+    { runId, runDir, ...(ctx.root ? { root: ctx.root } : {}) },
+    ctx.config,
+  );
+  if (!runStartOutcome.ok) {
+    state.status = "error";
+    await writer.write(state);
+    warn(`conduct: onRunStart script hook gate failed${describeGateFailure(runStartOutcome)} — run aborted before decomposition.`);
+    return { runId, runDir, state };
+  }
+
+  // Best-effort `onRunComplete`, fired on every terminal return of `runConduct` below (no-units
+  // error, --dry-run, and the normal completed path) — carries the run's FINAL status. A single
+  // helper keeps the three call sites DRY and guarantees the same shape at each.
+  const fireRunComplete = async (status: string): Promise<void> => {
+    await runHooks("onRunComplete", { runId, runDir, status }, ctx.config);
+  };
+
   // 1. Decompose (the ONE role that always runs, even on --dry-run).
   const units = await decomposeConduct(
     ctx,
@@ -246,6 +277,7 @@ export async function runConduct(
     state.status = "error";
     await writer.write(state);
     warn("conduct: decomposition produced no units — nothing to run.");
+    await fireRunComplete(state.status);
     return { runId, runDir, state };
   }
 
@@ -271,6 +303,7 @@ export async function runConduct(
 
   if (opts.dryRun) {
     ok(`conduct: dry run — decomposed ${units.length} unit(s), briefs written under ${runDir}.`);
+    await fireRunComplete(state.status);
     return { runId, runDir, state };
   }
 
@@ -290,10 +323,13 @@ export async function runConduct(
 
   if (opts.brain) {
     // 3b/4b/5b. Conductor-brain path: hybrid/llm per-unit orchestration + the decision engine.
+    // `runBrainUnits` fires `onUnitStart`/`onUnitComplete` itself, per unit, at the top/bottom of
+    // each unit's (concurrent) iteration — see its doc comment for the deterministic-path timing
+    // contrast. A required `onUnitStart` failure there is reported back as `gateAborted`.
     state.brain = opts.brain;
     state.decisionSurface = opts.surface ?? ctx.config.conduct.decisions.surface;
     await writer.write(state);
-    await runBrainUnits(ctx, opts, deps, {
+    const brainResult = await runBrainUnits(ctx, opts, deps, {
       runId,
       runDir,
       units,
@@ -306,8 +342,36 @@ export async function runConduct(
       brain,
       seqRef,
     });
+    if (brainResult.gateAborted) {
+      state.status = "error";
+      await writer.write(state);
+      warn(`conduct: onUnitStart script hook gate failed for unit ${brainResult.gateAborted.unitId} — run aborted.`);
+      await fireRunComplete(state.status);
+      return { runId, runDir, state };
+    }
   } else {
     // 4. Deterministic path (U1): one bounded-concurrent core `runUnit` per unit.
+    //
+    // onUnitStart (gate): fired for EVERY unit in a SEQUENTIAL loop up front, BEFORE
+    // `runUnitsConcurrently` is ever called — unlike the brain path (which fires it per unit at the
+    // top of each unit's own concurrent iteration), so a required gate failure on any one unit
+    // aborts the WHOLE batch before any unit's actual work begins (no partial concurrent progress
+    // to reconcile). A failure marks the offending unit `error`, the run `error`, persists, fires
+    // `onRunComplete` exactly once, and returns immediately — the unit batch never runs, `runLanding`
+    // never runs, and `state.status` never reaches `"completed"`.
+    for (const unit of units) {
+      const gateOutcome = await runHooks("onUnitStart", { unit: unit.id, runId, runDir }, ctx.config);
+      if (!gateOutcome.ok) {
+        const entry = entryByUnit.get(unit.id);
+        if (entry) entry.outcome = "error";
+        state.status = "error";
+        await writer.write(state);
+        warn(`conduct: onUnitStart script hook gate failed for unit ${unit.id}${describeGateFailure(gateOutcome)} — run aborted.`);
+        await fireRunComplete(state.status);
+        return { runId, runDir, state };
+      }
+    }
+
     const jobs: UnitJob[] = units.map((unit) => ({
       id: unit.id,
       config: buildUnitConfig(ctx, unit, runId, runDir, opts, sparraBin, strategy),
@@ -325,6 +389,8 @@ export async function runConduct(
       } else {
         finalizeFromResult(entry, res.result);
       }
+      // onUnitComplete (best-effort): fired after each result is finalized/errored.
+      await runHooks("onUnitComplete", { unit: res.id, runId, runDir, status: entry?.outcome }, ctx.config);
     }
   }
 
@@ -339,7 +405,16 @@ export async function runConduct(
     `conduct: run ${runId} complete — ${accepted.length}/${state.units.length} unit(s) accepted. ` +
       `Artifacts under ${runDir}.`,
   );
+  await fireRunComplete(state.status);
   return { runId, runDir, state };
+}
+
+/** Format a short, human-readable suffix (`": \`cmd\` exited N"`) from a script-hook gate failure —
+ *  or `""` when the outcome carries none (defensive; `ok:false` always carries one in practice). */
+function describeGateFailure(outcome: { gateFailure?: { command: string; exitCode?: number | null; timedOut?: boolean } }): string {
+  const gf = outcome.gateFailure;
+  if (!gf) return "";
+  return `: \`${gf.command}\` exited ${gf.exitCode ?? "?"}${gf.timedOut ? " (timed out)" : ""}`;
 }
 
 /** The unit outcomes a `--resume` RE-ENTERS (mid-flight or errored). Everything else — `accepted`,
@@ -515,7 +590,11 @@ export async function resumeConduct(
   const baseRunRole = deps.runRole ?? coreRunRole;
   const trackedRunRole = makeTrackedRunRole(baseRunRole, entryByUnit, state, writer);
 
-  await runBrainUnits(ctx, runOpts, deps, {
+  // Per-unit `onUnitStart`/`onUnitComplete` fire here "by construction" — `runBrainUnits` is the
+  // SAME function the fresh-run brain path uses. Run-level `onRunStart`/`onRunComplete` are OUT of
+  // scope for `--resume` (scoped to `runConduct` only; see the U2 contract) — a resume never fires
+  // them, even on a gate abort below.
+  const brainResult = await runBrainUnits(ctx, runOpts, deps, {
     runId,
     runDir,
     units,
@@ -529,6 +608,12 @@ export async function resumeConduct(
     seqRef,
     resumePlanByUnit,
   });
+  if (brainResult.gateAborted) {
+    state.status = "error";
+    await writer.write(state);
+    warn(`conduct --resume: onUnitStart script hook gate failed for unit ${brainResult.gateAborted.unitId} — resume aborted.`);
+    return { status: "resumed", runId, runDir, state };
+  }
 
   // Land ONLY the units re-run this resume — never re-commit/re-merge prior-run accepted units.
   await runLanding(ctx, runOpts, deps, {
@@ -849,28 +934,56 @@ async function buildConductBrain(
   });
 }
 
+/** What `runBrainUnits` reports back to its caller: a required `onUnitStart` gate failure on any
+ *  one unit (first by INPUT order — `mapBounded` preserves that, not completion order), so
+ *  `runConduct`/`resumeConduct` can abort the run instead of proceeding to landing/"completed". */
+export interface BrainUnitsResult {
+  gateAborted?: { unitId: string; message: string };
+}
+
 /**
  * The conductor-brain path: run each unit's hybrid/llm orchestration bounded-concurrently, wiring the
  * decision engine (park/timeout/auto) at each judgment point and recording every decision into
  * `run.json`. The brain + decision-sequence counter are supplied by `runConduct` (shared with the
  * landing phase).
+ *
+ * Also fires the per-unit `onUnitStart` (gate)/`onUnitComplete` (best-effort) script hooks (U2) at
+ * the top/bottom of EACH unit's own iteration — unlike the deterministic path's up-front sequential
+ * `onUnitStart` loop, here units run bounded-CONCURRENTLY (`mapBounded`), so a gate failure on one
+ * unit does not stop units already in flight; it marks the offending unit `error` and reports
+ * `gateAborted` back to the caller, which then aborts the whole run (never lands / never
+ * "completed") once this call settles.
  */
 async function runBrainUnits(
   ctx: Ctx,
   opts: ConductOptions,
   deps: ConductDeps,
   p: BrainRunParams,
-): Promise<void> {
+): Promise<BrainUnitsResult> {
   const surface = opts.surface ?? ctx.config.conduct.decisions.surface;
   const timeoutSec = opts.timeoutSec ?? ctx.config.conduct.decisions.timeoutSec;
   const nowMs = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const runHooks = deps.runScriptHooksFn ?? runScriptHooks;
 
   const brain = p.brain;
   const nextSeq = () => (p.seqRef.n += 1);
 
-  const runOne = async (unit: ConductUnit): Promise<void> => {
+  const runOne = async (unit: ConductUnit): Promise<{ gateAborted?: { unitId: string; message: string } }> => {
     const entry = p.entryByUnit.get(unit.id)!;
+
+    // onUnitStart (gate): fired at the top of THIS unit's iteration (see the function doc for the
+    // concurrency-timing contrast with the deterministic path). A required failure marks this unit
+    // `error`, persists, and reports the abort — it never enters the build cycle below.
+    const gateOutcome = await runHooks("onUnitStart", { unit: unit.id, runId: p.runId, runDir: p.runDir }, ctx.config);
+    if (!gateOutcome.ok) {
+      const message = `onUnitStart script hook gate failed${describeGateFailure(gateOutcome)}`;
+      entry.outcome = "error";
+      entry.error = message;
+      await p.writer.write(p.state);
+      return { gateAborted: { unitId: unit.id, message } };
+    }
+
     const plan = p.resumePlanByUnit?.get(unit.id);
     const unitDir = path.join(p.runDir, unit.id);
     const specs = buildUnitSpecs(ctx, unit, p.runId, p.runDir, opts, p.sparraBin);
@@ -1017,8 +1130,15 @@ async function runBrainUnits(
       entry.error = e instanceof Error ? e.message : String(e);
     }
     await p.writer.write(p.state);
+    // onUnitComplete (best-effort): fired once this unit's outcome is finalized (accepted/error/…).
+    await runHooks("onUnitComplete", { unit: unit.id, runId: p.runId, runDir: p.runDir, status: entry.outcome }, ctx.config);
+    return {};
   };
 
   info(`conduct: running ${p.units.length} unit(s) in ${opts.brain} mode, concurrency ${opts.concurrency}.`);
-  await mapBounded(p.units, runOne, { concurrency: opts.concurrency });
+  const results = await mapBounded(p.units, runOne, { concurrency: opts.concurrency });
+  // First gate abort by INPUT order (mapBounded preserves it) — deterministic regardless of which
+  // concurrent unit's hook actually settled first.
+  const gateAborted = results.find((r) => r.gateAborted)?.gateAborted;
+  return gateAborted ? { gateAborted } : {};
 }

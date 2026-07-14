@@ -328,9 +328,11 @@ The few that matter most:
   (`onRunStart`/`onPhaseStart`/`onUnitStart`) can GATE on a `required: true` hook's non-zero
   exit/timeout (stops remaining hooks for that event); after-events are best-effort (warn only,
   never gate). Hooks get `SPARRA_HOOK_*` env vars for present context fields plus the full context
-  as one JSON line on stdin (parked-decision `question` text is stdin-only, never an env var). This
-  unit ships the config + runner (`src/scriptHooks.ts`) only — no fire points wired yet. See
-  `docs/configuration.md` → "Script hooks".
+  as one JSON line on stdin (parked-decision `question` text is stdin-only, never an env var). Five
+  fire points are wired — phase start/end (`orient`/`plan`/`prototype`/`freeze`/`build`/`reflect`/
+  `batch`), conduct run start/complete, conduct unit start/complete (deterministic + brain paths);
+  `onDecisionParked` is pending (a later unit, alongside the bridge decision-park announce line). See
+  `docs/configuration.md` → "Script hooks", `docs/conduct.md`, `docs/phases.md`.
 
 ### Cross-backend (Codex builds, Claude judges)
 A genuine quality lever — independent model families catch each other's blind spots.
