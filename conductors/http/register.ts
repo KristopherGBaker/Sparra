@@ -52,10 +52,14 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
     ...(deps.sparraBin !== undefined ? { sparraBin: deps.sparraBin } : {}),
     ...(deps.statusSource !== undefined ? { statusSource: deps.statusSource } : {}),
   };
+  const eventLog = deps.eventLog ?? new EventLog();
   const conductDeps: ConductRouteDeps = {
     lock,
     ...(deps.spawn !== undefined ? { spawn: deps.spawn } : {}),
     ...(deps.sparraBin !== undefined ? { sparraBin: deps.sparraBin } : {}),
+    // The SAME EventLog instance `GET /events` reads + the JobStore emits into, so a parked decision
+    // announced by a conduct child shows up on the shared feed.
+    eventLog,
   };
   const conductorDeps: ConductorRouteDeps = {
     lock,
@@ -65,7 +69,6 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
   const dashboardDeps: DashboardRouteDeps = {
     ...(deps.readDashboardAssets !== undefined ? { readAssets: deps.readDashboardAssets } : {}),
   };
-  const eventLog = deps.eventLog ?? new EventLog();
 
   return [
     ...createPhaseRoutes(phaseDeps),

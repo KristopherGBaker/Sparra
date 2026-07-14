@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import type { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,8 @@ import { loadCtxForRole, type Ctx } from "../src/context.ts";
 import { runConduct, type ConductOptions } from "../src/conduct/run.ts";
 import type { ParentSummary, RunRoleSpec } from "../conductors/core/index.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
-import type { runScriptHooks, ScriptHookContext, ScriptHookEvent, ScriptHookOutcome } from "../src/scriptHooks.ts";
+import { runScriptHooks } from "../src/scriptHooks.ts";
+import type { ScriptHookContext, ScriptHookEvent, ScriptHookOutcome } from "../src/scriptHooks.ts";
 import type { Brain, DriveContext } from "../src/conduct/brain.ts";
 import type { BrainDecision, DecisionRequest } from "../src/conduct/decision.ts";
 
@@ -178,7 +180,7 @@ describe("runConduct — onRunStart/onRunComplete (assertions 4, 5, 10)", () => 
       const runCompleteCalls = calls.filter((c) => c.event === "onRunComplete");
       expect(runCompleteCalls).toHaveLength(1);
       expect(runCompleteCalls[0]!.ctx).toMatchObject({ runId: res.runId, runDir: res.runDir, status: "completed" });
-      // onDecisionParked is OUT of scope for this unit — never fired by any seam.
+      // This run never PARKS a decision (a clean single-unit pass), so onDecisionParked never fires.
       expect(calls.some((c) => c.event === "onDecisionParked")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -432,5 +434,174 @@ describe("runConduct — empty scriptHooks stays byte-identical (assertion 11)",
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── U4: onDecisionParked at the build-loop park seam (assertions 3/4/5/6/7) ──────────────────────
+
+/** A hybrid runner whose evaluator collapses the cross-model gate (`sameModelGrade: true`) → a
+ *  gate-collapse judgment point the brain path parks on. */
+function gateCollapseRunner(): FakeRunner {
+  return fakeRunner(({ kind, spec }) => {
+    const c = contractAgree(kind, spec);
+    if (c) return c;
+    if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
+    return summary({ roleKind: "evaluator", verdict: "pass", sameModelGrade: true });
+  });
+}
+
+/** A stub brain session fn — under `surface: "park"` the brain is never consulted, but it must exist
+ *  to enter the brain path; this keeps it off any live call. */
+const stubBrainSession = async (): Promise<RunResult> => ({
+  ok: true,
+  subtype: "success",
+  resultText: '```json\n{"answer":"abandon","rationale":"stub"}\n```',
+  sessionId: "b",
+  costUsd: 0,
+  tokens: 1,
+  numTurns: 1,
+  hitMaxTurns: false,
+  hitBudget: false,
+  errors: [],
+  tracePath: "",
+});
+
+/** Drive a single-unit hybrid run to a PARKED gate-collapse decision, resolving it by writing the
+ *  decision file the instant the request lands. Captures stdout (SPARRA_LOG_IN_TESTS) so the announce
+ *  line is observable. */
+async function driveParkedRun(
+  ctx: Ctx,
+  extraDeps: Parameters<typeof runConduct>[2],
+): Promise<{ res: Awaited<ReturnType<typeof runConduct>>; writes: string[]; requests: string[] }> {
+  const prev = process.env.SPARRA_LOG_IN_TESTS;
+  process.env.SPARRA_LOG_IN_TESTS = "1";
+  const writes: string[] = [];
+  const spy = vi
+    .spyOn(process.stdout, "write")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .mockImplementation(((s: unknown) => (writes.push(String(s)), true)) as any);
+  const requests: string[] = [];
+  try {
+    ctx.config.build.maxRoundsPerItem = 2;
+    const runner = gateCollapseRunner();
+    const res = await runConduct(
+      ctx,
+      OPTS({ brain: "hybrid", surface: "park", concurrency: 1, maxUnits: 1 }),
+      {
+        runRole: runner.runRole,
+        runSessionFn: decomposerFn(1),
+        brainSessionFn: stubBrainSession,
+        onDecisionRequest: (p: string) => {
+          requests.push(p);
+          const seq = path.basename(p).split(".")[0];
+          fs.writeFileSync(path.join(path.dirname(p), `${seq}.decision.json`), JSON.stringify({ answer: "abandon" }));
+        },
+        pollMs: 0,
+        now: () => Date.now(),
+        sleep: async () => {},
+        ...extraDeps,
+      },
+    );
+    return { res, writes, requests };
+  } finally {
+    spy.mockRestore();
+    if (prev === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+    else process.env.SPARRA_LOG_IN_TESTS = prev;
+  }
+}
+
+describe("runConduct — onDecisionParked at the build-loop park seam (U4 assertions 3/4/5/6/7)", () => {
+  it("assertion 3+4: a park fires onDecisionParked ONCE with {runId,runDir,decisionSeq,decisionKind,question}; announce line has runId+seq but NOT the question; onDecisionRequest still fires", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      const { fn, calls } = hookRecorder();
+      const { res, writes, requests } = await driveParkedRun(ctx, { runScriptHooksFn: fn });
+
+      const parked = calls.filter((c) => c.event === "onDecisionParked");
+      expect(parked).toHaveLength(1);
+      const payload = parked[0]!.ctx;
+      expect(payload).toMatchObject({ runId: res.runId, runDir: res.runDir, decisionKind: "gate-collapse" });
+      expect(typeof payload.decisionSeq).toBe("number");
+      expect(typeof payload.question).toBe("string");
+      expect(payload.question!.length).toBeGreaterThan(0);
+      // The pre-existing onDecisionRequest seam still fired on park.
+      expect(requests).toHaveLength(1);
+      // The announce line landed on stdout with runId+seq — and NOT the question text.
+      const announce = writes.find((w) => w.includes("conduct: decision-parked"));
+      expect(announce).toBeDefined();
+      expect(announce).toContain(res.runId);
+      expect(announce).toContain(String(payload.decisionSeq));
+      // The (holdout-safe but off-wire) question appears on NO emitted stdout line.
+      for (const w of writes) expect(w).not.toContain(payload.question);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 5: empty scriptHooks through the REAL runScriptHooks (recording fake spawnFn) → park completes, ZERO child spawns", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      expect(ctx.config.scriptHooks).toEqual({}); // no onDecisionParked configured
+      const spawns: unknown[][] = [];
+      const recordingSpawn = ((...args: unknown[]) => {
+        spawns.push(args);
+        throw new Error("empty scriptHooks must never spawn");
+      }) as unknown as typeof spawn;
+      // The REAL runScriptHooks, but wired with a recording spawnFn — an empty-config event returns
+      // {ran:0} BEFORE ever touching spawnFn (proving the no-op, not merely an uncalled spy).
+      const realHooksRecordingSpawn: typeof runScriptHooks = (event, hookCtx, config) =>
+        runScriptHooks(event, hookCtx, config, { spawnFn: recordingSpawn });
+      const { res, requests } = await driveParkedRun(ctx, { runScriptHooksFn: realHooksRecordingSpawn });
+      expect(requests).toHaveLength(1); // it DID park
+      const dec = res.state.units[0]!.decisions?.find((d) => d.kind === "gate-collapse");
+      expect(dec?.status).toBe("resolved"); // ...and RESOLVED (didn't hang)
+      expect(dec?.chosen).toBe("abandon");
+      expect(spawns).toHaveLength(0); // ZERO child processes spawned
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 6: a REJECTING runScriptHooksFn → park still resolves, a warn is emitted, NO unhandledRejection", async () => {
+    const dir = tmpdir();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => {
+      unhandled.push(e);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const ctx = await makeCtx(dir);
+      // Reject ONLY onDecisionParked (the after-event); other lifecycle hooks stay ok so the run runs.
+      const rejectingHooks: typeof runScriptHooks = async (event) => {
+        if (event === "onDecisionParked") throw new Error("hook boom");
+        return { ok: true, ran: 0 };
+      };
+      const { res, writes, requests } = await driveParkedRun(ctx, { runScriptHooksFn: rejectingHooks });
+      // The parked decision resolved normally despite the rejecting hook.
+      expect(requests).toHaveLength(1);
+      const dec = res.state.units[0]!.decisions?.find((d) => d.kind === "gate-collapse");
+      expect(dec?.status).toBe("resolved");
+      expect(dec?.chosen).toBe("abandon");
+      // A warn was emitted (log.ts `warn` prints to stdout with a `!` prefix under SPARRA_LOG_IN_TESTS).
+      expect(writes.some((w) => w.includes("onDecisionParked handling failed"))).toBe(true);
+      // Let any stray microtask settle, then assert NO unhandled rejection surfaced.
+      await new Promise((r) => setTimeout(r, 10));
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("assertion 7 (source): all THREE DecisionEngineDeps sites route onRequestWritten through the shared handleDecisionParked (makeOnRequestWritten) — 2 in run.ts, 1 in merge.ts", () => {
+    const runSrc = fs.readFileSync(new URL("../src/conduct/run.ts", import.meta.url), "utf8");
+    const mergeSrc = fs.readFileSync(new URL("../src/conduct/merge.ts", import.meta.url), "utf8");
+    expect((runSrc.match(/makeOnRequestWritten\(/g) ?? []).length).toBe(2);
+    expect((mergeSrc.match(/makeOnRequestWritten\(/g) ?? []).length).toBe(1);
+    // No site still wires the OLD raw onDecisionRequest directly into onRequestWritten (bypassing the seam).
+    expect(runSrc).not.toMatch(/onRequestWritten:\s*deps\.onDecisionRequest\b/);
+    expect(mergeSrc).not.toMatch(/onRequestWritten:\s*deps\.onDecisionRequest\b/);
   });
 });

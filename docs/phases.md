@@ -134,9 +134,9 @@ and the standalone `role`/`eval`/`measure`/`conduct` surfaces) never fire a phas
 `onPhaseStart` is a **before-event**: a `required: true` hook that fails/times out **gates** the
 phase — the phase body never runs, an error is printed, and the command exits non-zero.
 `onPhaseEnd` is best-effort (only warns on failure, never blocks). `sparra conduct` has its own,
-finer-grained **run**/**unit** fire points (`onRunStart`/`onRunComplete`/`onUnitStart`/
-`onUnitComplete`) — see [docs/conduct.md → Script hooks fire points](conduct.md#script-hooks-fire-points).
-`onDecisionParked` is not yet wired anywhere (a later unit).
+finer-grained **run**/**unit**/**decision** fire points (`onRunStart`/`onRunComplete`/`onUnitStart`/
+`onUnitComplete`/`onDecisionParked`) — see [docs/conduct.md → Script hooks fire points](conduct.md#script-hooks-fire-points).
+`onDecisionParked` fires (best-effort) every time a `conduct` run parks a judgment point.
 
 ---
 

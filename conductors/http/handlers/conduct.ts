@@ -24,6 +24,8 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import {
+  DECISION_PARKED_PREFIX,
+  parseDecisionParkedAnnouncement,
   parseRunStartAnnouncement,
   RUN_START_PREFIX,
 } from "../../../src/conduct/announce.ts";
@@ -33,6 +35,8 @@ import {
   writeDecisionAnswer,
 } from "../../../src/conduct/decisionEngine.ts";
 import { isSafeRunId } from "../../../src/conduct/runState.ts";
+import { readPendingDecisions } from "../decisions.ts";
+import type { EventLog } from "../events.ts";
 import type { Job } from "../jobs.ts";
 import { resolveWithinAllowlist } from "../paths.ts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../server.ts";
@@ -46,6 +50,11 @@ export interface ConductRouteDeps {
   spawn?: SpawnFn;
   /** Sparra binary override forwarded to `spawnPhase`. */
   sparraBin?: string;
+  /** The SHARED events feed (same instance `GET /events` + the `JobStore` use, wired in
+   *  `registerBridgeRoutes`/`startBridge`). When present, a parked decision announced on the conduct
+   *  child's stdout is surfaced as a `decision_parked` event; when absent (a test that omits it, or a
+   *  direct CLI run), nothing is emitted — byte-identical stdout, no event. */
+  eventLog?: EventLog;
 }
 
 // --- Strict body schemas (unknown fields rejected; CLI-meaningful value constraints enforced) ------
@@ -150,33 +159,71 @@ export function canonicalRunDir(resolvedRoot: string, runId: string, roots: stri
 }
 
 /**
- * A stdout observer that finds the run-START announcement (line-buffered across chunks) and records
- * `runId` + the CANONICAL (realpath-guarded) run dir onto the job. The child-announced `runDir` text
- * is never trusted — the dir is derived from `runId` under the guarded root and realpath-validated, so
- * a symlink escaping the allowlist yields NO stored `runDir` (decision reads/writes then 404 rather
- * than following the symlink out of root). Stops after the first announcement line. Never mutates the
- * streamed output.
+ * A stdout observer that surfaces BOTH conduct announce lines (line-buffered across chunks):
+ *
+ *  - The FIRST run-START line records `runId` + the CANONICAL (realpath-guarded) run dir onto the job
+ *    (recorded ONCE — a job has one run). The child-announced `runDir` text is never trusted — the dir
+ *    is derived from `runId` under the guarded root and realpath-validated, so a symlink escaping the
+ *    allowlist yields NO stored `runDir` (decision reads/writes then 404 rather than following the
+ *    symlink out of root).
+ *  - EACH decision-parked line (which arrive later and repeatedly) is turned into a `decision_parked`
+ *    event on the shared `eventLog` — but ONLY runId+seq are ever trusted from the line: `question`/
+ *    `kind` come from the realpath-guarded request FILE (`readPendingDecisions`) under the allowlisted
+ *    root. FAIL CLOSED — no recorded `runDir`, a foreign `runId`, an unreadable/guard-rejected request,
+ *    or no `eventLog` wired ⇒ NOTHING is emitted for that decision. A given `(runId, seq)` is emitted at
+ *    most once per job (a resume re-announce / split chunk never double-emits).
+ *
+ * Never stops scanning (decision-parked lines follow the run-START line) and never mutates the output.
  */
-function makeAnnouncementParser(job: Job, resolvedRoot: string, roots: string[]): (chunk: string) => void {
+function makeAnnouncementParser(
+  job: Job,
+  resolvedRoot: string,
+  roots: string[],
+  eventLog?: EventLog,
+): (chunk: string) => void {
   let buffer = "";
-  let found = false;
+  let runStartSeen = false;
+  const emittedSeqs = new Set<number>();
   return (chunk: string) => {
-    if (found) return;
     buffer += chunk;
     let idx: number;
     while ((idx = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 1);
-      if (!line.includes(RUN_START_PREFIX)) continue;
-      const ann = parseRunStartAnnouncement(line);
-      if (!ann) continue;
-      found = true; // the announcement line was seen — accept or reject, don't keep scanning
-      const canonical = canonicalRunDir(resolvedRoot, ann.runId, roots);
-      if (canonical !== undefined) {
-        job.runId = ann.runId;
-        job.runDir = canonical;
+
+      if (!runStartSeen && line.includes(RUN_START_PREFIX)) {
+        const ann = parseRunStartAnnouncement(line);
+        if (!ann) continue;
+        runStartSeen = true; // record the run's id/dir exactly once — a job has one run
+        const canonical = canonicalRunDir(resolvedRoot, ann.runId, roots);
+        if (canonical !== undefined) {
+          job.runId = ann.runId;
+          job.runDir = canonical;
+        }
+        continue;
       }
-      return;
+
+      if (eventLog && line.includes(DECISION_PARKED_PREFIX)) {
+        const ann = parseDecisionParkedAnnouncement(line);
+        if (!ann) continue;
+        // Fail closed: only for THIS job's recorded run, and only once per seq.
+        if (job.runId === undefined || job.runDir === undefined) continue;
+        if (ann.runId !== job.runId) continue;
+        if (emittedSeqs.has(ann.seq)) continue;
+        // `question`/`kind` come ONLY from the realpath-guarded request file — never the line text.
+        const parked = readPendingDecisions(job.runDir, roots).find((d) => d.seq === ann.seq);
+        if (!parked) continue; // unreadable / guard-rejected / already-resolved ⇒ emit nothing
+        emittedSeqs.add(ann.seq);
+        eventLog.emit({
+          type: "decision_parked",
+          jobId: job.id,
+          ...(job.root ? { root: job.root } : {}),
+          runId: ann.runId,
+          seq: ann.seq,
+          ...(parked.question ? { question: parked.question } : {}),
+          ...(parked.kind ? { kind: parked.kind } : {}),
+        });
+      }
     }
   };
 }
@@ -228,7 +275,9 @@ export function createConductRoutes(deps: ConductRouteDeps): RouteDefinition[] {
             release: () => deps.lock.release(root),
             // Learn the run's id/dir from the child's run-START line so `pendingDecisions` +
             // `/jobs/:id/decision` can find its decisions dir — realpath-guarded against symlink escape.
-            onStdout: makeAnnouncementParser(job, root, ctx.config.roots),
+            // The SAME observer surfaces each decision-parked line as a `decision_parked` event on the
+            // shared events feed (`question`/`kind` from the guarded request file, never the line).
+            onStdout: makeAnnouncementParser(job, root, ctx.config.roots, deps.eventLog),
           },
         );
 

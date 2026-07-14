@@ -20,6 +20,8 @@ import { defaultUnitWorktreeDir, removeUnitWorktree } from "../build/unitWorktre
 import { commitUnit, type ConductCommitGit } from "./commit.ts";
 import { buildDecisionRequest, type DecisionRecord, type JudgmentKind } from "./decision.ts";
 import { resolveDecision, type DecisionEngineDeps, type TtySeam } from "./decisionEngine.ts";
+import { makeOnRequestWritten } from "./decisionParked.ts";
+import type { runScriptHooks } from "../scriptHooks.ts";
 import { exists } from "../util/io.ts";
 import type { BrainDecision, DecisionRequest } from "./decision.ts";
 import { RunStateWriter } from "./runState.ts";
@@ -107,6 +109,10 @@ export interface LandingDeps {
   brainJudge?: (req: DecisionRequest) => Promise<BrainDecision | undefined>;
   tty?: TtySeam;
   onDecisionRequest?: (requestPath: string) => void;
+  /** The `runScriptHooks` invocation used to fire `onDecisionParked` when a merge-landing decision
+   *  parks (default: the real runner). Threaded from `ConductDeps.runScriptHooksFn` so a merge park
+   *  fires the hook + announce line identically to the build-loop park sites. */
+  runScriptHooksFn?: typeof runScriptHooks;
   /** Run-global monotonic decision sequence (shared with the brain path so seq never collides). */
   seqRef: { n: number };
   /** RESUME only: restrict landing to these unit ids (the ones re-run this invocation), so a resume
@@ -344,7 +350,13 @@ async function parkMergeDecision(
     ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
     ...(deps.brainJudge ? { brainJudge: deps.brainJudge } : {}),
     ...(deps.tty ? { tty: deps.tty } : {}),
-    ...(deps.onDecisionRequest ? { onRequestWritten: deps.onDecisionRequest } : {}),
+    // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the preserved
+    // onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
+    onRequestWritten: makeOnRequestWritten(
+      ctx,
+      { ...(deps.runScriptHooksFn ? { runScriptHooksFn: deps.runScriptHooksFn } : {}), ...(deps.onDecisionRequest ? { onDecisionRequest: deps.onDecisionRequest } : {}) },
+      { runId: deps.runId, runDir: deps.runDir },
+    ),
   };
   const res = await resolveDecision(req, engine);
 

@@ -160,9 +160,13 @@ Three event types (`type` field):
 - **`job_started`** — `{ jobId, kind, root? }`, emitted when `JobStore.createJob` registers a job.
 - **`job_done`** — `{ jobId, status, root? }` (`status` ∈ `succeeded|failed|canceled`), emitted on
   `finish`/`cancelJob`.
-- **`decision_parked`** — TYPED in the `BridgeEvent` union but **not yet emitted** by this feed; a
-  later unit wires the emit at the conduct decision-park seam (it will carry the parked request's own
-  `question`, holdout-safe by construction).
+- **`decision_parked`** — `{ jobId, root?, runId, seq, question?, kind? }`, emitted when a `conduct`
+  job parks a judgment point. The conduct child prints a `conduct: decision-parked <runId> <seq>` line
+  (runId + seq **only**, never free text); the bridge's stdout observer trusts only those two values and
+  reads `question`/`kind` from the run's realpath-guarded `<seq>.request.json` file (fail-closed — no
+  recorded run dir, a foreign runId, or an unreadable/guard-rejected request emits nothing). The
+  `question` is the parked request's own `ParentSummary`-derived text, holdout-safe by construction. It
+  flows on `GET /events` like the other two (and each `(runId, seq)` is emitted at most once per job).
 
 Every field beyond the log-assigned `id`/`ts` is defensively bounded before it ever reaches the ring or
 the file — `jobId` is char-classed + length-capped exactly like the audit log's job ids, and every other

@@ -9,7 +9,14 @@ import { loadCtxForRole, type Ctx } from "../src/context.ts";
 import { cmdConduct, cmdConductDecide, parseConductFlags } from "../src/phases/conduct.ts";
 import { parse } from "../src/util/args.ts";
 import { runConduct, type ConductOptions, type ConductResult } from "../src/conduct/run.ts";
-import { formatRunStartAnnouncement, parseRunStartAnnouncement, RUN_START_RE } from "../src/conduct/announce.ts";
+import {
+  DECISION_PARKED_RE,
+  formatDecisionParkedAnnouncement,
+  formatRunStartAnnouncement,
+  parseDecisionParkedAnnouncement,
+  parseRunStartAnnouncement,
+  RUN_START_RE,
+} from "../src/conduct/announce.ts";
 import type { ParentSummary, RunRoleSpec } from "../conductors/core/index.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
 // Real-bin/tsx-subprocess describe blocks + tests below SKIP visibly under `SPARRA_JUDGE_SANDBOX=1`
@@ -59,6 +66,36 @@ describe("conduct — run-START announcement (assertion 4, U3 bridge parse)", ()
   it("a non-announcement line parses to undefined", () => {
     expect(parseRunStartAnnouncement("conduct: run conduct-x → /a/b")).toBeUndefined(); // run-END, not run-start
     expect(parseRunStartAnnouncement("some other log line")).toBeUndefined();
+  });
+});
+
+describe("conduct — decision-parked announcement (U4 assertions 1/2)", () => {
+  it("assertion 1: format is exactly `conduct: decision-parked <runId> <seq>` (runId+seq only, no free text)", () => {
+    expect(formatDecisionParkedAnnouncement("run-abc", 7)).toBe("conduct: decision-parked run-abc 7");
+    // The formatted line carries NO question/free text even for a large seq.
+    const line = formatDecisionParkedAnnouncement("conduct-20260715-xyz", 42);
+    expect(line).toBe("conduct: decision-parked conduct-20260715-xyz 42");
+    expect(DECISION_PARKED_RE.test(line)).toBe(true);
+  });
+
+  it("assertion 2: round-trips; parses a `› `-decorated + `\\r`-terminated line", () => {
+    const line = formatDecisionParkedAnnouncement("run-abc", 7);
+    expect(parseDecisionParkedAnnouncement(line)).toEqual({ runId: "run-abc", seq: 7 });
+    expect(parseDecisionParkedAnnouncement("› " + line + "\r")).toEqual({ runId: "run-abc", seq: 7 });
+  });
+
+  it("assertion 2: undefined on non-numeric seq, a run-START line, and other noise", () => {
+    expect(parseDecisionParkedAnnouncement("conduct: decision-parked run-abc x")).toBeUndefined();
+    expect(parseDecisionParkedAnnouncement("conduct: decision-parked run-abc")).toBeUndefined();
+    expect(parseDecisionParkedAnnouncement(formatRunStartAnnouncement("run-abc", "/tmp/x"))).toBeUndefined();
+    expect(parseDecisionParkedAnnouncement("some other log line")).toBeUndefined();
+  });
+
+  it("assertion 2: cross-parse guards — a decision-parked line is NOT a run-START, and vice versa", () => {
+    const parked = formatDecisionParkedAnnouncement("run-abc", 7);
+    const start = formatRunStartAnnouncement("run-abc", "/tmp/x");
+    expect(parseRunStartAnnouncement(parked)).toBeUndefined();
+    expect(parseDecisionParkedAnnouncement(start)).toBeUndefined();
   });
 
   it("runConduct emits the announcement BEFORE any unit work (captured on stdout, bridge-parseable)", async () => {

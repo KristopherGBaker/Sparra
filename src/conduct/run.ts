@@ -15,6 +15,7 @@ import {
 import { runRole as coreRunRole } from "../../conductors/core/index.ts";
 import { newRunId, type Ctx } from "../context.ts";
 import { formatRunStartAnnouncement } from "./announce.ts";
+import { makeOnRequestWritten } from "./decisionParked.ts";
 import { loadPrompt } from "../prompts.ts";
 import { mergedBuildEnv } from "../build/env.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
@@ -128,8 +129,9 @@ export interface ConductDeps {
 
   // ── U2 script-hook fire-point seam ──
   /** The `runScriptHooks` (U1) invocation used at every conduct fire point (onRunStart/onRunComplete/
-   *  onUnitStart/onUnitComplete). Default: the real runner. Injected in tests so the wiring is
-   *  asserted without a real spawn. `onDecisionParked` is OUT of scope for this unit (U4). */
+   *  onUnitStart/onUnitComplete, and — via `handleDecisionParked` — `onDecisionParked` on every parked
+   *  decision). Default: the real runner. Injected in tests so the wiring is asserted without a real
+   *  spawn. */
   runScriptHooksFn?: typeof runScriptHooks;
 }
 
@@ -678,6 +680,7 @@ async function runLanding(
     ...(p.brain ? { brainJudge: (r) => p.brain!.judge(r) } : {}),
     ...(deps.tty ? { tty: deps.tty } : {}),
     ...(deps.onDecisionRequest ? { onDecisionRequest: deps.onDecisionRequest } : {}),
+    ...(deps.runScriptHooksFn ? { runScriptHooksFn: deps.runScriptHooksFn } : {}),
     ...(p.restrictTo ? { restrictTo: p.restrictTo } : {}),
     seqRef: p.seqRef,
   };
@@ -765,7 +768,9 @@ async function recoverParkedDecisions(
       ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
       ...(p.brain ? { brainJudge: (r) => p.brain!.judge(r) } : {}),
       ...(tty ? { tty } : {}),
-      ...(deps.onDecisionRequest ? { onRequestWritten: deps.onDecisionRequest } : {}),
+      // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the
+      // preserved onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
+      onRequestWritten: makeOnRequestWritten(ctx, deps, { runId: p.state.runId, runDir: p.runDir }),
     };
     const res = await resolveDecision(req, engine);
 
@@ -1035,7 +1040,9 @@ async function runBrainUnits(
         ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
         ...(brain ? { brainJudge: (r) => brain!.judge(r) } : {}),
         ...(tty ? { tty } : {}),
-        ...(deps.onDecisionRequest ? { onRequestWritten: deps.onDecisionRequest } : {}),
+        // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the
+        // preserved onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
+        onRequestWritten: makeOnRequestWritten(ctx, deps, { runId: p.runId, runDir: p.runDir }),
       };
       const res = await resolveDecision(req, engine);
 

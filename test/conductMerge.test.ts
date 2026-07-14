@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import type { runScriptHooks, ScriptHookContext, ScriptHookEvent } from "../src/scriptHooks.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -454,6 +455,59 @@ describe("conduct --merge (real git)", () => {
       // The parked unit's own WIP commit is intact (its shared.txt version).
       expect(g(repo, ["show", `${parkedEntry.branch}:shared.txt`])).toContain("version");
     } finally {
+      cleanup(repo);
+    }
+  });
+
+  it("U4 assertion 7: a merge-landing PARK fires onDecisionParked (kind merge-blocked) + emits the announce line (runId+seq, not question)", GIT_IT, async () => {
+    const repo = makeRepo({ "shared.txt": "base line\n" });
+    const prev = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
+    const writes: string[] = [];
+    const spy = vi
+      .spyOn(process.stdout, "write")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation(((s: unknown) => (writes.push(String(s)), true)) as any);
+    const calls: { event: ScriptHookEvent; ctx: ScriptHookContext }[] = [];
+    const runHooks: typeof runScriptHooks = async (event, hookCtx) => {
+      calls.push({ event, ctx: hookCtx });
+      return { ok: true, ran: 0 };
+    };
+    try {
+      g(repo, ["checkout", "-b", "feature"]);
+      const res = await runMerge(
+        repo,
+        [
+          { id: "unit-001", title: "Edit A", summary: "a" },
+          { id: "unit-002", title: "Edit B", summary: "b" },
+        ],
+        (u, wt) => fs.writeFileSync(path.join(wt, "shared.txt"), `${u} version\n`),
+        {
+          runScriptHooksFn: runHooks,
+          onDecisionRequest: (p: string) => {
+            const seq = path.basename(p).split(".")[0];
+            fs.writeFileSync(path.join(path.dirname(p), `${seq}.decision.json`), JSON.stringify({ answer: "skip-unit" }));
+          },
+        },
+        { surface: "park", concurrency: 1 },
+      );
+      const parked = calls.filter((c) => c.event === "onDecisionParked");
+      expect(parked.length).toBeGreaterThanOrEqual(1);
+      const payload = parked[0]!.ctx;
+      expect(payload.decisionKind).toBe("merge-blocked");
+      expect(typeof payload.decisionSeq).toBe("number");
+      expect(typeof payload.question).toBe("string");
+      expect(payload.runId).toBe(res.runId);
+      // The announce line landed on stdout with runId+seq — never the question text.
+      const announce = writes.find((w) => w.includes("conduct: decision-parked"));
+      expect(announce).toBeDefined();
+      expect(announce).toContain(res.runId);
+      expect(announce).toContain(String(payload.decisionSeq));
+      expect(announce).not.toContain(payload.question);
+    } finally {
+      spy.mockRestore();
+      if (prev === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = prev;
       cleanup(repo);
     }
   });

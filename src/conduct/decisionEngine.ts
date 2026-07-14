@@ -40,8 +40,11 @@ export interface DecisionEngineDeps {
   brainJudge?: (req: DecisionRequest) => Promise<BrainDecision | undefined>;
   /** A TTY channel when stdin is a terminal. */
   tty?: TtySeam;
-  /** Test seam: called with the written request path. */
-  onRequestWritten?: (requestPath: string) => void;
+  /** Called synchronously the moment a request is written (a decision PARKS), with the written
+   *  request path AND the parked request itself. Backward-compatible: a single-arg consumer simply
+   *  ignores the extra `req`. The conduct side routes this through `handleDecisionParked` (announce
+   *  line + `onDecisionParked` hook) and still preserves the pre-existing `onDecisionRequest` seam. */
+  onRequestWritten?: (requestPath: string, req: DecisionRequest) => void;
 }
 
 /** The `decisions/` subfolder of a run dir. */
@@ -88,7 +91,7 @@ async function park(req: DecisionRequest, deps: DecisionEngineDeps): Promise<Dec
   await ensureDir(decisionsDir(deps.runDir));
   const rp = requestPath(deps.runDir, req.seq);
   await fsp.writeFile(rp, JSON.stringify(req, null, 2) + "\n", "utf8");
-  deps.onRequestWritten?.(rp);
+  deps.onRequestWritten?.(rp, req);
 
   const pollMs = deps.pollMs ?? 500;
   const expiresAtMs = Date.parse(req.expiresAt);

@@ -164,9 +164,11 @@ A lighter alternative to polling `GET /jobs/:id` per job per tick: learn everyth
 tracked job in one request. `since` (default `0`; a non-numeric/negative value is also treated as `0`)
 is the last `cursor` you saw; pass it back next poll — `cursor` in the response is the new value to
 save, and it never regresses even once old events have scrolled out of the bounded in-memory ring.
-Event `type` ∈ `job_started | job_done | decision_parked` — `decision_parked` is reserved (typed) but
-not yet emitted by any route. Still poll the specific job's `GET /jobs/:id` for its `log` and
-`pendingDecisions`; this feed carries only the lifecycle transition, not the log content.
+Event `type` ∈ `job_started | job_done | decision_parked` — `decision_parked`
+(`{jobId,root?,runId,seq,question?,kind?}`) is emitted when a conduct job parks a judgment point
+(`runId`+`seq` from the child's stdout line, `question`+`kind` from the realpath-guarded request file).
+Still poll the specific job's `GET /jobs/:id` for its `log` and `pendingDecisions`; this feed carries
+the lifecycle transition, not the log content.
 
 ## Status codes (any route)
 `401` missing/wrong token (before routing) · `403` allowlist reject / `/plan` disabled · `400`

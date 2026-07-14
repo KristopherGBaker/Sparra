@@ -20,7 +20,9 @@ import { JobStore } from "../jobs.ts";
 import { createRequestListener, type ServerDeps } from "../server.ts";
 import { TargetLock, type SpawnedChild, type SpawnFn } from "../spawn.ts";
 import { createConductRoutes, type ConductRouteDeps } from "./conduct.ts";
-import { formatRunStartAnnouncement } from "../../../src/conduct/announce.ts";
+import { EventLog } from "../events.ts";
+import { registerBridgeRoutes } from "../register.ts";
+import { formatDecisionParkedAnnouncement, formatRunStartAnnouncement } from "../../../src/conduct/announce.ts";
 
 const TOKEN = "s3cr3t";
 
@@ -602,6 +604,143 @@ describe("POST /jobs/:id/decision — resolution (assertions 7/8/10/11)", () => 
     seedParked(runDir, 1, { options: ["finalize"], def: "finalize" });
     const res = await dispatch(listener, { url: `/jobs/${jobId}/decision`, body: { seq: 1, answer: "finalize", evil: "x" } });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("stdout observer → decision_parked events (U4 assertions 8/9/10/11/12)", () => {
+  /** A distinct question string that appears NOWHERE in the fed stdout — proves the event's `question`
+   *  is read from the request FILE, not smuggled off the (runId+seq-only) announce line. */
+  const FILE_QUESTION = "FILE-ONLY-QUESTION-9xZ-should-not-be-on-the-wire";
+
+  it("assertion 8: run-START then decision-parked line + seeded request → exactly ONE decision_parked event; question/kind from the FILE", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    expect(res.status).toBe(202);
+    const jobId = res.json.jobId;
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    // Seed the parked request with a DISTINCT question + kind that live ONLY in the file.
+    seedParked(runDir, 1, { options: ["skip-unit", "abort-merge"], def: "skip-unit", kind: "merge-blocked", extra: { question: FILE_QUESTION } });
+    child.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 1) + "\n");
+
+    const events = eventLog.since(0).events.filter((e) => e.type === "decision_parked");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "decision_parked", jobId, runId: "conduct-fixture", seq: 1, question: FILE_QUESTION, kind: "merge-blocked" });
+    // The distinct question came from the file — it never rode the (runId+seq-only) announce line.
+    expect(events[0]!.root).toBe(root);
+  });
+
+  it("assertion 9(a): decision-parked line with NO prior run-START → zero events (fail closed)", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    const runDir = runDirFor(root);
+    seedParked(runDir, 1, { options: ["finalize"], def: "finalize" });
+    // Emit the decision-parked line WITHOUT ever emitting run-START.
+    children.at(-1)!.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 1) + "\n");
+    expect(eventLog.since(0).events.filter((e) => e.type === "decision_parked")).toHaveLength(0);
+  });
+
+  it("assertion 9(b): decision-parked line whose runId ≠ recorded runId → zero events", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    seedParked(runDir, 1, { options: ["finalize"], def: "finalize" });
+    child.emitStdout(formatDecisionParkedAnnouncement("some-OTHER-run", 1) + "\n");
+    expect(eventLog.since(0).events.filter((e) => e.type === "decision_parked")).toHaveLength(0);
+  });
+
+  it("assertion 9(c): request file absent/unreadable → zero events (fail closed)", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    // NO seedParked — the request file for seq 1 does not exist.
+    child.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 1) + "\n");
+    expect(eventLog.since(0).events.filter((e) => e.type === "decision_parked")).toHaveLength(0);
+  });
+
+  it("assertion 10: same line twice (incl. split across chunks) → ONE event; a distinct seq → a second", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    seedParked(runDir, 1, { options: ["finalize"], def: "finalize" });
+    const line1 = formatDecisionParkedAnnouncement("conduct-fixture", 1);
+    // First delivery SPLIT across two chunks (proves line-buffering assembles it).
+    child.emitStdout(line1.slice(0, 10));
+    child.emitStdout(line1.slice(10) + "\n");
+    // Second delivery of the SAME line (whole) — must be de-duped.
+    child.emitStdout(line1 + "\n");
+    expect(eventLog.since(0).events.filter((e) => e.type === "decision_parked" && e.seq === 1)).toHaveLength(1);
+    // A distinct seq → a second event.
+    seedParked(runDir, 2, { options: ["pivot"], def: "pivot", unit: "unit-002" });
+    child.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 2) + "\n");
+    const parked = eventLog.since(0).events.filter((e) => e.type === "decision_parked");
+    expect(parked.map((e) => e.seq).sort()).toEqual([1, 2]);
+  });
+
+  it("assertion 11: the SAME line stream still records runId/runDir (run-START regression) — pendingDecisions surface", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn, eventLog });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    const jobId = res.json.jobId;
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    seedParked(runDir, 1, { options: ["finalize", "abandon"], def: "finalize" });
+    child.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 1) + "\n");
+    // run-START recording still works exactly as before (pendingDecisions surfaced from the recorded dir).
+    const job = await dispatch(listener, { method: "GET", url: `/jobs/${jobId}` });
+    expect((job.json.pendingDecisions as Array<{ seq: number }>).map((d) => d.seq)).toEqual([1]);
+  });
+
+  it("assertion 12: parser events land on the SAME EventLog served by GET /events (registerBridgeRoutes wiring)", async () => {
+    const root = tmpRoot();
+    const eventLog = new EventLog();
+    const { spawn, children } = fakeSpawner();
+    const jobs = new JobStore();
+    const listener = createRequestListener({
+      config: baseConfig([root]),
+      token: TOKEN,
+      jobs,
+      audit: () => {},
+      routes: registerBridgeRoutes({ lock: new TargetLock(), spawn, eventLog }),
+    });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, prompt: "x" } });
+    expect(res.status).toBe(202);
+    const runDir = runDirFor(root);
+    const child = children.at(-1)!;
+    child.emitStdout(formatRunStartAnnouncement("conduct-fixture", runDir) + "\n");
+    seedParked(runDir, 1, { options: ["finalize"], def: "finalize", extra: { question: FILE_QUESTION } });
+    child.emitStdout(formatDecisionParkedAnnouncement("conduct-fixture", 1) + "\n");
+    // Read the event back THROUGH the GET /events route — same shared instance.
+    const feed = await dispatch(listener, { method: "GET", url: "/events?since=0" });
+    expect(feed.status).toBe(200);
+    const parked = (feed.json.events as Array<{ type: string; seq?: number; question?: string }>).filter((e) => e.type === "decision_parked");
+    expect(parked).toHaveLength(1);
+    expect(parked[0]).toMatchObject({ seq: 1, question: FILE_QUESTION });
   });
 });
 

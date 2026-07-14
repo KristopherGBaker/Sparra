@@ -280,7 +280,7 @@ timestamp per resume.
 
 ## Script hooks fire points
 
-If [`scriptHooks`](configuration.md#script-hooks-scripthooks) is configured, `conduct` fires four of
+If [`scriptHooks`](configuration.md#script-hooks-scripthooks) is configured, `conduct` fires five of
 the seven events at these boundaries:
 
 | Event | Boundary | Semantics |
@@ -289,9 +289,9 @@ the seven events at these boundaries:
 | `onRunComplete` | On **every** terminal return of the run — the no-units-decomposed error, `--dry-run`, and the normal completed path. | Best-effort. Carries the run's final `status` (`"error"` / `"dry-run"` / `"completed"`). |
 | `onUnitStart` | Before a unit's build work begins. Deterministic path (no `--brain`): fired for **every** unit in a sequential loop **up front**, before the concurrent batch starts. Brain path (`--brain hybrid\|llm`): fired at the top of **each unit's own** (bounded-concurrent) iteration. | **Gate.** A `required: true` failure marks that unit `"error"`, sets the run `status` to `"error"`, persists it, fires `onRunComplete` (`status:"error"`) exactly once, and returns immediately — the unit batch never runs (deterministic path) or the run never lands/completes (brain path). A gated run can never report `"completed"`. |
 | `onUnitComplete` | After a unit's outcome is finalized (accepted / error / abandoned / exhausted / …). | Best-effort. Carries `status: <the unit's terminal outcome>`. |
+| `onDecisionParked` | Every time the decision engine **parks** a judgment point (writes `<seq>.request.json` and waits) — on the build-loop decision paths, a `--resume` recovery re-surface, and a `--merge` landing block. | Best-effort **after-event** — fired on **every** park with **no config gate**; a hook failure/timeout only warns and never blocks the parked decision from being answered. Receives `decisionSeq` (`SPARRA_HOOK_DECISION_SEQ`), `decisionKind` (`SPARRA_HOOK_DECISION_KIND`), and the decision `question` — the latter **only** on stdin JSON, never in an env var. Alongside it, a stable `conduct: decision-parked <runId> <seq>` line is printed to stdout (runId + seq **only**, never the question) for the HTTP bridge to parse into a `decision_parked` event. |
 
-`onDecisionParked` is **not yet wired** (a later unit, alongside the bridge's decision-park announce
-line). `--resume` re-entry only gets the **per-unit** hooks (it reuses the same brain-path machinery
+`--resume` re-entry only gets the **per-unit** hooks (it reuses the same brain-path machinery
 "by construction") — `onRunStart`/`onRunComplete` are scoped to a fresh `runConduct` invocation and do
 not fire again on resume. See [docs/configuration.md → Script hooks](configuration.md#script-hooks-scripthooks)
 for the hook spec, env/stdin contract, and safety notes; see

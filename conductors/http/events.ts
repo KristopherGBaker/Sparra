@@ -23,20 +23,22 @@ export interface BridgeEvent {
   id: number;
   /** ISO timestamp. */
   ts: string;
-  /** `decision_parked` is TYPED here but not yet emitted anywhere in this module — a later unit wires
-   *  that emit at the conduct park seam. */
+  /** `decision_parked` is emitted by the conduct stdout observer (`handlers/conduct.ts`) when a run
+   *  parks a judgment point — `runId`+`seq` from the child's announce line, `question`+`kind` from the
+   *  realpath-guarded request file. `job_started`/`job_done` are emitted by the `JobStore`. */
   type: "job_started" | "job_done" | "decision_parked";
   jobId?: string;
   root?: string;
-  /** Job kind, e.g. `"build"` / `"conduct"`. */
+  /** Job kind (e.g. `"build"` / `"conduct"`) on `job_started`/`job_done`; the DECISION kind (e.g.
+   *  `"merge-blocked"`) on a `decision_parked` event. */
   kind?: string;
   phase?: string;
   /** For `job_done`: `succeeded|failed|canceled` (the job's actual terminal status). */
   status?: string;
   runId?: string;
   seq?: number;
-  /** Only ever set by the future `decision_parked` emit — holdout-safe by construction there (the
-   *  parked request's own question). No event emitted by THIS module carries it. */
+  /** Set only on a `decision_parked` event — holdout-safe by construction (the parked request's own
+   *  `ParentSummary`-derived question, read from the realpath-guarded request file, never the wire line). */
   question?: string;
 }
 

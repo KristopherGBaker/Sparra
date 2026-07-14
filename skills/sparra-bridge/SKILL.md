@@ -111,7 +111,7 @@ curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" "$SPARRA_BRIDGE_
 curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" "$SPARRA_BRIDGE_URL/events?since=0"
 # {events:[{id,ts,type:"job_started"|"job_done"|"decision_parked",jobId?,root?,kind?,status?,…}], cursor}
 # Save `cursor` and pass it back as `since` next poll — cheaper than enumerating jobs + GET /jobs/:id
-# each. `decision_parked` is reserved (typed, not yet emitted).
+# each. `decision_parked` ({runId,seq,question?,kind?}) is emitted when a conduct job parks a decision.
 ```
 
 ## The job-watch loop (for the async phase endpoints)

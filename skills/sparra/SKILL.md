@@ -330,8 +330,9 @@ The few that matter most:
   never gate). Hooks get `SPARRA_HOOK_*` env vars for present context fields plus the full context
   as one JSON line on stdin (parked-decision `question` text is stdin-only, never an env var). Five
   fire points are wired — phase start/end (`orient`/`plan`/`prototype`/`freeze`/`build`/`reflect`/
-  `batch`), conduct run start/complete, conduct unit start/complete (deterministic + brain paths);
-  `onDecisionParked` is pending (a later unit, alongside the bridge decision-park announce line). See
+  `batch`), conduct run start/complete, conduct unit start/complete (deterministic + brain paths), and
+  `onDecisionParked` on every parked judgment point (best-effort; also prints a `conduct: decision-parked
+  <runId> <seq>` stdout line the bridge turns into a `decision_parked` event). See
   `docs/configuration.md` → "Script hooks", `docs/conduct.md`, `docs/phases.md`.
 
 ### Cross-backend (Codex builds, Claude judges)
