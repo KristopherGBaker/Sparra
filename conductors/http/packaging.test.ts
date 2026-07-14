@@ -47,6 +47,7 @@ const SHIPPED_ENDPOINTS = [
   "GET /jobs/:id",
   "POST /jobs/:id/cancel",
   "POST /jobs/:id/decision",
+  "GET /events",
 ];
 
 const BRIDGE_CONFIG_FIELDS = [
@@ -55,6 +56,7 @@ const BRIDGE_CONFIG_FIELDS = [
   "bind",
   "lastNJobs",
   "auditLogPath",
+  "eventsLogPath",
   "allowRemotePlan",
   "dashboard",
 ];
@@ -162,11 +164,11 @@ describe("docs match shipped code", () => {
   it("README has exactly one authenticated curl per endpoint (Bearer except /health)", () => {
     const curlBlocks = readme.split("```bash").slice(1);
     const bearerCurls = curlBlocks.filter((b) => b.includes("Authorization: Bearer"));
-    // 14 authenticated curls: one per authed endpoint (everything but GET /health and the
+    // 15 authenticated curls: one per authed endpoint (everything but GET /health and the
     // unauthenticated GET / dashboard load) — the conduct example block adds /conduct + the
-    // /jobs/:id/decision answer, and GET /jobs (the listing) has its own. GET /health has its own
-    // no-Bearer curl.
-    expect(bearerCurls.length).toBe(14);
+    // /jobs/:id/decision answer, GET /jobs (the listing) has its own, and GET /events (the
+    // cursor-delta feed) has its own. GET /health has its own no-Bearer curl.
+    expect(bearerCurls.length).toBe(15);
     expect(readme).toMatch(/curl "http:\/\/\$HOST:\$PORT\/health"/);
   });
 
@@ -210,6 +212,7 @@ describe("bin smoke — fails closed on the missing token", () => {
           port: 8787,
           lastNJobs: 50,
           auditLogPath: path.join(os.tmpdir(), "sparra-packaging-smoke-audit.log"),
+          eventsLogPath: path.join(os.tmpdir(), "sparra-packaging-smoke-events.jsonl"),
           allowRemotePlan: false,
           dashboard: true,
         }),

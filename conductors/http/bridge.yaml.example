@@ -26,6 +26,11 @@ lastNJobs: 50
 # root only — never the raw request path or any file content). Default: ~/.sparra/bridge-audit.log.
 auditLogPath: ~/.sparra/bridge-audit.log
 
+# Optional. Where the append-only bridge lifecycle events feed (job_started/job_done/…, consumed via
+# GET /events?since=<cursor>) is written. Read back at startup so cursors survive a restart. Default:
+# ~/.sparra/bridge-events.jsonl.
+eventsLogPath: ~/.sparra/bridge-events.jsonl
+
 # Optional. Whether the remote `/plan` endpoint is allowed to write PLAN.md at all. Off by default —
 # `/plan` is a human-freeze-gated write, so a remote agent can only propose plan content once an
 # operator explicitly opts a target machine in.

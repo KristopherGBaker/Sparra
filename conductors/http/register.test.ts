@@ -28,7 +28,15 @@ function tmpRoot(): string {
 }
 
 function baseConfig(roots: string[]): BridgeConfig {
-  return { roots, port: 8787, lastNJobs: 50, auditLogPath: "/tmp/a.log", allowRemotePlan: false, dashboard: true };
+  return {
+    roots,
+    port: 8787,
+    lastNJobs: 50,
+    auditLogPath: "/tmp/a.log",
+    eventsLogPath: "/tmp/events.jsonl",
+    allowRemotePlan: false,
+    dashboard: true,
+  };
 }
 
 /** Drive a request straight through a live `http.Server`'s "request" listener — no socket bound.
@@ -87,6 +95,7 @@ describe("registerBridgeRoutes", () => {
       "POST /role",
       "POST /unit",
       "GET /",
+      "GET /events",
     ]) {
       expect(paths).toContain(expected);
     }

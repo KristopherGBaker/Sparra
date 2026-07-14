@@ -6,6 +6,8 @@
  * subprocess spawning. The clock is injected so tests are deterministic.
  */
 
+import type { BridgeEventInput } from "./events.ts";
+
 export type JobStatus = "running" | "succeeded" | "failed" | "canceled";
 
 export interface Job {
@@ -47,6 +49,10 @@ export interface JobStoreOptions {
   now?: () => number;
   /** Injected id generator. Default `crypto.randomUUID`. */
   genId?: () => string;
+  /** Optional lifecycle event emitter (an `EventLog.emit`-shaped seam) — `createJob` emits
+   *  `job_started`, `finish`/`cancelJob` emit `job_done`. Absent by default: a store with no `onEvent`
+   *  behaves byte-identically to before this feed existed. */
+  onEvent?: (partial: BridgeEventInput) => void;
 }
 
 /** In-memory, bounded, insertion-ordered job store. */
@@ -56,11 +62,13 @@ export class JobStore {
   private readonly lastNJobs: number;
   private readonly now: () => number;
   private readonly genId: () => string;
+  private readonly onEvent?: (partial: BridgeEventInput) => void;
 
   constructor(options: JobStoreOptions = {}) {
     this.lastNJobs = Math.max(1, options.lastNJobs ?? 50);
     this.now = options.now ?? Date.now;
     this.genId = options.genId ?? (() => globalThis.crypto.randomUUID());
+    this.onEvent = options.onEvent;
   }
 
   createJob(input: CreateJobInput): Job {
@@ -75,6 +83,12 @@ export class JobStore {
     if (input.root !== undefined) job.root = input.root;
     this.jobs.set(id, job);
     this.evictOverflow();
+    this.onEvent?.({
+      type: "job_started",
+      jobId: job.id,
+      kind: job.kind,
+      ...(job.root !== undefined ? { root: job.root } : {}),
+    });
     return job;
   }
 
@@ -98,6 +112,12 @@ export class JobStore {
     if (!job) return;
     job.status = input.status;
     if (input.exitCode !== undefined) job.exitCode = input.exitCode;
+    this.onEvent?.({
+      type: "job_done",
+      jobId: job.id,
+      status: job.status,
+      ...(job.root !== undefined ? { root: job.root } : {}),
+    });
   }
 
   /** Register a cancel callback (e.g. to kill a subprocess) invoked by {@link cancelJob}. */
@@ -122,6 +142,12 @@ export class JobStore {
       this.cancels.delete(id);
     }
     job.status = "canceled";
+    this.onEvent?.({
+      type: "job_done",
+      jobId: job.id,
+      status: job.status,
+      ...(job.root !== undefined ? { root: job.root } : {}),
+    });
     return job;
   }
 

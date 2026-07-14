@@ -19,6 +19,7 @@ describe("loadBridgeConfig", () => {
     expect(cfg.port).toBe(8787);
     expect(cfg.lastNJobs).toBe(50);
     expect(cfg.auditLogPath).toBe("/home/tester/.sparra/bridge-audit.log");
+    expect(cfg.eventsLogPath).toBe("/home/tester/.sparra/bridge-events.jsonl");
     expect(cfg.allowRemotePlan).toBe(false);
     expect(cfg.bind).toBeUndefined();
     expect(cfg.discoverProjects).toBe(false);
@@ -70,6 +71,13 @@ describe("loadBridgeConfig", () => {
     expect(cfg.lastNJobs).toBe(5);
     expect(cfg.auditLogPath).toBe("/home/tester/logs/a.log");
     expect(cfg.allowRemotePlan).toBe(true);
+  });
+
+  it("honors an explicit eventsLogPath override and expands ~ (mirrors auditLogPath)", () => {
+    const cfg = withYaml(
+      `roots:\n  - /home/tester/proj\neventsLogPath: ~/logs/events.jsonl\n`,
+    );
+    expect(cfg.eventsLogPath).toBe("/home/tester/logs/events.jsonl");
   });
 
   it("uses SPARRA_BRIDGE_CONFIG path (expanding ~) when set", () => {

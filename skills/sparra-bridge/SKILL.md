@@ -36,10 +36,13 @@ poll-until-done). Source it or crib from it: `source skills/sparra-bridge/script
 ## Two rules that shape every call
 
 1. **Phase triggers are ASYNC.** `/init /freeze /build /reflect /resume /conduct` return `202 {jobId}`
-   immediately and run in the background. You must **poll `GET /jobs/:id`** until `status` is terminal
+   immediately and run in the background. **Poll `GET /jobs/:id`** until `status` is terminal
    (`succeeded` | `failed` | `canceled`) and read its `log`. List every tracked job newest-first with
    `GET /jobs` (`bridge jobs`) — the same per-job projection minus `log`; jobs are in-memory since
-   bridge boot. A `/conduct` job may PARK a decision: while
+   bridge boot. Watching MULTIPLE jobs at once? `GET /events?since=<cursor>` (`bridge events
+   [cursor]`) returns every NEW `job_started`/`job_done` across ALL jobs in one request, instead of
+   polling each job's `GET /jobs/:id` individually — still poll the specific job's `GET /jobs/:id` for
+   its `log`/`pendingDecisions`. A `/conduct` job may PARK a decision: while
    `status` stays `running`, `GET /jobs/:id` carries `pendingDecisions:[{seq,…}]` — answer one with
    `POST /jobs/:id/decision {seq, answer}` (`bridge decide <jobId> <seq> <answer>`) and it unparks.
    `/plan`, `/conduct`'s decision route, `/role`, `/unit`, and the `GET`s are synchronous (they return
@@ -101,6 +104,14 @@ curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" -H "Content-Type
 ```bash
 curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" "$SPARRA_BRIDGE_URL/jobs/$ID"          # {status,log,exitCode?,result?}
 curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" "$SPARRA_BRIDGE_URL/jobs/$ID/cancel"  # SIGTERM→SIGKILL
+```
+
+**Events feed (cursor-delta, across ALL jobs)** — `GET /events` (`bridge events [since]`):
+```bash
+curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" "$SPARRA_BRIDGE_URL/events?since=0"
+# {events:[{id,ts,type:"job_started"|"job_done"|"decision_parked",jobId?,root?,kind?,status?,…}], cursor}
+# Save `cursor` and pass it back as `since` next poll — cheaper than enumerating jobs + GET /jobs/:id
+# each. `decision_parked` is reserved (typed, not yet emitted).
 ```
 
 ## The job-watch loop (for the async phase endpoints)

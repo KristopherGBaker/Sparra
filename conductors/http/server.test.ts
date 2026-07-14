@@ -23,6 +23,7 @@ function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     port: 8787,
     lastNJobs: 50,
     auditLogPath: "/tmp/audit.log",
+    eventsLogPath: "/tmp/events.jsonl",
     allowRemotePlan: false,
     dashboard: true,
     ...overrides,
