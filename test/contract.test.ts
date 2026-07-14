@@ -132,6 +132,29 @@ describe("negotiateContract — writable-scratch session env (U-X #2)", () => {
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
+  it("SPARRA_JUDGE_SANDBOX=1 on the contract-EVALUATOR request only — NOT the contract-generator", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    // Isolate from a flag-on FULL-suite run: the contract-generator env merges process.env, so proving
+    // the WIRING flags only the evaluator requires an ambient-clean baseline.
+    const prev = process.env.SPARRA_JUDGE_SANDBOX;
+    delete process.env.SPARRA_JUDGE_SANDBOX;
+    const session = fakeSession(() => "mytool run");
+    try {
+      await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, agreeExec);
+      const genCall = session.calls.find((c) => c.role === "contract-generator")!;
+      const evalCall = session.calls.find((c) => c.role === "contract-evaluator")!;
+      // The sandboxed judge (contract-evaluator) gets the flag → its socket-dependent suites SKIP.
+      expect(evalCall.env!.SPARRA_JUDGE_SANDBOX).toBe("1");
+      // The proposer (contract-generator) must NOT be flagged.
+      expect(genCall.env!.SPARRA_JUDGE_SANDBOX).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.SPARRA_JUDGE_SANDBOX;
+      else process.env.SPARRA_JUDGE_SANDBOX = prev;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
   it("user build.env still overrides the negotiation scratch defaults", async () => {
     const { ctx, root, wt } = await makeCtx();
     ctx.config.build.env = { TMPDIR: "/mine", FOO: "1" };

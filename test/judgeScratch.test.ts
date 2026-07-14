@@ -156,6 +156,21 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
     expect(text).toMatch(/UN-RUN/);
   });
 
+  it("names SPARRA_JUDGE_SANDBOX and states the full suite is expected green / nonzero exit = real signal", () => {
+    // Assertion 12: under the flag, socket suites SKIP, so a nonzero full-suite exit is a REAL signal.
+    const text = judgeCapabilityNotesText({
+      backendId: "codex",
+      hasOsSandbox: true,
+      sandboxMode: "workspace-write",
+      scratchEnabled: true,
+    });
+    expect(text).toContain("SPARRA_JUDGE_SANDBOX=1");
+    expect(text.toUpperCase()).toMatch(/EXPECTED green/i);
+    expect(text.toUpperCase()).toMatch(/REAL (ARTIFACT )?SIGNAL/);
+    // The same forward-looking note reaches a read-only judge too (the flag applies to the full suite).
+    expect(sandboxCapabilityNotesText(codex("read-only"))).toContain("SPARRA_JUDGE_SANDBOX=1");
+  });
+
   describe("vitest-vite-temp-write entry", () => {
     it("is PRESENT for read-only + hasOsSandbox=true, regardless of scratchEnabled", () => {
       for (const scratchEnabled of [true, false]) {

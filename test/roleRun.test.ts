@@ -742,6 +742,62 @@ describe("runRole — writable-scratch env layer for sandboxed build sessions (U
   });
 });
 
+describe("runRole — SPARRA_JUDGE_SANDBOX flag is judge-only (interactive run_role/eval)", () => {
+  // The sandboxed-judge roles get the flag so their socket-dependent real-bin/tsx suites vitest-SKIP;
+  // the generator's self-verify must keep running everything it can (never the flag).
+  it.each(["evaluator", "contract-evaluator"] as RoleKind[])(
+    "%s: request env carries SPARRA_JUDGE_SANDBOX=1",
+    async (kind) => {
+      const { ctx, dir } = await makeCtx();
+      const rec = recorder();
+      await runRole({
+        ctx,
+        roleKind: kind,
+        brief: "grade",
+        contract: "- the thing works",
+        runSessionFn: rec.fn,
+        integrityDeps: cleanIntegrityDeps,
+      });
+      expect(rec.calls[0]!.env!.SPARRA_JUDGE_SANDBOX).toBe("1");
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
+
+  it("generator: request env has NO SPARRA_JUDGE_SANDBOX flag (self-verify runs everything)", async () => {
+    const { ctx, dir } = await makeCtx();
+    // Isolate from a flag-on FULL-suite run: the generator env merges process.env, so proving the
+    // WIRING adds nothing requires an ambient-clean baseline.
+    const prev = process.env.SPARRA_JUDGE_SANDBOX;
+    delete process.env.SPARRA_JUDGE_SANDBOX;
+    const rec = recorder();
+    try {
+      await runRole({
+        ctx,
+        roleKind: "generator",
+        brief: "build it",
+        runSessionFn: rec.fn,
+        changedFilesFn: () => [path.join(dir, "x.ts")],
+      });
+      expect(rec.calls[0]!.env!.SPARRA_JUDGE_SANDBOX).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.SPARRA_JUDGE_SANDBOX;
+      else process.env.SPARRA_JUDGE_SANDBOX = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["reviewer", "contract-generator"] as RoleKind[])(
+    "%s: proposer role gets NO flag",
+    async (kind) => {
+      const { ctx, dir } = await makeCtx(false);
+      const rec = recorder();
+      await runRole({ ctx, roleKind: kind, brief: "look at it", runSessionFn: rec.fn });
+      expect(rec.calls[0]!.env?.SPARRA_JUDGE_SANDBOX).toBeUndefined();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
+});
+
 /** A REAL offline git repo (main worktree) plus a linked worktree of it. Local `git` only — no
  *  network/model. Returns both dirs so a test can target either as the eval workspace. */
 function makeRepoWithWorktree(): { repo: string; worktree: string } {

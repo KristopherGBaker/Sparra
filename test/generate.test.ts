@@ -90,6 +90,26 @@ describe("generateItem — writable-scratch session env (U-X #1/#3/#4)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("autonomous generator env has NO SPARRA_JUDGE_SANDBOX flag (self-verify must run everything)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    // Isolate from a flag-on FULL-suite run (`SPARRA_JUDGE_SANDBOX=1 npm test`): the generator env
+    // merges process.env, so proving the WIRING adds nothing requires an ambient-clean baseline.
+    const prev = process.env.SPARRA_JUDGE_SANDBOX;
+    delete process.env.SPARRA_JUDGE_SANDBOX;
+    let captured: RunSessionParams | undefined;
+    try {
+      await generateItem({
+        ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+        runSessionFn: fakeRun((p) => (captured = p)),
+      });
+      expect(captured!.env!.SPARRA_JUDGE_SANDBOX).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.SPARRA_JUDGE_SANDBOX;
+      else process.env.SPARRA_JUDGE_SANDBOX = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("user build.env still overrides the generator scratch defaults", async () => {
     const { ctx, dir } = await ctxFor("cli");
     ctx.config.build.env = { TMPDIR: "/mine", FOO: "1" };

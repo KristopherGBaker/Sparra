@@ -109,6 +109,16 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("carries SPARRA_JUDGE_SANDBOX=1 in the evaluator request env (socket suites SKIP under the judge)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    expect(rec.calls[0]!.env!.SPARRA_JUDGE_SANDBOX).toBe("1");
+    // The writable-scratch layer is still merged in alongside the flag (unrelated env preserved).
+    expect(rec.calls[0]!.env!.TMPDIR).toMatch(/sprj-[0-9a-f]{8}/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("an integrity violation FORCES the verdict to fail and records the blocking line in the verdict file", async () => {
     const { ctx, dir } = await makeCtx();
     ctx.store.data.build.branch = "sparra/x";
