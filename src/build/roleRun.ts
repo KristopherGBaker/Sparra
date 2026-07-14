@@ -31,7 +31,7 @@ import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
-import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
+import { REPORT_REASK_MAX_BUDGET_USD, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
@@ -603,6 +603,18 @@ export interface RoleRunResult {
 function hasCompletionReport(text: string): boolean {
   const isReport = (v: any) => v && typeof v === "object" && ("report" in v || "deviations" in v);
   return !!extractJsonWhere(text, isReport);
+}
+
+/** True when `text` carries a parseable EVALUATOR verdict — a JSON block with a `scores` OBJECT and a
+ *  `verdict`/`weightedTotal` field, the SAME `isVerdict` shape `parseVerdict` (below) and the
+ *  autonomous `evaluate.ts` re-ask use. Used to decide whether a cap-killed evaluator forfeited its
+ *  verdict: empty text, prose with no JSON, and incidental/wrong-shape JSON (e.g. `{"cmd":...}`) all
+ *  return false (→ recover via a verdict re-ask), while a properly-shaped verdict returns true (→
+ *  nothing to recover). Pins the re-ask predicate to VERDICT shape, not "any JSON exists". */
+function hasVerdictShape(text: string): boolean {
+  const isVerdict = (v: any) =>
+    v && typeof v === "object" && v.scores && typeof v.scores === "object" && ("verdict" in v || "weightedTotal" in v);
+  return !!extractJsonWhere(text, isVerdict);
 }
 
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
@@ -1662,6 +1674,56 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     }
   }
 
+  // One-shot VERDICT re-ask (build.jsonReask) — the interactive EVALUATOR analogue of the writer
+  // re-ask above and of generate.ts's report re-ask (shared `jsonReask.ts` mechanics, no forked
+  // prompt). An evaluator killed by OUR OWN budget cap or turn cap (never a provider limit) whose
+  // partial reply carries NO verdict-shaped JSON forfeited its verdict — a REPORT problem, not a
+  // grading problem — so resume the SAME session ONCE, tightly capped (1 turn) + text-only, to
+  // re-emit only the JSON verdict block. The gate mirrors the generator rule exactly:
+  //   • evaluator role AND (`res.hitBudget` OR `res.hitMaxTurns`) — our-own-cap death, and
+  //   • `!res.limitHit` — a provider-limited session can't be resumed usefully (left to the
+  //     conductor, exactly as the writer path and evaluate.ts leave a limited reply), and
+  //   • `!hasVerdictShape(res.resultText)` — an already-parseable verdict (even under a cap) is
+  //     kept as-is; only incidental/wrong-shape/absent JSON triggers recovery (not "any JSON").
+  // Cap telemetry is NEVER laundered: `hitBudget`/`hitMaxTurns` (set by the classification matrix
+  // above) STAY set on recovery — only the recovered verdict text surfaces (the evaluator branch
+  // below re-parses `result.resultText`). A failed/disabled re-ask leaves today's forced-fail
+  // "no verdict parsed" verdict for the conductor to decide a full re-eval. Fires at most once.
+  const evaluatorCapNoVerdict =
+    evaluator && (res.hitBudget === true || res.hitMaxTurns === true) && !res.limitHit && !hasVerdictShape(res.resultText);
+  if (evaluatorCapNoVerdict && ctx.config.build.jsonReask) {
+    const reaskBudget = effectiveUsdCap > 0 ? Math.min(effectiveUsdCap, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
+    const retry = await run({
+      ...commonReq,
+      backend: ranRole.backend,
+      model: ranRole.model,
+      effort: ranRole.effort,
+      baseUrl: ranRole.baseUrl,
+      apiKey: ranRole.apiKey,
+      traceSeq: (req.traceSeq ?? 1) + chain.length,
+      ...reportReaskOverrides({
+        role: `role-run-${roleKind}-reask`,
+        sessionId: res.sessionId,
+        tightCap: { maxBudgetUsd: reaskBudget },
+        prompt: VERDICT_REASK_PROMPT,
+      }),
+    });
+    result.costUsd += costUsdOrZero(retry.costUsd);
+    result.tokens += retry.tokens;
+    // Recover ONLY on a usable, verdict-shaped reply (never a limited retry). The recovered text
+    // flows through the evaluator branch's `parseVerdict(result.resultText, …)` below, so the
+    // recovered scores/verdict surface in `result.verdict`/`verdictPath`/`--out`. The cap flags are
+    // deliberately left untouched — recovery never launders a capped run as complete.
+    if (retry.resultText.trim() && !retry.limitHit && hasVerdictShape(retry.resultText)) {
+      result.resultText = retry.resultText;
+      const recovered =
+        `role-run-${roleKind}: recovered the JSON verdict via a one-shot re-ask (build.jsonReask) after the cap — ` +
+        `the cap telemetry above still stands.`;
+      if (!result.errors.includes(recovered)) result.errors = [...result.errors, recovered];
+      info(recovered);
+    }
+  }
+
   // Source-integrity guard for ANY scratch-enabled judge (evaluator OR contract-evaluator running
   // under workspace-write): detect + REVERT any write to the tracked artifact surface the judge made
   // during its exercise/verify probe, and report the mutated paths. Computed ONCE here so both the
@@ -1674,7 +1736,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // evidence/blocking/notes — it's allowed to see it; the conductor is not).
     // The harness — not the model's self-report — decides whether run_command/http_request
     // verifications actually ran; override feeds the pass gate above and the pivot/build branches.
-    const verdict = redactVerdict(parseVerdict(ctx, res.resultText, exerciser?.exerciseStatus()), holdoutText);
+    // `result.resultText` (not raw `res.resultText`) so a verdict recovered by the cap-death re-ask
+    // above is what gets parsed; identical to `res.resultText` when no re-ask recovered anything.
+    const verdict = redactVerdict(parseVerdict(ctx, result.resultText, exerciser?.exerciseStatus()), holdoutText);
     // If the evaluator mutated the artifact surface, FORCE the verdict to fail (a verdict from an
     // evaluator that edited the code it grades cannot be trusted). The write was already reverted.
     if (mutatedArtifacts.length) {

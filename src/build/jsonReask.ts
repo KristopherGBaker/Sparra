@@ -11,6 +11,17 @@ export const REPORT_REASK_PROMPT =
   "Your previous reply had no parseable report JSON. Re-emit ONLY the JSON block per your instructions — nothing else.";
 
 /**
+ * The EVALUATOR's cap-death verdict re-ask prompt: a session killed by our budget/turn cap left no
+ * verdict-shaped JSON at all (no block, or only incidental non-verdict JSON). Names the *verdict*
+ * block specifically — the evaluator analogue of `REPORT_REASK_PROMPT` — so the tight-capped resume
+ * (`roleRun.ts`'s cap-death recovery) re-emits ONLY the JSON verdict block, not more grading work.
+ * Lives here so the interactive evaluator re-ask shares the one prompt paragraph and `roleRun.ts`
+ * never copy-pastes a re-ask literal of its own.
+ */
+export const VERDICT_REASK_PROMPT =
+  "Your previous reply had no parseable JSON verdict. Re-emit ONLY the JSON verdict block per your instructions — nothing else.";
+
+/**
  * The evaluator's WRONG-SHAPE verdict re-ask: a JSON block WAS emitted but it fails `isVerdict`
  * (e.g. missing/non-object `scores`, missing `verdict`/`weightedTotal`). A generic "re-emit the
  * block" can't fix a block that was already emitted, so this NAMES the specific required fields
@@ -52,15 +63,21 @@ export const REPORT_REASK_MAX_BUDGET_USD = 0.5;
  * Spread AFTER `commonReq`, these win. No `tightCap` → exactly `{role, prompt, resume}` (the
  * autonomous generator passes `tightCap` on the turn-cap path; a base re-ask without it is a
  * separate path and stays unchanged).
+ *
+ * `prompt` overrides the default report-only prompt — the interactive EVALUATOR cap-death re-ask
+ * passes `VERDICT_REASK_PROMPT` (re-emit the verdict block, not a generator report) so both the
+ * writer and evaluator resumes share this ONE overrides builder and keep every re-ask prompt
+ * literal in this module. Defaults to `REPORT_REASK_PROMPT` (writer/generator path unchanged).
  */
 export function reportReaskOverrides(opts: {
   role: string;
   sessionId: string;
   tightCap?: { maxBudgetUsd: number };
+  prompt?: string;
 }): Partial<RunSessionParams> {
   return {
     role: opts.role,
-    prompt: REPORT_REASK_PROMPT,
+    prompt: opts.prompt ?? REPORT_REASK_PROMPT,
     resume: opts.sessionId,
     ...(opts.tightCap
       ? {
