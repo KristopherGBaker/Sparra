@@ -138,7 +138,11 @@ button (disabled-with-reason on an empty prompt), and a `resume run` affordance;
 own prompt draft. Rail cards slim to identity + status and act as deck selectors. **full cycle** hides
 the deck and restores the expert per-card action surface (build/reflect/resume/init/freeze triggers,
 `unit`, the role-kind select + run role, budget/maxTurns/`fresh` controls). The live job feed with the
-redacted phase log and the `/role`/`/unit` summary readouts stay available in both modes.
+redacted phase log and the `/role`/`/unit` summary readouts stay available in both modes. The feed's
+lifecycle status is driven by ONE `GET /events?since=<cursor>` poll per 1.5s tick covering every tracked
+job — including one triggered remotely or from another tab — NOT a per-job `GET /jobs/:id` sweep; only
+the currently-selected job's detail stage (its streaming phase log + full `pendingDecisions`) is polled
+via `GET /jobs/:id`, and only while that job is running.
 
 ## Endpoints
 

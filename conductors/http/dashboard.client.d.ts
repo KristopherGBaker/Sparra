@@ -69,6 +69,42 @@ export function triggerRole(deps: ControllerDeps, params: Record<string, unknown
 export function triggerUnit(deps: ControllerDeps, params: Record<string, unknown>): Promise<void>;
 export function pollJob(deps: ControllerDeps, jobId: string): Promise<void>;
 export function rehydrateJobs(deps: ControllerDeps): Promise<void>;
+
+/** One `conductors/http/events.ts` `BridgeEvent` as seen by the client — loose on purpose (the JS file
+ *  is the source of truth; `applyEvents` tolerates an unrecognized `type` or a missing `jobId`). */
+export interface DashboardEvent {
+  type: string;
+  jobId?: string;
+  root?: string;
+  kind?: string;
+  status?: string;
+  seq?: number;
+  question?: string;
+  [extra: string]: unknown;
+}
+
+/** The minimal feed-row job shape `applyEvents` reads/writes — a subset of the fuller `GET /jobs/:id`
+ *  projection (loose on purpose, same convention as the rest of this file). */
+export interface DashboardJob {
+  id: string;
+  kind?: string;
+  root?: string;
+  status: string;
+  pendingDecisions?: Array<{ seq?: number; question?: string; [extra: string]: unknown }>;
+  [extra: string]: unknown;
+}
+
+/** Poll `GET /events?since=<state.eventCursor>` (one request per tick, all jobs) and hand the delta to
+ *  `deps.view.applyEvents`; advances `deps.state.eventCursor` monotonically. */
+export function pollEvents(deps: ControllerDeps): Promise<void>;
+
+/** Pure reducer: fold one `/events` delta batch onto the tracked job `Map` + display order. Never
+ *  mutates its inputs; idempotent under re-application. */
+export function applyEvents(
+  prevJobs: Map<string, DashboardJob>,
+  prevOrder: string[],
+  events: DashboardEvent[],
+): { jobs: Map<string, DashboardJob>; order: string[] };
 export function submitDecision(deps: ControllerDeps, jobId: string, params: Record<string, unknown>): Promise<void>;
 export function cancelJob(deps: ControllerDeps, jobId: string): Promise<void>;
 export function showRoleResult(deps: ControllerDeps, payload: unknown): void;

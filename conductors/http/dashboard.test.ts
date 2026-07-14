@@ -15,6 +15,7 @@ import {
   CONSOLE_MODES,
   DEFAULT_CONSOLE_MODE,
   apiCall,
+  applyEvents,
   applyJobFeed,
   applyStage,
   buildRequest,
@@ -31,6 +32,7 @@ import {
   normalizeMode,
   planJobFeed,
   planStage,
+  pollEvents,
   pollJob,
   projectSummary,
   rehydrateJobs,
@@ -133,10 +135,11 @@ function fakeCtx(config: { dashboard: boolean }): RouteContext {
 // --- API layer -------------------------------------------------------------------------------
 
 describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point", () => {
-  // GET /events (the cursor-delta lifecycle feed shared across ALL jobs — conductors/http/events.ts)
-  // is DELIBERATELY absent here: this unit ships the endpoint + its bridge.sh client, not a dashboard
-  // client call — the dashboard's job feed still polls GET /jobs/:id per card. Wiring the dashboard UI
-  // to consume GET /events is out of scope for this unit.
+  // GET /events (the cursor-delta lifecycle feed shared across ALL jobs — conductors/http/events.ts) IS
+  // now consumed by the dashboard: `pollEvents` fetches it once per poll tick and folds the delta into
+  // the tracked job state (see `applyEvents` below), replacing the old per-running-job `GET /jobs/:id`
+  // sweep. `GET /jobs/:id` itself is KEPT — polled only for the currently-selected RUNNING job's detail
+  // stage (streaming phase log + full `pendingDecisions` projection), neither of which `/events` carries.
   it("lists exactly the documented endpoints", () => {
     const set = API_ENDPOINTS.map((e: { method: string; path: string }) => `${e.method} ${e.path}`).sort();
     expect(set).toEqual(
@@ -144,6 +147,7 @@ describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point",
         "GET /health",
         "GET /projects",
         "GET /jobs",
+        "GET /events",
         "POST /build",
         "POST /reflect",
         "POST /resume",
@@ -205,6 +209,21 @@ describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point",
     expect(() => buildRequest("POST", "/jobs/abc/cancel/../../role", { token: TOKEN })).toThrow();
     // A harmless-looking prefix followed by a smuggled extra segment must still fail (length mismatch).
     expect(() => buildRequest("GET", "/jobs/abc/extra", { token: TOKEN })).toThrow();
+  });
+
+  it("accepts a `?since=<cursor>` query on the STATIC GET /events endpoint (no `:id` segment)", () => {
+    const { url } = buildRequest("GET", "/events?since=5", { token: TOKEN });
+    expect(url).toBe("/events?since=5");
+    expect(() => buildRequest("GET", "/events?since=0", { token: TOKEN })).not.toThrow();
+  });
+
+  it("a query string on a NON-allowlisted path is still rejected (no allowlist regression)", () => {
+    expect(() => buildRequest("GET", "/evil?since=5", { token: TOKEN })).toThrow();
+  });
+
+  it("a fragment on GET /events is still rejected (fragment never allowed, query or not)", () => {
+    expect(() => buildRequest("GET", "/events#frag", { token: TOKEN })).toThrow();
+    expect(() => buildRequest("GET", "/events?since=5#frag", { token: TOKEN })).toThrow();
   });
 
   it("apiCall maps 401 -> authError and 409 -> locked, without throwing", async () => {
@@ -1505,6 +1524,260 @@ describe("rehydrateJobs — the GET /jobs listing → feed rehydration controlle
   });
 });
 
+// --- pollEvents / applyEvents — the GET /events cursor-delta feed -------------------------------
+
+describe("pollEvents — one GET /events?since=<cursor> per call, cursor advances monotonically", () => {
+  it("issues GET /events?since=<current cursor> and advances state.eventCursor to the response cursor", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return jsonResponse(200, { events: [{ type: "job_started", jobId: "j1", kind: "build", root: "/a" }], cursor: 7 });
+    });
+    const view = fakeView() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    view.applyEvents = vi.fn();
+    const state = { eventCursor: 3 };
+    await pollEvents({ storage: fakeStorage(TOKEN), view, fetchImpl, state });
+    expect(calledUrl).toBe("/events?since=3");
+    expect(state.eventCursor).toBe(7);
+    expect(view.applyEvents).toHaveBeenCalledWith([{ type: "job_started", jobId: "j1", kind: "build", root: "/a" }]);
+  });
+
+  it("defaults to since=0 when state.eventCursor is absent", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return jsonResponse(200, { events: [], cursor: 0 });
+    });
+    const view = fakeView() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    view.applyEvents = vi.fn();
+    await pollEvents({ storage: fakeStorage(TOKEN), view, fetchImpl, state: {} });
+    expect(calledUrl).toBe("/events?since=0");
+  });
+
+  it("an EMPTY events:[] delta does NOT regress the cursor (advances, never goes backward)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { events: [], cursor: 12 }));
+    const view = fakeView() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    view.applyEvents = vi.fn();
+    const state = { eventCursor: 12 };
+    await pollEvents({ storage: fakeStorage(TOKEN), view, fetchImpl, state });
+    expect(state.eventCursor).toBe(12);
+    expect(view.applyEvents).toHaveBeenCalledWith([]);
+
+    // A stale/out-of-order response reporting a cursor STRICTLY BELOW the current LIVE cursor must be
+    // discarded WHOLESALE — no cursor write, no `applyEvents` call at all (not merely "clamped").
+    view.applyEvents.mockClear();
+    const fetchStale = vi.fn(async () => jsonResponse(200, { events: [{ type: "job_done", jobId: "j1", status: "running" }], cursor: 4 }));
+    await pollEvents({ storage: fakeStorage(TOKEN), view, fetchImpl: fetchStale, state });
+    expect(state.eventCursor).toBe(12);
+    expect(view.applyEvents).not.toHaveBeenCalled();
+  });
+
+  it("a 401 routes to re-auth and never calls view.applyEvents", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { error: "unauthorized" }));
+    const view = fakeView() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    view.applyEvents = vi.fn();
+    const storage = fakeStorage(TOKEN);
+    const state = { eventCursor: 0 };
+    await pollEvents({ storage, view, fetchImpl, state });
+    expect(view.applyEvents).not.toHaveBeenCalled();
+    expect(view.showReauth).toHaveBeenCalled();
+    expect(storage.clearToken).toHaveBeenCalled();
+  });
+
+  // --- CURSOR RACE: an out-of-order (late/slower) response must never regress state (pivot fix) -----
+
+  it("RACE: an older response resolving AFTER a newer one settled is discarded — cursor/job never regress", async () => {
+    // Two overlapping pollEvents calls share the SAME `state` (as two ticks racing over a slow bridge
+    // would): the OLDER request (captured cursor=0, would advance to cursor=1, job → "running") is
+    // slower and resolves SECOND; the NEWER request (also captured cursor=0, advances to cursor=2, job
+    // → "succeeded") is faster and resolves FIRST. The older response's cursor (1) is now BELOW the
+    // live cursor (2) by the time it lands — it must be discarded wholesale: neither the cursor nor the
+    // job's status may roll backward.
+    const view = fakeView() as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const jobs = new Map<string, any>([["j1", { id: "j1", kind: "build", root: "/r", status: "running" }]]); // eslint-disable-line @typescript-eslint/no-explicit-any
+    let order = ["j1"];
+    view.applyEvents = vi.fn((events: any[]) => {
+      // eslint-disable-line @typescript-eslint/no-explicit-any
+      const folded = applyEvents(jobs, order, events);
+      jobs.clear();
+      for (const [id, job] of folded.jobs) jobs.set(id, job);
+      order = folded.order;
+    });
+    const state = { eventCursor: 0 };
+    const storage = fakeStorage(TOKEN);
+
+    let resolveOlder!: (v: unknown) => void;
+    const olderPending = new Promise((resolve) => {
+      resolveOlder = resolve;
+    });
+    const fetchOlder = vi.fn(() => olderPending.then(() => jsonResponse(200, { events: [{ type: "job_done", jobId: "j1", status: "running" }], cursor: 1 })));
+    const fetchNewer = vi.fn(async () => jsonResponse(200, { events: [{ type: "job_done", jobId: "j1", status: "succeeded" }], cursor: 2 }));
+
+    // Fire the OLDER (slower) call first, WITHOUT awaiting it — it will resolve only once we release
+    // `resolveOlder` below, simulating it being the slower of the two overlapping requests.
+    const olderCall = pollEvents({ storage, view, fetchImpl: fetchOlder, state });
+    // The NEWER (faster) call fires and fully resolves BEFORE the older one settles.
+    await pollEvents({ storage, view, fetchImpl: fetchNewer, state });
+    expect(state.eventCursor).toBe(2);
+    expect(jobs.get("j1")!.status).toBe("succeeded");
+
+    // Now let the older, slower response land.
+    resolveOlder(undefined);
+    await olderCall;
+
+    // The older response must have been discarded WHOLESALE: the cursor stays at 2 (never regresses to
+    // 1) and the job stays "succeeded" (never rolled back to "running").
+    expect(state.eventCursor).toBe(2);
+    expect(jobs.get("j1")!.status).toBe("succeeded");
+    // applyEvents was invoked exactly once (for the newer batch) — the discarded older response never
+    // reached the view/reducer layer at all.
+    expect(view.applyEvents).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("applyEvents — pure reducer folding an /events delta onto tracked job state", () => {
+  it("job_started for an UNKNOWN id adds a minimal running row", () => {
+    const { jobs, order } = applyEvents(new Map(), [], [{ type: "job_started", jobId: "new-1", kind: "build", root: "/r" }]);
+    expect(jobs.get("new-1")).toEqual({ id: "new-1", kind: "build", root: "/r", status: "running" });
+    expect(order).toEqual(["new-1"]);
+  });
+
+  it("job_started for a KNOWN id keeps/sets running without touching other fields", () => {
+    const prevJobs = new Map([["j1", { id: "j1", kind: "build", root: "/r", status: "running", log: "hello" }]]);
+    const { jobs } = applyEvents(prevJobs, ["j1"], [{ type: "job_started", jobId: "j1", kind: "build", root: "/r" }]);
+    expect(jobs.get("j1")).toEqual({ id: "j1", kind: "build", root: "/r", status: "running", log: "hello" });
+  });
+
+  it("job_done sets the EXACT terminal status — succeeded / failed / canceled are distinct outcomes", () => {
+    const base = new Map([
+      ["j-ok", { id: "j-ok", kind: "build", root: "/r", status: "running" }],
+      ["j-bad", { id: "j-bad", kind: "build", root: "/r", status: "running" }],
+      ["j-cancel", { id: "j-cancel", kind: "build", root: "/r", status: "running" }],
+    ]);
+    const order = ["j-ok", "j-bad", "j-cancel"];
+    const events = [
+      { type: "job_done", jobId: "j-ok", status: "succeeded" },
+      { type: "job_done", jobId: "j-bad", status: "failed" },
+      { type: "job_done", jobId: "j-cancel", status: "canceled" },
+    ];
+    const { jobs } = applyEvents(base, order, events);
+    expect(jobs.get("j-ok")!.status).toBe("succeeded");
+    expect(jobs.get("j-bad")!.status).toBe("failed");
+    expect(jobs.get("j-cancel")!.status).toBe("canceled");
+  });
+
+  it("decision_parked attaches a {seq, question} marker into pendingDecisions (feed badge reflects it)", () => {
+    const base = new Map([["j1", { id: "j1", kind: "conduct", root: "/r", status: "running" }]]);
+    const { jobs } = applyEvents(base, ["j1"], [{ type: "decision_parked", jobId: "j1", seq: 3, question: "merge?" }]);
+    expect(jobs.get("j1")!.pendingDecisions).toEqual([{ seq: 3, question: "merge?" }]);
+  });
+
+  it("decision_parked is additive to an existing FULL pendingDecisions entry from a /jobs/:id projection", () => {
+    const base = new Map([
+      [
+        "j1",
+        {
+          id: "j1",
+          kind: "conduct",
+          root: "/r",
+          status: "running",
+          pendingDecisions: [{ seq: 1, unit: "u", kind: "k", question: "first?", options: ["a", "b"], default: "a", expiresAt: "z" }],
+        },
+      ],
+    ]);
+    const { jobs } = applyEvents(base, ["j1"], [{ type: "decision_parked", jobId: "j1", seq: 2, question: "second?" }]);
+    expect(jobs.get("j1")!.pendingDecisions).toEqual([
+      { seq: 1, unit: "u", kind: "k", question: "first?", options: ["a", "b"], default: "a", expiresAt: "z" },
+      { seq: 2, question: "second?" },
+    ]);
+  });
+
+  it("an unrecognized event type, or an event missing jobId, is tolerated (no throw, no state change)", () => {
+    const base = new Map([["j1", { id: "j1", kind: "build", root: "/r", status: "running" }]]);
+    expect(() =>
+      applyEvents(base, ["j1"], [
+        { type: "some_future_event", jobId: "j1" },
+        { type: "job_done", status: "succeeded" }, // no jobId
+        null,
+        undefined,
+      ] as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+    ).not.toThrow();
+    const { jobs, order } = applyEvents(base, ["j1"], [{ type: "some_future_event", jobId: "j1" }] as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(jobs.get("j1")).toEqual({ id: "j1", kind: "build", root: "/r", status: "running" });
+    expect(order).toEqual(["j1"]);
+  });
+
+  it("is idempotent: re-applying the SAME batch yields deep-equal state (no duplicate rows/markers)", () => {
+    const events = [
+      { type: "job_started", jobId: "new-1", kind: "build", root: "/r" },
+      { type: "job_done", jobId: "done-1", status: "succeeded" },
+      { type: "decision_parked", jobId: "j1", seq: 1, question: "Q?" },
+    ];
+    const once = applyEvents(new Map(), [], events);
+    const twice = applyEvents(once.jobs, once.order, events);
+    expect(Array.from(twice.jobs.entries())).toEqual(Array.from(once.jobs.entries()));
+    expect(twice.order).toEqual(once.order);
+  });
+
+  it("is idempotent atop a rehydrateJobs snapshot: the since=0 seed batch never double-counts", () => {
+    // Simulate: GET /jobs rehydration already populated a job, then the since=0 GET /events batch
+    // reports the SAME job's lifecycle — applying it must not create a duplicate row or pending marker.
+    const rehydrated = new Map([
+      ["j1", { id: "j1", kind: "conduct", root: "/r", status: "running", pendingDecisions: [{ seq: 1, unit: "u", kind: "k", question: "Q?", options: ["a"], default: "a", expiresAt: "z" }] }],
+    ]);
+    const order = ["j1"];
+    const seedBatch = [
+      { type: "job_started", jobId: "j1", kind: "conduct", root: "/r" },
+      { type: "decision_parked", jobId: "j1", seq: 1, question: "Q?" },
+    ];
+    const { jobs, order: order2 } = applyEvents(rehydrated, order, seedBatch);
+    expect(order2).toEqual(["j1"]); // no duplicate row
+    expect(jobs.get("j1")!.pendingDecisions).toHaveLength(1); // marker replaced, not duplicated
+    expect(jobs.get("j1")!.status).toBe("running");
+  });
+
+  it("does not mutate its inputs (prevJobs Map / prevOrder array both left untouched)", () => {
+    const prevJobs = new Map([["j1", { id: "j1", kind: "build", root: "/r", status: "running" }]]);
+    const prevOrder = ["j1"];
+    applyEvents(prevJobs, prevOrder, [{ type: "job_done", jobId: "j1", status: "succeeded" }]);
+    expect(prevJobs.get("j1")!.status).toBe("running"); // original Map entry unchanged
+    expect(prevOrder).toEqual(["j1"]);
+  });
+});
+
+describe("events batch flows through the SAME blink-free planJobFeed/applyJobFeed appliers", () => {
+  function toRows(jobs: Map<string, any>, order: string[]) {
+    // eslint-disable-line @typescript-eslint/no-explicit-any
+    return order.map((id) => {
+      const j = jobs.get(id);
+      return { id, sig: JSON.stringify({ status: j.status, pending: (j.pendingDecisions || []).length }), html: `<div>${id}</div>` };
+    });
+  }
+
+  it("a status-changing events batch -> planJobFeed changed:true, applier writes once", () => {
+    const prevJobs = new Map([["j1", { id: "j1", kind: "build", root: "/r", status: "running" }]]);
+    const prevOrder = ["j1"];
+    const prevRows = toRows(prevJobs, prevOrder);
+    const { jobs, order } = applyEvents(prevJobs, prevOrder, [{ type: "job_done", jobId: "j1", status: "succeeded" }]);
+    const nextRows = toRows(jobs, order);
+    const applier = fakeJobApplier();
+    applyJobFeed(applier, prevRows, nextRows);
+    expect(applier.writeJobList).toHaveBeenCalledTimes(1);
+  });
+
+  it("an EMPTY events:[] delta -> planJobFeed changed:false -> ZERO DOM writes (no-op invariant survives the migration)", () => {
+    const prevJobs = new Map([["j1", { id: "j1", kind: "build", root: "/r", status: "running" }]]);
+    const prevOrder = ["j1"];
+    const prevRows = toRows(prevJobs, prevOrder);
+    const { jobs, order } = applyEvents(prevJobs, prevOrder, []);
+    const nextRows = toRows(jobs, order);
+    const applier = fakeJobApplier();
+    applyJobFeed(applier, prevRows, nextRows);
+    expect(applier.writeJobList).not.toHaveBeenCalled();
+    expect(applier.animateRow).not.toHaveBeenCalled();
+  });
+});
+
 // --- VM-executed served boot path: rehydration, deep-link, poll ---------------------------------
 //
 // These tests run the REAL served dashboard page's `<script type="module">` (the inlined
@@ -1673,6 +1946,7 @@ describe("served boot path in node:vm — rehydration, deep-link, poll (assertio
         ],
       };
     }
+    if (url.startsWith("/events")) return { status: 200, data: { events: [], cursor: 0 } };
     return { status: 404, data: { error: "not found" } };
   };
 
@@ -1726,17 +2000,22 @@ describe("served boot path in node:vm — rehydration, deep-link, poll (assertio
     expect(env.getEl("jobList").innerHTML).toContain("elsewhere-1");
   });
 
-  it("(10) rehydrated running job → recurring 1500ms poll; terminal jobs schedule none; polling stops after all terminal", async () => {
+  it("(10) SELECTED running job → recurring 1500ms GET /jobs/:id poll; terminal → polling stops", async () => {
+    // U5: `GET /jobs/:id` is now polled per-tick ONLY for the SELECTED running job (the old model
+    // polled every tracked running job unconditionally) — so this job must be selected (`#job=job-c`)
+    // for the recurring per-job poll to fire at all.
     let jobcStatus = "running";
     const respond: VMOpts["respond"] = (url) => {
       if (url === "/health") return { status: 200, data: { ok: true } };
       if (url === "/projects") return { status: 200, data: { projects: [] } };
       if (url === "/jobs") return { status: 200, data: [{ id: "job-c", kind: "conduct", root: "/r", status: "running", createdAt: 3000 }] };
       if (url === "/jobs/job-c") return { status: 200, data: { id: "job-c", kind: "conduct", root: "/r", status: jobcStatus, log: "" } };
+      if (url.startsWith("/events")) return { status: 200, data: { events: [], cursor: 0 } };
       return { status: 404, data: {} };
     };
-    const { env, api } = await boot({ token: TOKEN, respond });
+    const { env, api } = await boot({ token: TOKEN, hash: "#job=job-c", respond });
     expect(api.state.jobOrder).toEqual(["job-c"]);
+    expect(api.state.selectedJobId).toBe("job-c");
     const pollCount = () => env.fetchCalls.filter((c) => c.url === "/jobs/job-c").length;
     // Two ticks → two recurring poll fetches for the running job.
     env.tick(); await flush();
@@ -1768,6 +2047,106 @@ describe("served boot path in node:vm — rehydration, deep-link, poll (assertio
     env.tick(); await flush();
     expect(env.intervalCount()).toBe(0);
     expect(env.fetchCalls.filter((c) => c.url.startsWith("/jobs/")).length).toBe(0);
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/events")).length).toBe(0);
+  });
+
+  it("(13) tick shape: 3 running jobs + 1 SELECTED running → exactly 1 GET /events + 1 GET /jobs/:id (selected only)", async () => {
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") {
+        return {
+          status: 200,
+          data: [
+            { id: "job-1", kind: "build", root: "/r", status: "running", createdAt: 1 },
+            { id: "job-2", kind: "build", root: "/r", status: "running", createdAt: 2 },
+            { id: "job-3", kind: "build", root: "/r", status: "running", createdAt: 3 },
+          ],
+        };
+      }
+      if (url === "/jobs/job-2") return { status: 200, data: { id: "job-2", kind: "build", root: "/r", status: "running", log: "" } };
+      if (url.startsWith("/events")) return { status: 200, data: { events: [], cursor: 0 } };
+      return { status: 404, data: {} };
+    };
+    const { env, api } = await boot({ token: TOKEN, hash: "#job=job-2", respond });
+    expect(api.state.selectedJobId).toBe("job-2");
+    env.fetchCalls.length = 0; // isolate ONE tick's calls from the boot-time health/projects/jobs fetches
+    env.tick();
+    await flush();
+    const eventsCalls = env.fetchCalls.filter((c) => c.url.startsWith("/events"));
+    const jobCalls = env.fetchCalls.filter((c) => c.url.startsWith("/jobs/"));
+    expect(eventsCalls).toHaveLength(1);
+    expect(jobCalls).toHaveLength(1);
+    expect(jobCalls[0]!.url).toBe("/jobs/job-2");
+  });
+
+  it("(14) selected-but-terminal contrast: another job runs, selected job is terminal → 1 GET /events, 0 GET /jobs/:id", async () => {
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") {
+        return {
+          status: 200,
+          data: [
+            { id: "job-run", kind: "build", root: "/r", status: "running", createdAt: 2 },
+            { id: "job-done", kind: "build", root: "/r", status: "succeeded", createdAt: 1 },
+          ],
+        };
+      }
+      if (url.startsWith("/events")) return { status: 200, data: { events: [], cursor: 0 } };
+      return { status: 404, data: {} };
+    };
+    // The SELECTED job (job-done) is terminal; a DIFFERENT job (job-run) is still running — a
+    // "selected" job alone must not trigger a per-job poll, only a selected RUNNING job does.
+    const { env, api } = await boot({ token: TOKEN, hash: "#job=job-done", respond });
+    expect(api.state.selectedJobId).toBe("job-done");
+    env.fetchCalls.length = 0;
+    env.tick();
+    await flush();
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/events"))).toHaveLength(1);
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/jobs/"))).toHaveLength(0);
+  });
+
+  it("(15) nothing selected → 1 GET /events, 0 GET /jobs/:id", async () => {
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") return { status: 200, data: [{ id: "job-run", kind: "build", root: "/r", status: "running", createdAt: 1 }] };
+      if (url.startsWith("/events")) return { status: 200, data: { events: [], cursor: 0 } };
+      return { status: 404, data: {} };
+    };
+    const { env, api } = await boot({ token: TOKEN, respond }); // no hash → nothing selected
+    expect(api.state.selectedJobId).toBeUndefined();
+    env.fetchCalls.length = 0;
+    env.tick();
+    await flush();
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/events"))).toHaveLength(1);
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/jobs/"))).toHaveLength(0);
+  });
+
+  it("(16) an events batch delivered mid-run surfaces a REMOTE job (never triggered on this page) in the feed", async () => {
+    // job_started for an unknown id arrives via /events — the feed must pick it up without any
+    // GET /jobs/:id ever being fetched for it (proving the feed-level migration, not a fallback poll).
+    let eventsFired = false;
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") return { status: 200, data: [{ id: "job-1", kind: "build", root: "/r", status: "running", createdAt: 1 }] };
+      if (url.startsWith("/events")) {
+        if (!eventsFired) {
+          eventsFired = true;
+          return { status: 200, data: { events: [{ type: "job_started", jobId: "remote-1", kind: "conduct", root: "/other" }], cursor: 1 } };
+        }
+        return { status: 200, data: { events: [], cursor: 1 } };
+      }
+      return { status: 404, data: {} };
+    };
+    const { env, api } = await boot({ token: TOKEN, respond });
+    env.tick();
+    await flush();
+    expect(api.state.jobOrder).toContain("remote-1");
+    expect(env.getEl("jobList").innerHTML).toContain("remote-1");
+    expect(env.fetchCalls.some((c) => c.url === "/jobs/remote-1")).toBe(false);
   });
 
   it("(11) deep-link #job=<existing> restores the selection; a gone id degrades silently", async () => {

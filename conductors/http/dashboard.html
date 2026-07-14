@@ -904,9 +904,11 @@ const storage = {
 const state = {
   ...createConsoleState(),
   targets: [],           // [{root, phase, next}] — from GET /projects
-  jobs: new Map(),        // jobId -> Job (seeded by a trigger, the GET /jobs rehydration, and GET /jobs/:id polls)
+  jobs: new Map(),        // jobId -> Job (seeded by a trigger, the GET /jobs rehydration, GET /events deltas, and GET /jobs/:id polls)
   jobOrder: [],           // most-recent-first jobId order for the feed
   selectedJobId: undefined,
+  eventCursor: 0,          // GET /events?since=<cursor> — advanced monotonically by pollEvents
+  eventsInFlight: false,   // tick-level in-flight guard — never issue an overlapping GET /events poll
   summary: undefined,     // last /role or /unit projected summary (one-off readout, not a job)
   budget: 5,
   maxTurns: 80,
@@ -1004,6 +1006,18 @@ const view = {
     renderJobs();
     if (state.selectedJobId === job.id) renderStage();
   },
+  /* Fold a `GET /events` delta batch (from `pollEvents`) onto the tracked job Map/order via the pure
+   * `applyEvents` reducer, then re-render the feed through the SAME `applyJobFeed` path every other
+   * feed update uses — an empty delta is a true no-op (identical Map/order in, `renderJobs()` still
+   * runs but `applyJobFeed` performs zero DOM writes since nothing changed). Detail-stage rendering is
+   * deliberately NOT triggered here — the selected job's log/pendingDecisions detail still comes only
+   * from its own `GET /jobs/:id` poll (`ensurePolling`), never from the events feed. */
+  applyEvents(events) {
+    const { jobs, order } = applyEvents(state.jobs, state.jobOrder, events);
+    state.jobs = jobs;
+    state.jobOrder = order;
+    renderJobs();
+  },
   renderRoleSummary(summary) {
     state.summary = { kind: "role", data: summary };
     state.selectedJobId = undefined;
@@ -1050,7 +1064,23 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-/* ---------------- polling ---------------- */
+/* ---------------- polling ----------------
+ * A tick does at most TWO fetches: one `GET /events?since=<cursor>` (`pollEvents`) covering every
+ * tracked job's lifecycle status in a single request, and — ONLY when the currently-selected job is
+ * itself running — one `GET /jobs/:id` (`pollJob`) for that job's detail stage (streaming phase log +
+ * the full holdout-safe `pendingDecisions` projection, neither of which `/events` carries). A job that
+ * is running but NOT selected gets no per-job fetch at all — its feed row still updates from the events
+ * delta. Both decisions below read `state` as it stood BEFORE this tick's async calls resolve (the same
+ * convention the old per-job loop used), so a job that goes terminal mid-tick still gets its closing
+ * `GET /jobs/:id` fetch (if it was the selected job) and the timer's self-clear is evaluated on the
+ * NEXT tick once that resolution has landed.
+ *
+ * CURSOR RACE GUARD (`state.eventsInFlight`): `pollEvents` is NEVER re-issued from a tick while a
+ * previous tick's `/events` request is still pending — a slow response (e.g. a bridge hiccup) means
+ * that tick's events fetch is simply skipped, not stacked on top of the outstanding one. This is what
+ * stops the tick loop from ever CREATING an out-of-order-response race in the first place;
+ * `pollEvents` itself (`dashboard.client.js`) additionally discards any response whose cursor doesn't
+ * exceed the current live cursor as defense-in-depth (see its own doc comment). */
 function anyRunningJob() {
   for (const id of state.jobOrder) {
     const j = state.jobs.get(id);
@@ -1065,15 +1095,17 @@ function ensurePolling() {
   // on its first tick.
   if (!anyRunningJob()) return;
   state.pollTimer = setInterval(() => {
-    let anyRunning = false;
-    for (const id of state.jobOrder) {
-      const j = state.jobs.get(id);
-      if (j && j.status === "running") {
-        anyRunning = true;
-        pollJob(controllerDeps(), id);
-      }
+    if (!state.eventsInFlight) {
+      state.eventsInFlight = true;
+      pollEvents(controllerDeps()).finally(() => {
+        state.eventsInFlight = false;
+      });
     }
-    if (!anyRunning) {
+    const selected = state.selectedJobId ? state.jobs.get(state.selectedJobId) : undefined;
+    if (selected && selected.status === "running") {
+      pollJob(controllerDeps(), state.selectedJobId);
+    }
+    if (!anyRunningJob()) {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
     }

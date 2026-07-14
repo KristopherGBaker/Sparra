@@ -22,9 +22,13 @@ in a log. A re-install preserves that token; `make bridge-install ROTATE=1` (or 
 
 `GET /` serves the **Sparra Bridge Console**: a self-contained, responsive web dashboard (dark
 instrument-console styling, light/dark theme, no external assets or new dependency) for driving +
-monitoring the bridge from a browser — the `/projects` targets rail, a live job feed polling
-`GET /jobs/:id`'s already-redacted phase log, cancel, and `/role`/`/unit` summary readouts rendered as
-finite holdout-safe cards (never scrollback). It is served WITHOUT auth, like `GET /health` — a
+monitoring the bridge from a browser — the `/projects` targets rail, a live job feed, cancel, and
+`/role`/`/unit` summary readouts rendered as finite holdout-safe cards (never scrollback). The feed's
+lifecycle status is driven by ONE `GET /events?since=<cursor>` poll per 1.5s tick covering EVERY tracked
+job (not a per-job sweep) — see [`GET /events`](#get-events--cursor-delta-lifecycle-feed) below; the
+currently-selected job's detail stage (its already-redacted streaming phase log + the full
+`pendingDecisions` projection, neither of which `/events` carries) is polled separately, via
+`GET /jobs/:id`, and ONLY while that job is running. It is served WITHOUT auth, like `GET /health` — a
 browser's top-level navigation can't attach an `Authorization` header — but every data call the page's
 own client script makes is still Bearer-gated; the token is entered once via an on-page modal and held
 only in `sessionStorage`. `bridge.yaml`'s `dashboard` field (default `true`) gates the route: `false`

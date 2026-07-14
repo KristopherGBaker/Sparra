@@ -14,7 +14,7 @@
  *     request must pass through), `projectSummary` (the holdout-safe projection for `/role` and
  *     `/unit` results).
  *   - **Controller** — one function per user-visible flow (`refreshHealth`, `refreshProjects`,
- *     `triggerPhase`, `triggerRole`, `triggerUnit`, `pollJob`, `cancelJob`, `showRoleResult`,
+ *     `triggerPhase`, `triggerRole`, `triggerUnit`, `pollJob`, `pollEvents`, `cancelJob`, `showRoleResult`,
  *     `showUnitResult`, `setToken`, `clearToken`, `handleAuthError`, `handleLock`), plus the console
  *     posture state (`normalizeMode`/`initConsoleMode`/`setConsoleMode`, the `selectTarget` choke
  *     point, the per-target prompt drafts, and `launchConduct`'s empty-prompt guard). Each takes an
@@ -34,6 +34,7 @@ export const API_ENDPOINTS = Object.freeze([
   Object.freeze({ method: "GET", path: "/health" }),
   Object.freeze({ method: "GET", path: "/projects" }),
   Object.freeze({ method: "GET", path: "/jobs" }),
+  Object.freeze({ method: "GET", path: "/events" }),
   Object.freeze({ method: "POST", path: "/build" }),
   Object.freeze({ method: "POST", path: "/reflect" }),
   Object.freeze({ method: "POST", path: "/resume" }),
@@ -56,20 +57,32 @@ const SAFE_ID_SEGMENT = /^[A-Za-z0-9_-]+$/;
  * Match `method`+`path` against {@link API_ENDPOINTS}, validating every `:id` segment. Returns the
  * matched template or `null` — never partially matches, never substitutes a param without
  * validating it first.
+ *
+ * A query string (`?since=5`) is stripped before segment matching, but ONLY for a STATIC endpoint
+ * template (no `:id` segment) — e.g. `GET /events?since=5` matches `GET /events`. A template carrying a
+ * `:id` NEVER accepts a query/suffix: `GET /jobs/abc?x=1` is rejected outright (the dynamic-id
+ * endpoints are skipped whenever the incoming path carries a `?`), exactly as before this addition —
+ * so a query string can never be used to smuggle an escape past the `:id` validator. A fragment (`#`)
+ * is rejected unconditionally, before any query splitting.
  */
 function matchEndpoint(method, path) {
   if (typeof path !== "string" || path.length === 0) return null;
   // Reject anything that isn't a bare same-origin relative path: an absolute URL (has a scheme), a
-  // protocol-relative URL (`//host/...`), or a path carrying a query/fragment (which could hide a
-  // segment that would otherwise fail the `:id` check below).
+  // protocol-relative URL (`//host/...`), or a path carrying a fragment (which could hide a segment
+  // that would otherwise fail the `:id` check below).
   if (!path.startsWith("/")) return null;
   if (path.startsWith("//")) return null;
-  if (path.includes("?") || path.includes("#")) return null;
+  if (path.includes("#")) return null;
 
-  const reqSegments = path.split("/").filter((s) => s.length > 0);
+  const queryIdx = path.indexOf("?");
+  const hasQuery = queryIdx !== -1;
+  const basePath = hasQuery ? path.slice(0, queryIdx) : path;
+  const reqSegments = basePath.split("/").filter((s) => s.length > 0);
   for (const endpoint of API_ENDPOINTS) {
     if (endpoint.method !== method) continue;
     const tplSegments = endpoint.path.split("/").filter((s) => s.length > 0);
+    const isDynamic = tplSegments.some((t) => t.startsWith(":"));
+    if (hasQuery && isDynamic) continue; // a `:id` template never accepts a query string
     if (tplSegments.length !== reqSegments.length) continue;
     let ok = true;
     for (let i = 0; i < tplSegments.length; i++) {
@@ -515,6 +528,111 @@ export async function rehydrateJobs(deps) {
 export async function pollJob(deps, jobId) {
   const result = await apiCall("GET", `/jobs/${jobId}`, { token: currentToken(deps), fetchImpl: deps.fetchImpl });
   dispatch(deps, result, (data) => deps.view.renderJob(projectJobForView(data)));
+}
+
+// --- events feed (cursor-delta, ALL jobs in one request) ----------------------------------------
+//
+// `GET /events?since=<cursor>` (`conductors/http/events.ts`'s `EventLog`) carries lifecycle
+// TRANSITIONS — `job_started`/`job_done`/`decision_parked` — across every job the bridge has seen,
+// including one triggered remotely or from another tab. It does NOT carry the streaming phase log or
+// the full holdout-safe `pendingDecisions` projection (`options`/`unit`/`kind`/`default`/`expiresAt`) —
+// that stays on `GET /jobs/:id`, polled only for the currently-selected RUNNING job's detail stage. This
+// is the feed-level replacement for the old per-running-job `GET /jobs/:id` sweep once per tick.
+
+/** The exact event types {@link pollEvents}/{@link applyEvents} recognize — mirrors `EventLog`'s
+ *  `BridgeEvent["type"]` union. Anything else (a future type a stale client doesn't know) is skipped,
+ *  never thrown. */
+const EVENT_TYPES = new Set(["job_started", "job_done", "decision_parked"]);
+
+/**
+ * Poll `GET /events?since=<state.eventCursor>` — ONE request per tick covering every job. On success,
+ * advances `deps.state.eventCursor` to the response's `cursor` and hands the raw `events` array to
+ * `deps.view.applyEvents(events)` (the view layer folds them into the tracked job state via
+ * {@link applyEvents} and re-renders the feed through the existing blink-free path). A 401/409/other
+ * failure routes through {@link dispatch} exactly like every other controller flow.
+ *
+ * CURSOR RACE SAFETY: this function is safe to call concurrently/overlappingly on the SAME `deps.state`
+ * — e.g. a slow request from an earlier tick still in flight when a faster later one already resolved.
+ * The response's `cursor` is compared against the LIVE `deps.state.eventCursor` read AT APPLY TIME
+ * (i.e. AFTER this request's own `await` — never the value captured before the request went out), so a
+ * response reflecting a cursor that has ALREADY been superseded by a newer response is discarded
+ * WHOLESALE (neither the cursor nor the job state it would drive is ever applied) — an out-of-order/
+ * late response can never regress `state.eventCursor` or roll a job's status backward. A response whose
+ * cursor merely EQUALS the current live cursor (a genuine empty/no-op delta, not a regression) still
+ * applies normally — `state.eventCursor` is set to the same value and `applyEvents` still runs (with a
+ * `[]` batch when there's truly nothing new), so the "empty delta never regresses" behavior is
+ * unaffected. Production callers additionally avoid ever ISSUING overlapping requests in the first
+ * place via a tick-level in-flight guard (`state.eventsInFlight`, `dashboard.html`'s `ensurePolling`) —
+ * this discard is the defense-in-depth layer that holds even if that guard is bypassed or absent (as a
+ * direct/test caller of this function may do).
+ */
+export async function pollEvents(deps) {
+  const cursor = deps.state && typeof deps.state.eventCursor === "number" ? deps.state.eventCursor : 0;
+  const result = await apiCall("GET", `/events?since=${cursor}`, {
+    token: currentToken(deps),
+    fetchImpl: deps.fetchImpl,
+  });
+  dispatch(deps, result, (data) => {
+    const events = Array.isArray(data && data.events) ? data.events : [];
+    const nextCursor = data && typeof data.cursor === "number" ? data.cursor : cursor;
+    const liveCursor = deps.state && typeof deps.state.eventCursor === "number" ? deps.state.eventCursor : 0;
+    // A response reporting a cursor STRICTLY BELOW the current live cursor is stale/out-of-order — an
+    // earlier-issued, slower request settling after a later-issued, faster one already advanced state.
+    // Discard it entirely: no cursor write, no `applyEvents` call, so it can never roll job status (or
+    // the cursor itself) backward. A cursor equal to the live one is NOT a regression (a genuine
+    // no-new-events delta) and still applies normally.
+    if (nextCursor < liveCursor) return;
+    if (deps.state) deps.state.eventCursor = nextCursor;
+    if (deps.view && typeof deps.view.applyEvents === "function") deps.view.applyEvents(events);
+  });
+}
+
+/**
+ * Fold one `/events` delta batch onto the tracked job `Map` (`prevJobs`, `jobId -> Job`) + its display
+ * order (`prevOrder`, most-recent-first `jobId[]`). Returns a NEW `{jobs, order}` — never mutates the
+ * inputs. Every event kind is applied IDEMPOTENTLY, so re-applying the same batch (e.g. the `since=0`
+ * seed batch atop an identical `GET /jobs` rehydration snapshot) never double-counts a row or a pending
+ * marker:
+ *   - `job_started` — an id absent from `prevJobs` gets a minimal running row
+ *     (`{id, kind, root, status:"running"}`); an already-tracked id just has its `status` ensured
+ *     `"running"` (a no-op, same object, if it already is) — every other field (log, pendingDecisions)
+ *     is left untouched.
+ *   - `job_done` — sets the job's `status` to the event's OWN `status` verbatim (whatever the job store
+ *     recorded — `succeeded"`/`"failed"`/`"canceled"`). An id never seen before still gets a minimal
+ *     terminal row rather than being dropped.
+ *   - `decision_parked` — attaches a `{seq, question}` marker into the job's `pendingDecisions` (deduped
+ *     by `seq`, so a re-apply replaces rather than duplicates), so the feed's pending-decision badge
+ *     (`pendingCount`) reflects it even before the next `GET /jobs/:id` poll fills in the full
+ *     `options`/`unit`/`kind`/`default`/`expiresAt` fields for the open job's decision card.
+ *   - anything else — an unrecognized `type`, or an event missing `jobId` — is silently skipped, never
+ *     thrown, so a stale client tolerates a future event type / an out-of-order or malformed entry.
+ */
+export function applyEvents(prevJobs, prevOrder, events) {
+  const jobs = new Map(prevJobs);
+  let order = Array.isArray(prevOrder) ? [...prevOrder] : [];
+  const list = Array.isArray(events) ? events : [];
+  for (const ev of list) {
+    if (!ev || typeof ev !== "object" || !EVENT_TYPES.has(ev.type) || !ev.jobId) continue;
+    const id = ev.jobId;
+    const existing = jobs.get(id);
+    if (ev.type === "job_started") {
+      if (!existing) {
+        jobs.set(id, { id, kind: ev.kind, root: ev.root, status: "running" });
+      } else if (existing.status !== "running") {
+        jobs.set(id, { ...existing, status: "running" });
+      }
+    } else if (ev.type === "job_done") {
+      const status = typeof ev.status === "string" && ev.status.length > 0 ? ev.status : "succeeded";
+      jobs.set(id, existing ? { ...existing, status } : { id, kind: ev.kind, root: ev.root, status });
+    } else if (ev.type === "decision_parked") {
+      const base = existing || { id, kind: ev.kind, root: ev.root, status: "running" };
+      const prior = Array.isArray(base.pendingDecisions) ? base.pendingDecisions : [];
+      const filtered = prior.filter((d) => !(d && d.seq === ev.seq));
+      jobs.set(id, { ...base, pendingDecisions: [...filtered, { seq: ev.seq, question: ev.question }] });
+    }
+    if (!order.includes(id)) order = [id, ...order];
+  }
+  return { jobs, order };
 }
 
 /**
