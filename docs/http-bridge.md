@@ -54,8 +54,14 @@ The client logic lives in `conductors/http/dashboard.client.js` — a DOM-free, 
 Node built-ins) that is BOTH inlined verbatim into the served page (by `handlers/dashboard.ts`, read
 + assembled once and cached) AND imported directly by `dashboard.test.ts`, so the tests exercise the
 exact code the browser runs. `dashboard.html` holds only the CSS/markup and a thin real `view`
-adapter (DOM writes) + boot wiring — no request-building, schema, or holdout-projection logic is
-duplicated there.
+adapter (DOM writes) + boot wiring — no request-building, schema, holdout-projection, or
+change-detection logic is duplicated there. The client is also the single source of truth for "what is
+displayed": its pure render-plan helpers (`planJobFeed`/`applyJobFeed`, `planStage`/`applyStage`) diff
+the previously-displayed snapshot against the next, so an identical 1.5s poll writes NOTHING to the DOM
+(no blink). The elapsed-time counter lives in its own node updated via `textContent` only, the `rise`
+entrance animation fires just for a first-appearing job row, and the log pane is rewritten only on a
+real log-content change (following the tail if scrolled to the bottom, else preserving the reader's
+offset).
 
 ## Endpoints
 
