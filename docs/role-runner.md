@@ -354,6 +354,22 @@ usable reply the report surfaces in `resultText` and an `errors` note records th
 still resumes to finish the unfinished work. Gated to our-own-cap deaths (a co-occurring provider
 limit is left to the fallback chain) and fires at most once.
 
+**Evaluator cap-death verdict recovery.** A cap-killed **evaluator** is **resumed** once by the same
+re-ask, applied to its own product — the JSON **verdict**. When the evaluator dies on **our own budget
+cap OR the turn cap** (`hitBudget` / `hitMaxTurns`, never a provider `limitHit`) and its reply carries
+**no parseable verdict** (`isVerdict`-shaped: a `scores` object plus `verdict`/`weightedTotal`;
+incidental or wrong-shape JSON such as `{"cmd":…}` never counts and is re-asked, while a
+properly-shaped verdict is left alone), the runner **resumes the same session ONCE** with
+`build.jsonReask` on, tightly capped
+(1 turn, small budget) and **text-only/read-only** (same `tools: []`/`readOnly: true`/
+`permissionMode: "default"`/cleared hooks tightCap as the writer path), prompted with
+`VERDICT_REASK_PROMPT` to re-emit **only** the JSON verdict block — never re-grade past the cap. On a
+usable verdict-shaped reply the recovered verdict is parsed into `result.verdict` (and
+`verdictPath`/`--out`) and an `errors` note records the recovery, while `hitBudget`/`hitMaxTurns`
+**stay set** (cap telemetry is never laundered). A failed/disabled re-ask, or a provider-limit death
+(resuming a limited session is futile — mirrors the generator rule), leaves today's **forced-fail
+"no verdict parsed" verdict** so the conductor can decide a full re-eval. Fires at most once.
+
 **Live progress (non-evaluator roles).** A backgrounded role streams its transcript to disk as it
 works (`TraceWriter` appends per step). For a **non-evaluator** role the result and MCP payload
 carry `traceDir` — that role is holdout-free by scope, so the conductor may tail
