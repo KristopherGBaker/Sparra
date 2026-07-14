@@ -83,6 +83,7 @@ offset).
 | `POST /unit` | `{ root\|workspace, brief?, briefPath?, contractPath?, holdoutPath?, backend?, generatorModel?, evaluatorModel?, effort?, worktree?, unitWorktree?, budget?, maxTurns?, maxRounds?, contractRounds?, proceedIfNotAgreed? }` | `200 UnitProjection` (`{ outcome, contract: { agreed, rounds }, cycle? }`) |
 | `GET /jobs/:id` | — | `200 Job` (`{ id, kind, root?, status, log, exitCode?, result?, createdAt, pendingDecisions? }`) or `404` |
 | `POST /jobs/:id/cancel` | — | `200 Job` (now `status: "canceled"`) or `404` |
+| `GET /events` | — | `200 { events: [BridgeEvent, …], cursor }` — cursor-delta feed across ALL jobs (see below) |
 
 Every route but `GET /health` and `GET /` (the dashboard page load) requires
 `Authorization: Bearer <$SPARRA_BRIDGE_TOKEN>`; a missing/wrong token is `401` before routing details
@@ -139,6 +140,39 @@ option key + result — never the free-text `note`. This is holdout-safe by cons
 requests/answers and job projections are all `ParentSummary`-derived, and no endpoint reads a run
 artifact beyond the decisions dir + the `run.json` projection.
 
+## `GET /events` — cursor-delta lifecycle feed
+
+`GET /events?since=<cursor>` returns everything NEW across ALL tracked jobs since the caller's last
+cursor, in ONE request — a lighter alternative to a client enumerating jobs and polling each one's
+`GET /jobs/:id` individually. The bridge-only `EventLog` (`conductors/http/events.ts`) is an in-memory,
+bounded ring (`~1000` events) fed by a single shared instance: `JobStore` emits into it, and this route
+reads from the SAME instance, so nothing observed by one is invisible to the other. It also persists to
+`eventsLogPath` (append-only JSONL, tailable) and re-seeds the ring + its id counter from that file at
+startup, so a cursor a client already holds keeps working across a bridge restart. A direct (non-bridge)
+CLI run never emits here — this feed is bridge-only, like `bridge-audit.log`.
+
+Response shape: `{ events: BridgeEvent[], cursor: number }` — `cursor` is the highest event id emitted
+so far; pass it back as `since` on your next poll (an omitted/non-numeric/negative `since` is treated as
+`0`, returning everything currently retained). `cursor` never regresses, even once old events have
+scrolled out of the ring past `ringSize`.
+
+Three event types (`type` field):
+- **`job_started`** — `{ jobId, kind, root? }`, emitted when `JobStore.createJob` registers a job.
+- **`job_done`** — `{ jobId, status, root? }` (`status` ∈ `succeeded|failed|canceled`), emitted on
+  `finish`/`cancelJob`.
+- **`decision_parked`** — TYPED in the `BridgeEvent` union but **not yet emitted** by this feed; a
+  later unit wires the emit at the conduct decision-park seam (it will carry the parked request's own
+  `question`, holdout-safe by construction).
+
+Every field beyond the log-assigned `id`/`ts` is defensively bounded before it ever reaches the ring or
+the file — `jobId` is char-classed + length-capped exactly like the audit log's job ids, and every other
+string field is control-character-stripped and length-capped — so no unbounded or secret-smuggling
+value can ride an event, holdout-safe by construction like every other bridge surface.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/events?since=0"
+```
+
 ## Configuration (`bridge.yaml`)
 
 `loadBridgeConfig` (`conductors/http/config.ts`) validates every field of `BridgeConfig`:
@@ -150,6 +184,7 @@ artifact beyond the decisions dir + the `run.json` projection.
 | `bind` | no | Explicit bind-address override (still refused if it resolves to a wildcard). |
 | `lastNJobs` | no (default `50`) | Max jobs retained in the in-memory `JobStore`. |
 | `auditLogPath` | no (default `~/.sparra/bridge-audit.log`) | Where the append-only request audit log is written. |
+| `eventsLogPath` | no (default `~/.sparra/bridge-events.jsonl`) | Where the append-only lifecycle events feed (backing `GET /events`) is written; read back at startup to seed the in-memory ring so cursors survive a restart. |
 | `allowRemotePlan` | no (default `false`) | Whether `POST /plan` is permitted at all. |
 | `dashboard` | no (default `true`) | Whether `GET /` serves the Sparra Bridge Console; `false` → `404`. |
 | `discoverProjects` | no (default `false`) | Opt-in recursive project discovery for `GET /projects` (see below). |

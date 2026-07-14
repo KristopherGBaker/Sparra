@@ -28,6 +28,9 @@ export interface BridgeConfig {
   lastNJobs: number;
   /** Where the append-only request audit log is written. */
   auditLogPath: string;
+  /** Where the bridge lifecycle events feed (`job_started`/`job_done`/…) is written — read back at
+   *  startup to seed `EventLog` so `GET /events` cursors survive a bridge restart. */
+  eventsLogPath: string;
   /** Consumed by a later unit; loaded + exposed here only. */
   allowRemotePlan: boolean;
   /** Whether `GET /` serves the Sparra Bridge Console dashboard. Default `true`; an operator who
@@ -52,6 +55,7 @@ const bridgeConfigSchema = z.object({
   bind: z.string().optional(),
   lastNJobs: z.number().int().positive().default(50),
   auditLogPath: z.string().optional(),
+  eventsLogPath: z.string().optional(),
   allowRemotePlan: z.boolean().default(false),
   dashboard: z.boolean().default(true),
   discoverProjects: z.boolean().default(false),
@@ -62,6 +66,7 @@ const bridgeConfigSchema = z.object({
 
 const DEFAULT_CONFIG_REL = join(".sparra", "bridge.yaml");
 const DEFAULT_AUDIT_REL = join(".sparra", "bridge-audit.log");
+const DEFAULT_EVENTS_REL = join(".sparra", "bridge-events.jsonl");
 
 /** Injectable seams so tests never touch real env/disk. */
 export interface LoadBridgeConfigDeps {
@@ -128,12 +133,16 @@ export function loadBridgeConfig(deps: LoadBridgeConfigDeps = {}): BridgeConfig 
   const auditLogPath = data.auditLogPath
     ? expandTilde(data.auditLogPath, home)
     : join(home, DEFAULT_AUDIT_REL);
+  const eventsLogPath = data.eventsLogPath
+    ? expandTilde(data.eventsLogPath, home)
+    : join(home, DEFAULT_EVENTS_REL);
 
   const config: BridgeConfig = {
     roots,
     port: data.port,
     lastNJobs: data.lastNJobs,
     auditLogPath,
+    eventsLogPath,
     allowRemotePlan: data.allowRemotePlan,
     dashboard: data.dashboard,
     discoverProjects: data.discoverProjects,

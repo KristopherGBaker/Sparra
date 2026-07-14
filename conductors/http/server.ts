@@ -17,6 +17,7 @@ import { appendAudit, createFileAuditSink, UNMATCHED_ROUTE, type AuditEntry } fr
 import { checkBearer, requireBridgeToken } from "./auth.ts";
 import { loadBridgeConfig, resolveBind, type BridgeConfig } from "./config.ts";
 import { readPendingDecisions } from "./decisions.ts";
+import { createFileEventSink, readEventSeedLines, EventLog } from "./events.ts";
 import { JobStore, type Job } from "./jobs.ts";
 import { matchedAllowlistRoot, PathGuardError } from "./paths.ts";
 import { registerBridgeRoutes, type BridgeRouteDeps } from "./register.ts";
@@ -486,15 +487,27 @@ export function startBridge(deps: StartBridgeDeps = {}): http.Server {
   // Fail-closed: throws on unset/empty SPARRA_BRIDGE_TOKEN before anything binds.
   const token = requireBridgeToken(env);
   const bindAddr = resolveBind(config, { env });
-  const jobs = new JobStore({ lastNJobs: config.lastNJobs });
+  // ONE EventLog instance, shared between the JobStore (which emits into it) and the `/events` route
+  // (via the bridge route deps below) — a split into two instances would desync the feed from what
+  // the store actually emits.
+  const eventLog = new EventLog({
+    sink: createFileEventSink(config.eventsLogPath),
+    seedLines: readEventSeedLines(config.eventsLogPath),
+  });
+  const jobs = new JobStore({
+    lastNJobs: config.lastNJobs,
+    onEvent: (partial) => eventLog.emit(partial),
+  });
   const audit =
     deps.audit ??
     ((entry: AuditEntry) => appendAudit(entry, createFileAuditSink(config.auditLogPath)));
 
   // Trigger endpoints are added through the registration seam — NOT by editing core routing above.
   // When a caller doesn't pass an explicit `routes` table, build the full bridge surface here so the
-  // live server exposes every phase + conductor endpoint.
-  const routes = deps.routes ?? registerBridgeRoutes(deps.bridge ?? {});
+  // live server exposes every phase + conductor endpoint, sharing the SAME `eventLog` the store emits
+  // into (an explicit `deps.bridge.eventLog` would be overridden here on purpose — the live store's
+  // log must be what `/events` reads).
+  const routes = deps.routes ?? registerBridgeRoutes({ ...(deps.bridge ?? {}), eventLog });
 
   const server = createServer({
     config,

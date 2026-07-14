@@ -90,10 +90,12 @@ make bridge-update              # restart to pick up the change
 
 An existing `bridge.yaml` is **never** overwritten by a re-install. `$SPARRA_BRIDGE_CONFIG` overrides
 the path if you'd rather keep it elsewhere. Every field (`roots`, `port`, `bind`, `lastNJobs`,
-`auditLogPath`, `allowRemotePlan`, `dashboard`, `discoverProjects`, `discoverDepth`) is commented in
-the example; the two most worth knowing about beyond `roots`/`port`: `lastNJobs` bounds how many jobs
-the in-memory store retains (oldest evicted first), and `auditLogPath` is where the append-only
-request audit log lands (default `~/.sparra/bridge-audit.log`). `dashboard` (default `true`) controls
+`auditLogPath`, `eventsLogPath`, `allowRemotePlan`, `dashboard`, `discoverProjects`, `discoverDepth`)
+is commented in the example; the two most worth knowing about beyond `roots`/`port`: `lastNJobs`
+bounds how many jobs the in-memory store retains (oldest evicted first), and `auditLogPath` is where
+the append-only request audit log lands (default `~/.sparra/bridge-audit.log`) — `eventsLogPath`
+(default `~/.sparra/bridge-events.jsonl`) is the sibling append-only log backing `GET /events`.
+`dashboard` (default `true`) controls
 whether `GET /` serves the web console below — set it `false` for zero unauthenticated HTTP surface
 beyond `GET /health`. `discoverProjects` (default `false`) turns `GET /projects` from "one entry per
 allowlisted root" into a recursive walk that reports every Sparra project FOUND under each root
@@ -158,6 +160,7 @@ redacted phase log and the `/role`/`/unit` summary readouts stay available in bo
 | `GET /jobs/:id` | — | `200 Job` (conduct jobs carry `pendingDecisions`) or `404` |
 | `POST /jobs/:id/cancel` | — | `200 Job` or `404` |
 | `POST /jobs/:id/decision` | `{ seq, answer, note? }` | `200 { ok, seq, chosen }` (answer a parked conduct decision) |
+| `GET /events` | — | `200 { events: [...], cursor }` — cursor-delta feed of `job_started`/`job_done`/`decision_parked` events across ALL jobs; a lighter alternative to polling each `GET /jobs/:id` |
 
 Full field-by-field request/response shapes: [`docs/http-bridge.md`](../../docs/http-bridge.md).
 
@@ -283,6 +286,13 @@ curl -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/jobs/$JOB_ID"
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/jobs/$JOB_ID/cancel"
+```
+
+`GET /events` — cursor-delta feed: everything new across ALL tracked jobs in one request, instead of
+polling `GET /jobs/:id` per job per tick. Pass the last `cursor` you saw back as `since` next time:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/events?since=0"
 ```
 
 ## What it is NOT

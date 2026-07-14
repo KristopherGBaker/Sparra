@@ -12,7 +12,9 @@
 import { createConductRoutes, type ConductRouteDeps } from "./handlers/conduct.ts";
 import { createConductorRoutes, type ConductorRouteDeps } from "./handlers/conductor.ts";
 import { createDashboardRoutes, type DashboardRouteDeps } from "./handlers/dashboard.ts";
+import { createEventsRoutes } from "./handlers/events.ts";
 import { createPhaseRoutes, type PhaseRouteDeps } from "./handlers/phases.ts";
+import { EventLog } from "./events.ts";
 import type { RouteDefinition } from "./server.ts";
 import { TargetLock } from "./spawn.ts";
 
@@ -34,6 +36,10 @@ export interface BridgeRouteDeps {
   /** Asset reader for `GET /` (the dashboard) — ONE call returning both files. Defaults to reading
    *  the real `dashboard.html`/`dashboard.client.js` next to this package. */
   readDashboardAssets?: DashboardRouteDeps["readAssets"];
+  /** The shared events feed backing `GET /events`. Defaults to a fresh no-sink {@link EventLog} (a
+   *  test that omits it gets an isolated, empty log); a live bridge passes the SAME instance its
+   *  `JobStore` emits into, via `startBridge`. */
+  eventLog?: EventLog;
 }
 
 /** Build every bridge route (phases + conductor) over one shared {@link TargetLock}. */
@@ -59,11 +65,13 @@ export function registerBridgeRoutes(deps: BridgeRouteDeps = {}): RouteDefinitio
   const dashboardDeps: DashboardRouteDeps = {
     ...(deps.readDashboardAssets !== undefined ? { readAssets: deps.readDashboardAssets } : {}),
   };
+  const eventLog = deps.eventLog ?? new EventLog();
 
   return [
     ...createPhaseRoutes(phaseDeps),
     ...createConductRoutes(conductDeps),
     ...createConductorRoutes(conductorDeps),
     ...createDashboardRoutes(dashboardDeps),
+    ...createEventsRoutes({ eventLog }),
   ];
 }

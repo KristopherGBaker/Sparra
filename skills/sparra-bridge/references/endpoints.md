@@ -155,6 +155,19 @@ curl -s -X POST $H "$SPARRA_BRIDGE_URL/jobs/$ID/cancel"   # -> the Job, now stat
 Phase subprocesses get `SIGTERM` then `SIGKILL` after a grace period; the per-target lock is released.
 `404` if unknown.
 
+## GET /events — cursor-delta lifecycle feed (across ALL jobs)
+```bash
+curl -s $H "$SPARRA_BRIDGE_URL/events?since=0"
+# -> {"events":[{"id":1,"ts":"…","type":"job_started","jobId":"…","kind":"build","root":"…"}, …],"cursor":1}
+```
+A lighter alternative to polling `GET /jobs/:id` per job per tick: learn everything new across every
+tracked job in one request. `since` (default `0`; a non-numeric/negative value is also treated as `0`)
+is the last `cursor` you saw; pass it back next poll — `cursor` in the response is the new value to
+save, and it never regresses even once old events have scrolled out of the bounded in-memory ring.
+Event `type` ∈ `job_started | job_done | decision_parked` — `decision_parked` is reserved (typed) but
+not yet emitted by any route. Still poll the specific job's `GET /jobs/:id` for its `log` and
+`pendingDecisions`; this feed carries only the lifecycle transition, not the log content.
+
 ## Status codes (any route)
 `401` missing/wrong token (before routing) · `403` allowlist reject / `/plan` disabled · `400`
 malformed JSON or unknown field or bad path · `409` per-target mutation lock (names the holder's

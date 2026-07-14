@@ -54,6 +54,7 @@ function baseConfig(roots: string[], overrides: Partial<BridgeConfig> = {}): Bri
     port: 8787,
     lastNJobs: 50,
     auditLogPath: "/tmp/audit.log",
+    eventsLogPath: "/tmp/events.jsonl",
     allowRemotePlan: false,
     dashboard: true,
     discoverProjects: true,

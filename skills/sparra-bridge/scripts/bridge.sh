@@ -115,6 +115,10 @@ bridge() {
     jobs)     _bridge_get "/jobs" ;;
     job)      _bridge_get "/jobs/$1" ;;
     cancel)   _bridge_post "/jobs/$1/cancel" ;;
+    # events [cursor] -> GET /events?since=<cursor>: cursor-delta job_started/job_done/decision_parked
+    # feed across ALL jobs (default cursor 0 = everything retained). Save the response's `cursor` and
+    # pass it back next call — cheaper than polling every job's `job <jobId>` individually.
+    events)   _bridge_get "/events?since=${1:-0}" ;;
     # watch <jobId> [interval] — poll until the job leaves "running", print status+exitCode.
     watch)
       _bridge_need || return 1
@@ -143,6 +147,7 @@ bridge <command>
   unit <json>                    POST /unit  -> UnitProjection
   jobs                           GET /jobs  (tracked jobs since bridge boot, newest-first, no log)
   job <jobId>                    GET /jobs/:id  (conduct jobs carry pendingDecisions)
+  events [cursor=0]              GET /events?since=<cursor>  (job_started/job_done feed, ALL jobs)
   watch <jobId> [interval=5]     poll until terminal (exit 0 iff succeeded)
   cancel <jobId>                 POST /jobs/:id/cancel
 env: SPARRA_BRIDGE_URL, SPARRA_BRIDGE_TOKEN

@@ -133,6 +133,10 @@ function fakeCtx(config: { dashboard: boolean }): RouteContext {
 // --- API layer -------------------------------------------------------------------------------
 
 describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point", () => {
+  // GET /events (the cursor-delta lifecycle feed shared across ALL jobs — conductors/http/events.ts)
+  // is DELIBERATELY absent here: this unit ships the endpoint + its bridge.sh client, not a dashboard
+  // client call — the dashboard's job feed still polls GET /jobs/:id per card. Wiring the dashboard UI
+  // to consume GET /events is out of scope for this unit.
   it("lists exactly the documented endpoints", () => {
     const set = API_ENDPOINTS.map((e: { method: string; path: string }) => `${e.method} ${e.path}`).sort();
     expect(set).toEqual(
