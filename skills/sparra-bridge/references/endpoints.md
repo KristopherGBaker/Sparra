@@ -127,6 +127,16 @@ finalVerdict? } }` — `finalVerdict` is itself a `ParentSummary`. No raw round 
 curl -s -X POST $H $J -d '{"root":"/abs/proj","briefPath":"…","contractPath":"…","generatorModel":"sonnet","evaluatorModel":"gpt-5.6-sol","contractRounds":3}' "$SPARRA_BRIDGE_URL/unit"
 ```
 
+## GET /jobs — list tracked jobs (newest-first)
+Returns every tracked job as a JSON array, NEWEST-FIRST by `createdAt`. Each entry is the SAME
+holdout-safe per-job projection `GET /jobs/:id` returns MINUS the `log` (the listing stays light; the
+log is detail-only). Conduct jobs still carry their `pendingDecisions`. Jobs are in-memory since bridge
+boot (last-N, dropped on restart) — the dashboard rehydrates its feed from this on load. `bridge jobs`.
+```bash
+curl -s $H "$SPARRA_BRIDGE_URL/jobs"
+# -> [{id, kind, root?, status, exitCode?, result?, createdAt, pendingDecisions?}, …]  (no log)
+```
+
 ## GET /jobs/:id — job status + log
 ```bash
 curl -s $H "$SPARRA_BRIDGE_URL/jobs/$ID"

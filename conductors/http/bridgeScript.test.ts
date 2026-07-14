@@ -57,6 +57,40 @@ function hasJq(): boolean {
   return !r.error;
 }
 
+/** Sourced-bash runner that captures the FULL curl argv (one `ARG <a>` line per arg) so a GET
+ *  subcommand's request path + auth header can be asserted (no `-d` body to inspect). */
+function runBridgeArgs(snippet: string): { status: number; args: string[]; called: boolean } | null {
+  const capture = path.join(process.env.TMPDIR ?? "/tmp", `bridge-args-${process.pid}-${Math.random().toString(36).slice(2)}.out`);
+  const script = `
+set -u
+export SPARRA_BRIDGE_URL="http://127.0.0.1:0"
+export SPARRA_BRIDGE_TOKEN="tok"
+CAP="${capture}"
+: > "$CAP"
+curl() {
+  echo CALLED >> "$CAP"
+  for a in "$@"; do printf 'ARG %s\\n' "$a" >> "$CAP"; done
+  echo '[]'
+  return 0
+}
+source "$BRIDGE_SH"
+${snippet}
+rc=$?
+cat "$CAP"
+rm -f "$CAP"
+exit $rc
+`;
+  const res = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, BRIDGE_SH: bridgeSh } });
+  if (res.error) return null; // no bash — UN-RUN
+  const out = `${res.stdout ?? ""}`;
+  const called = out.includes("CALLED");
+  const args = out
+    .split("\n")
+    .filter((l) => l.startsWith("ARG "))
+    .map((l) => l.slice("ARG ".length));
+  return { status: res.status ?? -1, args, called };
+}
+
 describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
   it("`bridge conduct <root> <prompt>` (no extra-json) builds {root,prompt} and exits 0", () => {
     if (!hasJq()) return; // jq unavailable — UN-RUN
@@ -134,6 +168,37 @@ describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
     expect(r.called).toBe(false);
     expect(r.stderr).toContain("conduct <root> <prompt> [--commit] [--merge] [extra-json]");
     expect(r.stderr).toContain("resume <root> <runId> [--commit] [--merge] [--auto]");
+  });
+
+  it("`bridge jobs` issues a Bearer-authenticated GET /jobs (path + auth header)", () => {
+    const r = runBridgeArgs(`bridge jobs >/dev/null`);
+    if (r === null) return; // bash unavailable — UN-RUN
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    // The request targets GET /jobs (the listing), NOT /jobs/:id.
+    expect(r.args).toContain("http://127.0.0.1:0/jobs");
+    expect(r.args).not.toContain("http://127.0.0.1:0/jobs/");
+    // and carries the shared Bearer token.
+    expect(r.args).toContain("Authorization: Bearer tok");
+    // GET, not POST (no -X POST in the argv).
+    const xIdx = r.args.indexOf("-X");
+    expect(xIdx).toBe(-1);
+  });
+
+  it("`bridge job <id>` still targets GET /jobs/:id (existing subcommand unaffected)", () => {
+    const r = runBridgeArgs(`bridge job job-42 >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(r.args).toContain("http://127.0.0.1:0/jobs/job-42");
+    expect(r.args).toContain("Authorization: Bearer tok");
+  });
+
+  it("`bridge jobs` is named in the usage/help output (discoverable)", () => {
+    const r = runBridgeCapture(`bridge help`);
+    if (r === null) return;
+    expect(r.called).toBe(false);
+    expect(r.stderr).toMatch(/\bjobs\b\s+GET \/jobs/);
   });
 
   it("`bridge decide <jobId> <seq> <answer> [note]` builds {seq,answer[,note]}", () => {

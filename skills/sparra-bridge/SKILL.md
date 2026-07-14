@@ -37,7 +37,9 @@ poll-until-done). Source it or crib from it: `source skills/sparra-bridge/script
 
 1. **Phase triggers are ASYNC.** `/init /freeze /build /reflect /resume /conduct` return `202 {jobId}`
    immediately and run in the background. You must **poll `GET /jobs/:id`** until `status` is terminal
-   (`succeeded` | `failed` | `canceled`) and read its `log`. A `/conduct` job may PARK a decision: while
+   (`succeeded` | `failed` | `canceled`) and read its `log`. List every tracked job newest-first with
+   `GET /jobs` (`bridge jobs`) — the same per-job projection minus `log`; jobs are in-memory since
+   bridge boot. A `/conduct` job may PARK a decision: while
    `status` stays `running`, `GET /jobs/:id` carries `pendingDecisions:[{seq,…}]` — answer one with
    `POST /jobs/:id/decision {seq, answer}` (`bridge decide <jobId> <seq> <answer>`) and it unparks.
    `/plan`, `/conduct`'s decision route, `/role`, `/unit`, and the `GET`s are synchronous (they return

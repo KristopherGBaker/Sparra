@@ -111,6 +111,8 @@ bridge() {
               local dbody
               dbody=$(jq -cn --argjson s "$2" --arg a "$3" --arg n "${4:-}" '{seq:$s,answer:$a} + (if $n=="" then {} else {note:$n} end)') || return 1
               _bridge_post "/jobs/$1/decision" "$dbody" ;;
+    # jobs -> GET /jobs: the tracked in-memory jobs (newest-first, no per-job log). Since bridge boot.
+    jobs)     _bridge_get "/jobs" ;;
     job)      _bridge_get "/jobs/$1" ;;
     cancel)   _bridge_post "/jobs/$1/cancel" ;;
     # watch <jobId> [interval] — poll until the job leaves "running", print status+exitCode.
@@ -139,6 +141,7 @@ bridge <command>
   decide <jobId> <seq> <answer> [note]   POST /jobs/:id/decision (answer a parked decision)
   role <json>                    POST /role  -> ParentSummary
   unit <json>                    POST /unit  -> UnitProjection
+  jobs                           GET /jobs  (tracked jobs since bridge boot, newest-first, no log)
   job <jobId>                    GET /jobs/:id  (conduct jobs carry pendingDecisions)
   watch <jobId> [interval=5]     poll until terminal (exit 0 iff succeeded)
   cancel <jobId>                 POST /jobs/:id/cancel

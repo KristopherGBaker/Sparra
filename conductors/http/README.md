@@ -145,6 +145,7 @@ redacted phase log and the `/role`/`/unit` summary readouts stay available in bo
 | `GET /` | — (unauthenticated) | `200 text/html` (the dashboard) or `404` when `dashboard: false` |
 | `GET /health` | — (unauthenticated) | `200 { ok: true }` |
 | `GET /projects` | — | `200 { projects: [...] }` |
+| `GET /jobs` | — | `200 [Job, …]` — every tracked job newest-first; each entry is the `GET /jobs/:id` projection MINUS `log` (conduct jobs still carry `pendingDecisions`). Jobs are in-memory since bridge boot |
 | `POST /init` | `{ root, mode?, docs? }` | `202 { jobId }` |
 | `POST /freeze` | `{ root }` | `202 { jobId }` |
 | `POST /plan` | `{ root, content }` | `200 { ok: true }` (opt-in, see below) |
@@ -179,6 +180,13 @@ curl "http://$HOST:$PORT/health"
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/projects"
+```
+
+`GET /jobs` — list every tracked job newest-first (the dashboard rehydrates its feed from this on
+load); each entry is the per-job projection minus the `log` (jobs are in-memory since bridge boot):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://$HOST:$PORT/jobs"
 ```
 
 `POST /init` — scaffold `.sparra/` for a project:
