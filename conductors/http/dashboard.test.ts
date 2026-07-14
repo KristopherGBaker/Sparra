@@ -13,6 +13,8 @@ import {
   CONSOLE_MODES,
   DEFAULT_CONSOLE_MODE,
   apiCall,
+  applyJobFeed,
+  applyStage,
   buildRequest,
   cancelJob,
   cardScopedValue,
@@ -23,11 +25,15 @@ import {
   initConsoleMode,
   isBlankPrompt,
   launchConduct,
+  logAtBottom,
   normalizeMode,
+  planJobFeed,
+  planStage,
   pollJob,
   projectSummary,
   refreshHealth,
   refreshProjects,
+  resolveLogScroll,
   selectTarget,
   setConsoleMode,
   setPromptDraft,
@@ -39,6 +45,7 @@ import {
   triggerRole,
   triggerUnit,
 } from "./dashboard.client.js";
+import type { JobRowView, StageSnapshot } from "./dashboard.client.js";
 import { CLIENT_SCRIPT_MARKER, createDashboardRoutes } from "./handlers/dashboard.ts";
 import type { RouteContext } from "./server.ts";
 
@@ -1177,5 +1184,272 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     expect(body).toContain("localStorage");
     expect(body).toMatch(/getMode\s*\(\)/);
     expect(body).toMatch(/setMode\s*\(/);
+  });
+});
+
+// --- blink-free change-detection: pure render-plan helpers + fake appliers -----------------------
+//
+// These drive the SAME pure helpers `dashboard.html`'s inline appliers consult, through fake appliers
+// whose per-region spies (job list / animation / stage shell / elapsed node / log node) let us count
+// REAL write calls. No browser, no network — the whole point is that an identical poll performs ZERO
+// writes (no blink), a tick touches only the elapsed node, and the log node survives unrelated updates.
+
+/** A fake job-feed applier: one spy per write path (list markup+count, per-row entrance animation). */
+function fakeJobApplier() {
+  return {
+    writeJobList: vi.fn((_rows: JobRowView[], _newRowIds: string[]) => {}),
+    animateRow: vi.fn((_id: string) => {}),
+  };
+}
+
+/** A fake detail-stage applier: one spy per region, plus a PERSISTENT `logNode` fixture so we can
+ *  assert the log node's identity + scroll state survive shell-only updates (it's replaced ONLY when
+ *  `writeLog` is actually called). */
+function fakeStageApplier() {
+  const logNode = { scrollTop: 0, scrollHeight: 200, clientHeight: 50, content: "" };
+  return {
+    logNode,
+    resetStage: vi.fn((_next: StageSnapshot) => {}),
+    writeStageShell: vi.fn((_next: StageSnapshot) => {}),
+    writeElapsed: vi.fn((_text: string | undefined) => {}),
+    writeLog: vi.fn((next: StageSnapshot) => {
+      logNode.content = String(next.logText ?? "");
+    }),
+  };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function clearSpies(applier: Record<string, any>) {
+  for (const v of Object.values(applier)) if (v && typeof v.mockClear === "function") v.mockClear();
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+function row(id: string, sig: string): JobRowView {
+  return { id, sig, html: `<div data-job-id="${id}">${sig}</div>` };
+}
+
+/** A job-mode stage snapshot; `over` mutates one region for the delta tests. */
+function jobStage(over: Partial<StageSnapshot> = {}): StageSnapshot {
+  return {
+    key: "job:j1",
+    hasElapsed: true,
+    hasLog: true,
+    shellSig: "shell-v1",
+    shellHtml: "<shell/>",
+    termHeadHtml: "<termhead/>",
+    logSig: "log-v1",
+    logText: "log-v1",
+    elapsed: "1s",
+    elapsedText: "1s",
+    ...over,
+  };
+}
+
+describe("job-feed change-detection (applyJobFeed / planJobFeed)", () => {
+  it("no-op: a second deep-equal render performs ZERO applier writes", () => {
+    const applier = fakeJobApplier();
+    let displayed = applyJobFeed(applier, undefined, [row("j1", "a"), row("j2", "b")]);
+    expect(applier.writeJobList).toHaveBeenCalledTimes(1); // first render writes
+    expect(applier.animateRow).toHaveBeenCalledTimes(2); // both rows first-appearing
+
+    clearSpies(applier);
+    // A FRESH, structurally-identical array (deep-equal, new object refs) must still be a no-op.
+    displayed = applyJobFeed(applier, displayed, [row("j1", "a"), row("j2", "b")]);
+    expect(applier.writeJobList).not.toHaveBeenCalled();
+    expect(applier.animateRow).not.toHaveBeenCalled();
+  });
+
+  it("changed state (a row's status sig) → re-render occurs, but no already-visible row re-animates", () => {
+    const applier = fakeJobApplier();
+    let displayed = applyJobFeed(applier, undefined, [row("j1", "running")]);
+    clearSpies(applier);
+
+    displayed = applyJobFeed(applier, displayed, [row("j1", "succeeded")]);
+    expect(applier.writeJobList).toHaveBeenCalledTimes(1);
+    expect(applier.animateRow).not.toHaveBeenCalled(); // j1 was already visible → no entrance animation
+  });
+
+  it("first appearance animates the NEW row only (existing rows never re-animate)", () => {
+    const applier = fakeJobApplier();
+    let displayed = applyJobFeed(applier, undefined, [row("j1", "a")]);
+    expect(applier.animateRow).toHaveBeenCalledWith("j1");
+    clearSpies(applier);
+
+    // j2 appears at the head; j1 unchanged.
+    displayed = applyJobFeed(applier, displayed, [row("j2", "b"), row("j1", "a")]);
+    expect(applier.writeJobList).toHaveBeenCalledTimes(1);
+    expect(applier.animateRow).toHaveBeenCalledTimes(1);
+    expect(applier.animateRow).toHaveBeenCalledWith("j2");
+
+    // planJobFeed pins newRowIds directly, too.
+    const plan = planJobFeed([row("j1", "a")], [row("j2", "b"), row("j1", "a")]);
+    expect(plan.changed).toBe(true);
+    expect(plan.newRowIds).toEqual(["j2"]);
+  });
+
+  it("list membership change (a row drops out) re-renders", () => {
+    const applier = fakeJobApplier();
+    let displayed = applyJobFeed(applier, undefined, [row("j1", "a"), row("j2", "b")]);
+    clearSpies(applier);
+    displayed = applyJobFeed(applier, displayed, [row("j1", "a")]); // j2 gone
+    expect(applier.writeJobList).toHaveBeenCalledTimes(1);
+    expect(applier.animateRow).not.toHaveBeenCalled();
+  });
+});
+
+describe("detail-stage change-detection (applyStage / planStage)", () => {
+  it("no-op: a second deep-equal render performs ZERO applier writes", () => {
+    const applier = fakeStageApplier();
+    let displayed = applyStage(applier, undefined, jobStage());
+    // first render = mount: skeleton + all three regions written once.
+    expect(applier.resetStage).toHaveBeenCalledTimes(1);
+    expect(applier.writeStageShell).toHaveBeenCalledTimes(1);
+    expect(applier.writeElapsed).toHaveBeenCalledTimes(1);
+    expect(applier.writeLog).toHaveBeenCalledTimes(1);
+
+    clearSpies(applier);
+    displayed = applyStage(applier, displayed, jobStage());
+    expect(applier.resetStage).not.toHaveBeenCalled();
+    expect(applier.writeStageShell).not.toHaveBeenCalled();
+    expect(applier.writeElapsed).not.toHaveBeenCalled();
+    expect(applier.writeLog).not.toHaveBeenCalled();
+  });
+
+  it("log-only delta → ONLY the log region is written", () => {
+    const applier = fakeStageApplier();
+    let displayed = applyStage(applier, undefined, jobStage());
+    clearSpies(applier);
+
+    displayed = applyStage(applier, displayed, jobStage({ logSig: "log-v2", logText: "log-v2" }));
+    expect(applier.writeLog).toHaveBeenCalledTimes(1);
+    expect(applier.writeStageShell).not.toHaveBeenCalled();
+    expect(applier.writeElapsed).not.toHaveBeenCalled();
+    expect(applier.resetStage).not.toHaveBeenCalled();
+  });
+
+  it("status/decision (shell) delta with identical log → log node NOT written, identity + scroll retained", () => {
+    const applier = fakeStageApplier();
+    const nodeBefore = applier.logNode;
+    let displayed = applyStage(applier, undefined, jobStage());
+    // model a reader having scrolled the log after mount:
+    applier.logNode.scrollTop = 42;
+    clearSpies(applier);
+
+    displayed = applyStage(applier, displayed, jobStage({ shellSig: "shell-v2", shellHtml: "<shell2/>" }));
+    expect(applier.writeStageShell).toHaveBeenCalledTimes(1);
+    expect(applier.writeLog).not.toHaveBeenCalled(); // log-write spy at 0
+    expect(applier.logNode).toBe(nodeBefore); // same node object retained
+    expect(applier.logNode.scrollTop).toBe(42); // scroll state preserved
+    // a shell rewrite recreates the elapsed node, so elapsed is (re)written — but the log is not.
+    expect(applier.writeElapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("elapsed-only tick → ONLY the elapsed node's text changes; every other region at 0", () => {
+    const applier = fakeStageApplier();
+    let displayed = applyStage(applier, undefined, jobStage());
+    clearSpies(applier);
+
+    displayed = applyStage(applier, displayed, jobStage({ elapsed: "2s", elapsedText: "2s" }));
+    expect(applier.writeElapsed).toHaveBeenCalledTimes(1);
+    expect(applier.writeElapsed).toHaveBeenCalledWith("2s");
+    expect(applier.writeStageShell).not.toHaveBeenCalled();
+    expect(applier.writeLog).not.toHaveBeenCalled();
+    expect(applier.resetStage).not.toHaveBeenCalled();
+  });
+
+  it("subject change (a different selected job) remounts the stage skeleton", () => {
+    const applier = fakeStageApplier();
+    let displayed = applyStage(applier, undefined, jobStage());
+    clearSpies(applier);
+    displayed = applyStage(applier, displayed, jobStage({ key: "job:j2" }));
+    expect(applier.resetStage).toHaveBeenCalledTimes(1);
+    expect(applier.writeStageShell).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("log scroll follow/preserve (logAtBottom / resolveLogScroll)", () => {
+  it("at-bottom before the write → scrolls to the new tail after", () => {
+    const node = { scrollTop: 150, scrollHeight: 200, clientHeight: 50 }; // 200-150-50 = 0 → at bottom
+    const wasAtBottom = logAtBottom(node);
+    expect(wasAtBottom).toBe(true);
+    node.scrollHeight = 500; // a new log line grew the content
+    expect(resolveLogScroll(node, wasAtBottom, 150)).toBe(500); // followed the tail
+  });
+
+  it("scrolled up before the write → offset preserved after", () => {
+    const node = { scrollTop: 20, scrollHeight: 200, clientHeight: 50 }; // 200-20-50 = 130 → not bottom
+    const wasAtBottom = logAtBottom(node);
+    expect(wasAtBottom).toBe(false);
+    node.scrollHeight = 500;
+    expect(resolveLogScroll(node, wasAtBottom, 20)).toBe(20); // preserved the reader's position
+  });
+});
+
+describe("mutation check: neutering the signature comparison is caught by the oracles", () => {
+  it("an always-'changed' comparator writes on an identical render (no-op oracle rejects it)", () => {
+    const alwaysChanged = () => false;
+
+    // Honest comparator: identical render is a no-op (control).
+    const honest = fakeJobApplier();
+    const displayed = applyJobFeed(honest, undefined, [row("j1", "a")]);
+    clearSpies(honest);
+    applyJobFeed(honest, displayed, [row("j1", "a")]);
+    expect(honest.writeJobList).not.toHaveBeenCalled();
+
+    // Mutant: same identical render, but the compare is neutered → it wrongly writes → REJECTED.
+    const mutant = fakeJobApplier();
+    const displayed2 = applyJobFeed(mutant, undefined, [row("j1", "a")]);
+    clearSpies(mutant);
+    applyJobFeed(mutant, displayed2, [row("j1", "a")], { equal: alwaysChanged });
+    expect(mutant.writeJobList).toHaveBeenCalled(); // the no-op test would fail under this mutant
+  });
+
+  it("an always-'unchanged' comparator misses a real change (changed-state oracle rejects it)", () => {
+    const alwaysUnchanged = () => true;
+    const changed = jobStage({ shellSig: "shell-v2", logSig: "log-v2", logText: "log-v2" });
+
+    // Honest comparator: a real change IS written (control).
+    const honest = fakeStageApplier();
+    const displayed = applyStage(honest, undefined, jobStage());
+    clearSpies(honest);
+    applyStage(honest, displayed, changed);
+    expect(honest.writeStageShell).toHaveBeenCalled();
+    expect(honest.writeLog).toHaveBeenCalled();
+
+    // Mutant: the compare always says "equal" → the real change is dropped → REJECTED.
+    const mutant = fakeStageApplier();
+    const displayed2 = applyStage(mutant, undefined, jobStage());
+    clearSpies(mutant);
+    applyStage(mutant, displayed2, changed, { equal: alwaysUnchanged });
+    expect(mutant.writeStageShell).not.toHaveBeenCalled(); // the changed-state test would fail under this mutant
+    expect(mutant.writeLog).not.toHaveBeenCalled();
+  });
+});
+
+// --- the served page actually wires the blink-free path -----------------------------------------
+
+describe("the real served page consults the change-detection helpers (no ad-hoc re-render)", () => {
+  function servedBody(): string {
+    const routes = createDashboardRoutes();
+    const handler = getHandler(routes, "GET", "/");
+    const result = handler(fakeCtx({ dashboard: true })) as { status: number; html?: string };
+    expect(result.status).toBe(200);
+    return result.html!;
+  }
+
+  it("renderJobs/renderStage apply the helper plans; the elapsed counter has its own node", () => {
+    const body = servedBody();
+    // The inlined client exposes the pure helpers…
+    expect(body).toMatch(/function planJobFeed\(/);
+    expect(body).toMatch(/function planStage\(/);
+    // …and the page's render functions consult them (no wholesale unconditional innerHTML re-render).
+    expect(body).toMatch(/applyJobFeed\(/);
+    expect(body).toMatch(/applyStage\(/);
+    // the elapsed counter is its own textContent-updated node (requirement 2).
+    expect(body).toContain('id="elapsedVal"');
+    // the persistent log node survives shell rewrites.
+    expect(body).toContain('id="termBody"');
+    // job rows no longer carry an inline entrance animation that would re-fire every poll.
+    expect(body).not.toMatch(/class="job [^"]*"[^>]*style="animation:rise/);
   });
 });
