@@ -904,7 +904,7 @@ const storage = {
 const state = {
   ...createConsoleState(),
   targets: [],           // [{root, phase, next}] — from GET /projects
-  jobs: new Map(),        // jobId -> Job (from POST trigger + GET /jobs/:id)
+  jobs: new Map(),        // jobId -> Job (seeded by a trigger, the GET /jobs rehydration, and GET /jobs/:id polls)
   jobOrder: [],           // most-recent-first jobId order for the feed
   selectedJobId: undefined,
   summary: undefined,     // last /role or /unit projected summary (one-off readout, not a job)
@@ -975,8 +975,27 @@ const view = {
     state.jobOrder = [jobId, ...state.jobOrder.filter((id) => id !== jobId)];
     state.selectedJobId = jobId;
     state.summary = undefined;
+    setJobHash(jobId); // deep-link: a trigger-created auto-selection rides the URL hash too
     renderJobs();
     renderStage();
+    ensurePolling();
+  },
+  /* Repopulate the feed from the server's in-memory `GET /jobs` listing (newest-first) on page load —
+   * the controller's `rehydrateJobs` hands us the projected jobs. Merge them into `state.jobs`/`jobOrder`
+   * (server order authoritative, keeping any local-only job this page just triggered ahead of them), then
+   * re-render through the SAME `applyJobFeed` path (an identical rehydrate is a DOM no-op), restore any
+   * `#job=<id>` deep-link selection, and resume the poll for running jobs. */
+  rehydrateJobs(jobs) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    for (const job of list) {
+      if (job && job.id) state.jobs.set(job.id, job);
+    }
+    const serverIds = list.filter((j) => j && j.id).map((j) => j.id);
+    const serverSet = new Set(serverIds);
+    const localOnly = state.jobOrder.filter((id) => !serverSet.has(id));
+    state.jobOrder = [...localOnly, ...serverIds];
+    renderJobs();
+    restoreHashSelection();
     ensurePolling();
   },
   renderJob(job) {
@@ -1032,8 +1051,19 @@ function escapeHtml(s) {
 }
 
 /* ---------------- polling ---------------- */
+function anyRunningJob() {
+  for (const id of state.jobOrder) {
+    const j = state.jobs.get(id);
+    if (j && j.status === "running") return true;
+  }
+  return false;
+}
 function ensurePolling() {
   if (state.pollTimer) return;
+  // Don't schedule a timer at all unless a tracked job is actually running — a
+  // purely terminal feed must not arm a recurring interval that only self-clears
+  // on its first tick.
+  if (!anyRunningJob()) return;
   state.pollTimer = setInterval(() => {
     let anyRunning = false;
     for (const id of state.jobOrder) {
@@ -1333,7 +1363,35 @@ const jobFeedApplier = {
 function renderJobs() {
   state.displayedJobRows = applyJobFeed(jobFeedApplier, state.displayedJobRows, buildJobRows());
 }
-function selectJob(id){ state.selectedJobId=id; state.summary=undefined; renderJobs(); renderStage(); }
+function selectJob(id){ state.selectedJobId=id; state.summary=undefined; setJobHash(id); renderJobs(); renderStage(); }
+
+/* ---------------- deep-link: the selected job rides the URL hash (`#job=<id>`) ----------------
+ * Reload / browser back restores the selection when the job still exists, and degrades silently when it
+ * doesn't. Hash writes touch ONLY `location.hash` — never the persisted operating mode (localStorage),
+ * so selection and mode compose without fighting. Every selection path (feed-row select, trigger
+ * auto-select) calls `setJobHash`; `restoreHashSelection` reads it on load and on `hashchange`. */
+function setJobHash(id){
+  const target = id ? '#job=' + encodeURIComponent(id) : '';
+  try { if ((location.hash || '') !== target) location.hash = target; } catch { /* non-browser/denied: the hash is a nicety, never fatal */ }
+}
+function parseJobHash(){
+  const m = /^#job=(.+)$/.exec(location.hash || '');
+  if (!m) return undefined;
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+/* Restore selection from `#job=<id>` — through the SAME renderers as every other selection. A missing
+ * hash forces no selection; a hash naming a job that's gone (never tracked / evicted) degrades silently
+ * with no thrown error and no selection change. An already-selected id is a no-op (zero DOM writes). */
+function restoreHashSelection(){
+  const id = parseJobHash();
+  if (id === undefined) return;
+  if (!state.jobs.has(id)) return;
+  if (state.selectedJobId === id) return;
+  state.selectedJobId = id;
+  state.summary = undefined;
+  renderJobs();
+  renderStage();
+}
 
 /** How many parked decisions a job is awaiting (holdout-safe projected list from GET /jobs/:id). */
 function pendingCount(j){ return Array.isArray(j && j.pendingDecisions) ? j.pendingDecisions.length : 0; }
@@ -1665,6 +1723,10 @@ function boot(){
   view.setAuthorized(true);
   refreshHealth(controllerDeps());
   refreshProjects(controllerDeps());
+  // Rehydrate the job feed from the server's in-memory listing so a job triggered before this load (or
+  // in another tab/session) reappears; `view.rehydrateJobs` then restores any `#job=<id>` deep-link and
+  // resumes polling for running jobs.
+  rehydrateJobs(controllerDeps());
 }
 
 /** Select a target through the ONE controller choke point, from EITHER surface (a rail card or a deck
@@ -1792,6 +1854,9 @@ document.getElementById('authSubmitBtn').addEventListener('click', () => submitA
 document.getElementById('authCancelBtn').addEventListener('click', () => closeAuth());
 document.getElementById('refreshProjectsBtn').addEventListener('click', () => refreshProjects(controllerDeps()));
 document.querySelector('.health').addEventListener('dblclick', forceReauth);
+/* Browser back/forward (and any external hash change) re-drives the deep-link selection through the
+ * same appliers — never touching the persisted operating mode. */
+window.addEventListener('hashchange', () => restoreHashSelection());
 
 boot();
 </script>

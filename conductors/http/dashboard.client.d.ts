@@ -68,6 +68,7 @@ export function triggerConduct(deps: ControllerDeps, params: Record<string, unkn
 export function triggerRole(deps: ControllerDeps, params: Record<string, unknown>): Promise<void>;
 export function triggerUnit(deps: ControllerDeps, params: Record<string, unknown>): Promise<void>;
 export function pollJob(deps: ControllerDeps, jobId: string): Promise<void>;
+export function rehydrateJobs(deps: ControllerDeps): Promise<void>;
 export function submitDecision(deps: ControllerDeps, jobId: string, params: Record<string, unknown>): Promise<void>;
 export function cancelJob(deps: ControllerDeps, jobId: string): Promise<void>;
 export function showRoleResult(deps: ControllerDeps, payload: unknown): void;

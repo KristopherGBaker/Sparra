@@ -6,6 +6,8 @@
  * an injected asset reader. Also scans the served body structurally (self-contained, responsive,
  * theme/no-Anthropic-colors).
  */
+import vm from "node:vm";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -31,6 +33,7 @@ import {
   planStage,
   pollJob,
   projectSummary,
+  rehydrateJobs,
   refreshHealth,
   refreshProjects,
   resolveLogScroll,
@@ -69,6 +72,7 @@ function fakeView() {
     renderHealth: vi.fn(),
     renderProjects: vi.fn(),
     recordJob: vi.fn(),
+    rehydrateJobs: vi.fn(),
     renderJob: vi.fn(),
     renderRoleSummary: vi.fn(),
     renderUnitSummary: vi.fn(),
@@ -135,6 +139,7 @@ describe("API_ENDPOINTS / buildRequest / apiCall — the allowlist choke-point",
       [
         "GET /health",
         "GET /projects",
+        "GET /jobs",
         "POST /build",
         "POST /reflect",
         "POST /resume",
@@ -1453,3 +1458,346 @@ describe("the real served page consults the change-detection helpers (no ad-hoc 
     expect(body).not.toMatch(/class="job [^"]*"[^>]*style="animation:rise/);
   });
 });
+
+// --- rehydrateJobs controller (GET /jobs → view.rehydrateJobs) ----------------------------------
+
+describe("rehydrateJobs — the GET /jobs listing → feed rehydration controller", () => {
+  it("fetches GET /jobs and hands the projected listing to view.rehydrateJobs", async () => {
+    const serverJobs = [
+      { id: "j2", kind: "conduct", status: "running", createdAt: 3, pendingDecisions: [{ seq: 1, unit: "u", kind: "k", question: "Q", options: ["a", "b"], default: "a", expiresAt: "z", secret: "SHOULD-BE-DROPPED" }] },
+      { id: "j1", kind: "build", status: "succeeded", createdAt: 1 },
+    ];
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return jsonResponse(200, serverJobs);
+    });
+    const view = fakeView();
+    await rehydrateJobs({ storage: fakeStorage(TOKEN), view, fetchImpl });
+    expect(calledUrl).toBe("/jobs");
+    expect(view.rehydrateJobs).toHaveBeenCalledOnce();
+    const handed = view.rehydrateJobs.mock.calls[0]![0] as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(handed.map((j) => j.id)).toEqual(["j2", "j1"]);
+    // pendingDecisions were re-projected (defense in depth): the planted extra field is gone.
+    expect(JSON.stringify(handed)).not.toContain("SHOULD-BE-DROPPED");
+    expect(handed[0].pendingDecisions[0]).toEqual({ seq: 1, unit: "u", kind: "k", question: "Q", options: ["a", "b"], default: "a", expiresAt: "z" });
+  });
+
+  it("a 401 routes to re-auth (never populates the feed)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { error: "unauthorized" }));
+    const view = fakeView();
+    const storage = fakeStorage(TOKEN);
+    await rehydrateJobs({ storage, view, fetchImpl });
+    expect(view.rehydrateJobs).not.toHaveBeenCalled();
+    expect(view.showReauth).toHaveBeenCalled();
+    expect(storage.clearToken).toHaveBeenCalled();
+  });
+
+  it("a non-array body degrades to an empty feed (no throw)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { not: "an array" }));
+    const view = fakeView();
+    await rehydrateJobs({ storage: fakeStorage(TOKEN), view, fetchImpl });
+    expect(view.rehydrateJobs).toHaveBeenCalledWith([]);
+  });
+});
+
+// --- VM-executed served boot path: rehydration, deep-link, poll ---------------------------------
+//
+// These tests run the REAL served dashboard page's `<script type="module">` (the inlined
+// dashboard.client.js + the boot/view/DOM-adapter layer) inside `node:vm` against injected DOM /
+// window / fetch / storage / timer shims — exercising `boot()` end-to-end, not a bare exported
+// helper. A tiny epilogue (test-only, appended to the extracted script) surfaces the in-scope
+// bindings so assertions can observe state/selection after the real boot path ran.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+describe("served boot path in node:vm — rehydration, deep-link, poll (assertions 7-12)", () => {
+  function servedPage(): string {
+    const routes = createDashboardRoutes();
+    const route = routes.find((r) => r.method === "GET" && r.path === "/")!;
+    const result = route.handler(fakeCtx({ dashboard: true })) as { html?: string };
+    return result.html!;
+  }
+  function moduleScript(): string {
+    const m = /<script type="module">([\s\S]*?)<\/script>/.exec(servedPage());
+    if (!m || m[1] === undefined) throw new Error("served page has no module script");
+    // Strip the ESM `export` keywords so the module runs as a classic script in the vm context
+    // (the file has NO imports and no re-exports, so the boot code's local bindings are unchanged).
+    return m[1].replace(/^export\s+/gm, "");
+  }
+
+  interface VMOpts {
+    token?: string;
+    hash?: string;
+    mode?: string;
+    respond: (url: string, method: string) => { status: number; data: unknown };
+  }
+
+  function makeEnv(opts: VMOpts) {
+    const writes = { count: 0 };
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    const winListeners: Record<string, Array<() => void>> = {};
+    const intervals = new Map<number, () => void>();
+    let timerId = 1;
+    const elements = new Map<string, any>();
+
+    function makeEl(id = ""): any {
+      const el: any = {
+        id,
+        style: {},
+        dataset: {},
+        value: "",
+        _inner: "",
+        _text: "",
+        _attrs: {} as Record<string, string>,
+        classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+        addEventListener() {},
+        removeEventListener() {},
+        querySelector() { return makeEl(); },
+        querySelectorAll() { return []; },
+        closest() { return null; },
+        appendChild() {},
+        removeChild() {},
+        setAttribute(k: string, v: string) { this._attrs[k] = v; },
+        removeAttribute(k: string) { delete this._attrs[k]; },
+        getAttribute(k: string) { return this._attrs[k]; },
+        matches() { return false; },
+        contains() { return true; },
+        focus() {},
+      };
+      Object.defineProperty(el, "innerHTML", {
+        get() { return el._inner; },
+        set(v: unknown) { el._inner = String(v); writes.count++; },
+      });
+      Object.defineProperty(el, "textContent", {
+        get() { return el._text; },
+        set(v: unknown) { el._text = String(v); writes.count++; },
+      });
+      return el;
+    }
+
+    const document = {
+      getElementById(id: string) {
+        if (!elements.has("#" + id)) elements.set("#" + id, makeEl(id));
+        return elements.get("#" + id);
+      },
+      querySelector(sel: string) {
+        if (!elements.has("q:" + sel)) elements.set("q:" + sel, makeEl(sel));
+        return elements.get("q:" + sel);
+      },
+      querySelectorAll() { return []; },
+      createElement() { return makeEl(); },
+      documentElement: makeEl("html"),
+      addEventListener() {},
+    };
+
+    const location = { hash: opts.hash ?? "", pathname: "/", search: "" };
+    const sessionData = new Map<string, string>();
+    if (opts.token !== undefined) sessionData.set("sparra-bridge-token", opts.token);
+    const localData = new Map<string, string>();
+    if (opts.mode !== undefined) localData.set("sparra-bridge-mode", opts.mode);
+    const mkStore = (m: Map<string, string>) => ({
+      getItem(k: string) { return m.has(k) ? m.get(k) : null; },
+      setItem(k: string, v: string) { m.set(k, String(v)); },
+      removeItem(k: string) { m.delete(k); },
+    });
+
+    const window: any = {
+      addEventListener(type: string, cb: () => void) { (winListeners[type] ||= []).push(cb); },
+      removeEventListener() {},
+      location,
+      history: { replaceState() {} },
+      matchMedia() { return { matches: false }; },
+    };
+
+    async function fetchImpl(url: string, init: any) {
+      const method = (init && init.method) || "GET";
+      fetchCalls.push({ url, method });
+      const { status, data } = opts.respond(url, method);
+      return { status, ok: status >= 200 && status < 300, json: async () => data };
+    }
+
+    const globals: any = {
+      document,
+      window,
+      location,
+      fetch: fetchImpl,
+      console: { log() {}, warn() {}, error() {} },
+      sessionStorage: mkStore(sessionData),
+      localStorage: mkStore(localData),
+      matchMedia: window.matchMedia,
+      setInterval(cb: () => void) { const id = timerId++; intervals.set(id, cb); return id; },
+      clearInterval(id: number) { intervals.delete(id); },
+      setTimeout() { return 0; },
+      clearTimeout() {},
+    };
+
+    return {
+      globals,
+      writes,
+      fetchCalls,
+      location,
+      localData,
+      tick() { for (const cb of [...intervals.values()]) cb(); },
+      intervalCount() { return intervals.size; },
+      fireWindow(type: string) { for (const cb of [...(winListeners[type] || [])]) cb(); },
+      getEl(id: string) { return document.getElementById(id); },
+    };
+  }
+
+  const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+
+  const EPILOGUE =
+    "\n;globalThis.__vm = { state, view, storage, boot, submitAuth, selectJob, restoreHashSelection, rehydrateJobs, ensurePolling, controllerDeps };";
+
+  async function boot(opts: VMOpts) {
+    const env = makeEnv(opts);
+    const sandbox: any = vm.createContext(env.globals);
+    vm.runInContext(moduleScript() + EPILOGUE, sandbox);
+    await flush();
+    return { env, api: sandbox.__vm as any };
+  }
+
+  const RUNNING_FEED: VMOpts["respond"] = (url) => {
+    if (url === "/health") return { status: 200, data: { ok: true } };
+    if (url === "/projects") return { status: 200, data: { projects: [] } };
+    if (url === "/jobs") {
+      return {
+        status: 200,
+        data: [
+          { id: "job-c", kind: "conduct", root: "/r", status: "running", createdAt: 3000, pendingDecisions: [{ seq: 1, unit: "u", kind: "k", question: "Q?", options: ["a", "b"], default: "a", expiresAt: "z" }] },
+          { id: "job-b", kind: "reflect", root: "/r", status: "succeeded", createdAt: 2000 },
+          { id: "job-a", kind: "build", root: "/r", status: "failed", createdAt: 1000 },
+        ],
+      };
+    }
+    return { status: 404, data: { error: "not found" } };
+  };
+
+  it("(7a) stored token → boot fetches GET /jobs and populates the real feed via applyJobFeed", async () => {
+    const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+    expect(env.fetchCalls.some((c) => c.url === "/jobs" && c.method === "GET")).toBe(true);
+    // The feed reflects server order (newest-first as served) and status/awaiting badges.
+    const feedHtml = env.getEl("jobList").innerHTML as string;
+    expect(feedHtml.indexOf("job-c")).toBeGreaterThanOrEqual(0);
+    expect(feedHtml.indexOf("job-c")).toBeLessThan(feedHtml.indexOf("job-b"));
+    expect(feedHtml.indexOf("job-b")).toBeLessThan(feedHtml.indexOf("job-a"));
+    expect(feedHtml).toContain("badge-awaiting"); // job-c is parked
+    expect(feedHtml).toContain("badge-succeeded");
+    expect(feedHtml).toContain("badge-failed");
+    expect(api.state.jobOrder).toEqual(["job-c", "job-b", "job-a"]);
+  });
+
+  it("(7b) fresh token-entry flow (submitAuth) does the same GET /jobs rehydration", async () => {
+    const { env, api } = await boot({ respond: RUNNING_FEED }); // NO stored token → auth prompt
+    expect(env.fetchCalls.some((c) => c.url === "/jobs")).toBe(false); // nothing fetched yet
+    // Operator types a token and submits.
+    env.getEl("tokenInput").value = TOKEN;
+    api.submitAuth();
+    await flush();
+    expect(env.fetchCalls.some((c) => c.url === "/jobs" && c.method === "GET")).toBe(true);
+    expect(api.state.jobOrder).toEqual(["job-c", "job-b", "job-a"]);
+  });
+
+  it("(8) rehydrating IDENTICAL state over the populated feed performs ZERO DOM writes", async () => {
+    const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+    const before = env.writes.count;
+    // Re-feed the EXACT current state through the same view path.
+    const same = api.state.jobOrder.map((id: string) => api.state.jobs.get(id));
+    api.view.rehydrateJobs(same);
+    expect(env.writes.count - before).toBe(0);
+  });
+
+  it("(9) a job present only server-side (never triggered on this page) appears after rehydration", async () => {
+    // Boot with no jobs, then rehydrate a server-only job — it must appear.
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") return { status: 200, data: [] };
+      return { status: 404, data: {} };
+    };
+    const { env, api } = await boot({ token: TOKEN, respond });
+    expect(api.state.jobOrder).toEqual([]);
+    api.view.rehydrateJobs([{ id: "elsewhere-1", kind: "conduct", root: "/r", status: "running", createdAt: 5 }]);
+    await flush();
+    expect(api.state.jobOrder).toContain("elsewhere-1");
+    expect(env.getEl("jobList").innerHTML).toContain("elsewhere-1");
+  });
+
+  it("(10) rehydrated running job → recurring 1500ms poll; terminal jobs schedule none; polling stops after all terminal", async () => {
+    let jobcStatus = "running";
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") return { status: 200, data: [{ id: "job-c", kind: "conduct", root: "/r", status: "running", createdAt: 3000 }] };
+      if (url === "/jobs/job-c") return { status: 200, data: { id: "job-c", kind: "conduct", root: "/r", status: jobcStatus, log: "" } };
+      return { status: 404, data: {} };
+    };
+    const { env, api } = await boot({ token: TOKEN, respond });
+    expect(api.state.jobOrder).toEqual(["job-c"]);
+    const pollCount = () => env.fetchCalls.filter((c) => c.url === "/jobs/job-c").length;
+    // Two ticks → two recurring poll fetches for the running job.
+    env.tick(); await flush();
+    env.tick(); await flush();
+    expect(pollCount()).toBeGreaterThanOrEqual(2);
+    // Job goes terminal; the next tick observes it and clears the recurring poll.
+    jobcStatus = "succeeded";
+    env.tick(); await flush(); // this tick polls once more, gets succeeded
+    const afterTerminalObserved = pollCount();
+    env.tick(); await flush(); // no running jobs now → interval self-clears
+    expect(env.intervalCount()).toBe(0);
+    const before = pollCount();
+    env.tick(); await flush(); // interval gone → no further poll fetches
+    expect(pollCount()).toBe(before);
+    expect(afterTerminalObserved).toBeGreaterThanOrEqual(3);
+  });
+
+  it("(10b) a purely terminal feed schedules NO poll fetch", async () => {
+    const respond: VMOpts["respond"] = (url) => {
+      if (url === "/health") return { status: 200, data: { ok: true } };
+      if (url === "/projects") return { status: 200, data: { projects: [] } };
+      if (url === "/jobs") return { status: 200, data: [{ id: "done-1", kind: "build", root: "/r", status: "succeeded", createdAt: 1 }] };
+      return { status: 404, data: {} };
+    };
+    const { env } = await boot({ token: TOKEN, respond });
+    // No tracked job is running → ensurePolling must NOT even arm a timer (not
+    // merely self-clear on the first tick).
+    expect(env.intervalCount()).toBe(0);
+    env.tick(); await flush();
+    expect(env.intervalCount()).toBe(0);
+    expect(env.fetchCalls.filter((c) => c.url.startsWith("/jobs/")).length).toBe(0);
+  });
+
+  it("(11) deep-link #job=<existing> restores the selection; a gone id degrades silently", async () => {
+    const existing = await boot({ token: TOKEN, hash: "#job=job-b", respond: RUNNING_FEED });
+    expect(existing.api.state.selectedJobId).toBe("job-b");
+    // stage rendered for the selected job.
+    expect(existing.env.getEl("stage").innerHTML.length).toBeGreaterThan(0);
+
+    const gone = await boot({ token: TOKEN, hash: "#job=ghost-999", respond: RUNNING_FEED });
+    expect(gone.api.state.selectedJobId).toBeUndefined(); // no selection, no throw
+    expect(gone.env.getEl("jobList").innerHTML).toContain("job-a"); // feed still rendered
+  });
+
+  it("(12) hashchange switches selection; every selection path writes #job=<id>; mode persistence untouched", async () => {
+    const { env, api } = await boot({ token: TOKEN, hash: "#job=job-b", mode: "full cycle", respond: RUNNING_FEED });
+    expect(api.state.selectedJobId).toBe("job-b");
+    const modeBefore = env.localData.get("sparra-bridge-mode");
+
+    // Browser back/forward to another job id.
+    env.location.hash = "#job=job-a";
+    env.fireWindow("hashchange");
+    expect(api.state.selectedJobId).toBe("job-a");
+
+    // Feed-row selection path writes the hash.
+    api.selectJob("job-c");
+    expect(env.location.hash).toBe("#job=job-c");
+
+    // Trigger auto-select path writes the hash too.
+    api.view.recordJob({ phase: "build", root: "/r", jobId: "fresh-job" });
+    expect(env.location.hash).toBe("#job=fresh-job");
+
+    // Persisted operating mode is unchanged by any hash operation.
+    expect(env.localData.get("sparra-bridge-mode")).toBe(modeBefore);
+    expect(env.localData.get("sparra-bridge-mode")).toBe("full cycle");
+  });
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */

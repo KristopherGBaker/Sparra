@@ -33,6 +33,7 @@
 export const API_ENDPOINTS = Object.freeze([
   Object.freeze({ method: "GET", path: "/health" }),
   Object.freeze({ method: "GET", path: "/projects" }),
+  Object.freeze({ method: "GET", path: "/jobs" }),
   Object.freeze({ method: "POST", path: "/build" }),
   Object.freeze({ method: "POST", path: "/reflect" }),
   Object.freeze({ method: "POST", path: "/resume" }),
@@ -491,6 +492,22 @@ function projectJobForView(job) {
   if (job === null || typeof job !== "object") return job;
   if (!Array.isArray(job.pendingDecisions)) return job;
   return { ...job, pendingDecisions: job.pendingDecisions.map(projectPendingDecision) };
+}
+
+/**
+ * Rehydrate the whole job feed from the server's in-memory listing (`GET /jobs`, newest-first) — the
+ * page-load path that lets a job triggered in another tab/session (or before a reload) reappear. Each
+ * listing entry is re-projected through {@link projectJobForView} (defense in depth on
+ * `pendingDecisions`, identical to `pollJob`), then handed to `view.rehydrateJobs` which repopulates
+ * the feed through the SAME `planJobFeed`/`applyJobFeed` appliers (so an identical rehydrate is a DOM
+ * no-op) and resumes the 1.5s poll for any `running` jobs. A non-array body degrades to an empty feed.
+ */
+export async function rehydrateJobs(deps) {
+  const result = await apiCall("GET", "/jobs", { token: currentToken(deps), fetchImpl: deps.fetchImpl });
+  dispatch(deps, result, (data) => {
+    const jobs = Array.isArray(data) ? data.map(projectJobForView) : [];
+    deps.view.rehydrateJobs(jobs);
+  });
 }
 
 /** Poll `GET /jobs/:id` → `view.renderJob(job)` (status, the already-redacted phase log verbatim, and
