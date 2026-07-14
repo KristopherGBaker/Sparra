@@ -569,6 +569,124 @@ export function handleLock(deps, holderJobId) {
   if (deps.view && typeof deps.view.showLockToast === "function") deps.view.showLockToast(holderJobId);
 }
 
+// --- Render change-detection (blink-free) -------------------------------------------------------
+//
+// The bridge polls `GET /jobs/:id` every 1.5s and used to re-render the job feed and the whole detail
+// stage UNCONDITIONALLY every tick — so an identical poll visibly re-animated (the `rise` entrance
+// animation) and rebuilt the log, i.e. the card and its log "blinked" with zero real change. These
+// PURE helpers are the single source of truth for "did the displayed content actually change?": each
+// takes the PREVIOUSLY-displayed snapshot and the NEXT desired snapshot and returns a per-region write
+// plan. `dashboard.html`'s applier does EXACTLY what the plan says and nothing it doesn't — so an
+// identical poll yields an all-false plan (zero DOM writes), an elapsed-only tick touches only the
+// elapsed node's `textContent`, the `rise` animation fires only for a first-appearing row, and the log
+// pane is rewritten only on a real log-content change. DOM-free: nothing here touches
+// `document`/`window`; every write goes through the injected `applier`.
+
+/**
+ * Compare two region signatures for equality. Default is strict `===` (signatures are strings the
+ * snapshot builders produce). Exposed + injectable as `opts.equal` so a test can build the mutation
+ * oracle — an always-"equal" (never-changed) or never-"equal" (always-changed) mutant — WITHOUT
+ * touching the working tree, and prove the no-op / changed-state tests actually depend on this compare.
+ */
+export function defaultSignatureEqual(a, b) {
+  return a === b;
+}
+
+/** Whether two ordered job-row lists are display-identical: same membership+order (by `id`) AND every
+ *  row's content signature equal under `equal`. Membership/order is structural (not routed through
+ *  `equal`); per-row CONTENT flows through `equal` so the mutation seam governs the no-op decision. */
+function sameJobRows(prevRows, nextRows, equal) {
+  if (!Array.isArray(prevRows) || prevRows.length !== nextRows.length) return false;
+  for (let i = 0; i < nextRows.length; i++) {
+    if (prevRows[i].id !== nextRows[i].id) return false;
+    if (!equal(prevRows[i].sig, nextRows[i].sig)) return false;
+  }
+  return true;
+}
+
+/**
+ * Plan the job-feed region. `prevRows`/`nextRows` are ordered `{id, sig, html}` view-models. Returns
+ * `{changed, newRowIds}` — `changed` is false for a deep-equal feed (→ zero writes), and `newRowIds`
+ * are exactly the ids present in `next` but absent from `prev` (→ the ONLY rows that get the `rise`
+ * entrance animation; an already-visible row re-rendered on a genuine change never re-animates).
+ */
+export function planJobFeed(prevRows, nextRows, opts = {}) {
+  const equal = opts.equal || defaultSignatureEqual;
+  const changed = !sameJobRows(prevRows, nextRows, equal);
+  const prevIds = new Set(Array.isArray(prevRows) ? prevRows.map((r) => r.id) : []);
+  const newRowIds = nextRows.filter((r) => !prevIds.has(r.id)).map((r) => r.id);
+  return { changed, newRowIds };
+}
+
+/**
+ * Apply a job-feed render through the injected `applier`. No change → NOTHING is called (a true DOM
+ * no-op). On change → ONE `writeJobList` (list markup + count), then `animateRow(id)` for each
+ * first-appearing row only. Returns `nextRows` so the caller can store it as the new displayed snapshot.
+ */
+export function applyJobFeed(applier, prevRows, nextRows, opts = {}) {
+  const { changed, newRowIds } = planJobFeed(prevRows, nextRows, opts);
+  if (!changed) return nextRows;
+  applier.writeJobList(nextRows, newRowIds);
+  for (const id of newRowIds) applier.animateRow(id);
+  return nextRows;
+}
+
+/**
+ * Plan the detail-stage regions. Snapshots carry a `key` (mode + selected job id — a change remounts
+ * the skeleton), a `shellSig` (everything EXCEPT the volatile elapsed counter and the log body), a
+ * `logSig` (the log text), and an `elapsed` string. Returns `{mount, shell, elapsed, log}`:
+ *   - `mount`   — the displayed subject changed (different job / mode) → rebuild the stage skeleton.
+ *   - `shell`   — the head/metrics/decision/terminal-head markup changed (or we mounted).
+ *   - `elapsed` — the elapsed counter ticked (its own node, `textContent` only); also true on a shell
+ *                 write, since that recreates the elapsed node.
+ *   - `log`     — the log CONTENT changed (its own persistent node) — NEVER forced by a shell write,
+ *                 so a status/decision-only update leaves the log node untouched (identity preserved).
+ */
+export function planStage(prev, next, opts = {}) {
+  const equal = opts.equal || defaultSignatureEqual;
+  if (!prev || prev.key !== next.key) {
+    return { mount: true, shell: true, elapsed: !!next.hasElapsed, log: !!next.hasLog };
+  }
+  const shell = !equal(prev.shellSig, next.shellSig);
+  const elapsedChanged = prev.elapsed !== next.elapsed;
+  const logChanged = !equal(prev.logSig, next.logSig);
+  return {
+    mount: false,
+    shell,
+    elapsed: !!next.hasElapsed && (shell || elapsedChanged),
+    log: !!next.hasLog && logChanged,
+  };
+}
+
+/**
+ * Apply a detail-stage render through the injected `applier`. No change → nothing is called. Otherwise
+ * only the regions the plan marks are written: `resetStage`+`writeStageShell` on a mount, else
+ * `writeStageShell` on a shell delta; `writeElapsed` for a tick; `writeLog` for a log-content delta.
+ * Returns `next` so the caller can store it as the new displayed snapshot.
+ */
+export function applyStage(applier, prev, next, opts = {}) {
+  const plan = planStage(prev, next, opts);
+  if (plan.mount) applier.resetStage(next);
+  if (plan.mount || plan.shell) applier.writeStageShell(next);
+  if (plan.elapsed) applier.writeElapsed(next.elapsedText);
+  if (plan.log) applier.writeLog(next);
+  return next;
+}
+
+/** Whether a scrollable log node was scrolled to (within `threshold` px of) its bottom BEFORE a
+ *  content replace — the signal for "follow the tail" vs "preserve the reader's offset". Pure: reads
+ *  only the node's `scrollTop`/`scrollHeight`/`clientHeight` geometry. */
+export function logAtBottom(node, threshold = 4) {
+  if (!node) return true;
+  return node.scrollHeight - node.scrollTop - node.clientHeight <= threshold;
+}
+
+/** The `scrollTop` a log node should hold AFTER its content is replaced: the new tail
+ *  (`scrollHeight`) when the reader was at the bottom, else their preserved `savedTop`. Pure. */
+export function resolveLogScroll(node, wasAtBottom, savedTop) {
+  return wasAtBottom ? node.scrollHeight : savedTop;
+}
+
 // Deliberately NO browser-global export (`SparraDashboardClient = {...}`) here. `handlers/dashboard.ts`
 // inlines this file's text into the SAME `<script type="module">` block as `dashboard.html`'s boot code
 // (see the `CLIENT_SCRIPT_MARKER` injection point there), so the boot code calls `refreshHealth`,

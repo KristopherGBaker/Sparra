@@ -76,3 +76,79 @@ export function setToken(deps: ControllerDeps, token: string): void;
 export function clearToken(deps: ControllerDeps): void;
 export function handleAuthError(deps: ControllerDeps): void;
 export function handleLock(deps: ControllerDeps, holderJobId?: string): void;
+
+// --- render change-detection (blink-free) -------------------------------------------------------
+
+/** Injectable region-signature comparator (default strict `===`); the mutation-oracle seam. */
+export function defaultSignatureEqual(a: unknown, b: unknown): boolean;
+
+/** An ordered job-feed row view-model: stable `id`, content `sig`, and rendered `html`. */
+export interface JobRowView {
+  id: string;
+  sig: string;
+  html: string;
+}
+
+/** Opts shared by the plan/apply helpers — swap `equal` to build the mutation oracle. */
+export interface RenderPlanOpts {
+  equal?: (a: unknown, b: unknown) => boolean;
+}
+
+export function planJobFeed(
+  prevRows: JobRowView[] | undefined,
+  nextRows: JobRowView[],
+  opts?: RenderPlanOpts,
+): { changed: boolean; newRowIds: string[] };
+
+/** The applier the page (or a test's spy) supplies — every DOM write goes through it. */
+export interface JobFeedApplier {
+  writeJobList: (rows: JobRowView[], newRowIds: string[]) => void;
+  animateRow: (id: string) => void;
+}
+
+export function applyJobFeed(
+  applier: JobFeedApplier,
+  prevRows: JobRowView[] | undefined,
+  nextRows: JobRowView[],
+  opts?: RenderPlanOpts,
+): JobRowView[];
+
+/** A displayed-stage snapshot: `key` (mode + subject), region signatures, and the volatile counter. */
+export interface StageSnapshot {
+  key: string;
+  hasElapsed?: boolean;
+  hasLog?: boolean;
+  shellSig: string;
+  logSig?: string;
+  elapsed?: string;
+  elapsedText?: string;
+  [extra: string]: unknown;
+}
+
+export function planStage(
+  prev: StageSnapshot | undefined,
+  next: StageSnapshot,
+  opts?: RenderPlanOpts,
+): { mount: boolean; shell: boolean; elapsed: boolean; log: boolean };
+
+export interface StageApplier {
+  resetStage: (next: StageSnapshot) => void;
+  writeStageShell: (next: StageSnapshot) => void;
+  writeElapsed: (text: string | undefined) => void;
+  writeLog: (next: StageSnapshot) => void;
+}
+
+export function applyStage(
+  applier: StageApplier,
+  prev: StageSnapshot | undefined,
+  next: StageSnapshot,
+  opts?: RenderPlanOpts,
+): StageSnapshot;
+
+export interface LogScrollNode {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+export function logAtBottom(node: LogScrollNode | null | undefined, threshold?: number): boolean;
+export function resolveLogScroll(node: LogScrollNode, wasAtBottom: boolean, savedTop: number): number;

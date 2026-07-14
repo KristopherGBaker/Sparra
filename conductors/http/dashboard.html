@@ -920,6 +920,11 @@ const state = {
   conductResumeId: '',   // conduct: --resume <runId> (continue a crashed/parked run remotely)
   decisionNote: '',      // decision card: optional note for POST /jobs/:id/decision
   pollTimer: null,
+  // "what is displayed" — the single source of truth the change-detection helpers compare against, so
+  // an identical poll writes NOTHING to the DOM (no blink). Updated by `renderJobs`/`renderStage`
+  // after each apply; never read for content decisions here (those live in `dashboard.client.js`).
+  displayedJobRows: undefined, // last applied job-feed row view-models (from applyJobFeed)
+  displayedStage: undefined,   // last applied detail-stage snapshot (from applyStage)
 };
 
 function targetName(root) {
@@ -1275,17 +1280,19 @@ function runRole(root, el){
   triggerRole(controllerDeps(), { root, kind });
 }
 
-/* ---------------- render: jobs ---------------- */
-function renderJobs() {
-  const el = document.getElementById('jobList');
-  const countEl = document.getElementById('jobCount');
-  if (countEl) countEl.textContent = `${state.jobOrder.length} tracked`;
-  el.innerHTML = state.jobOrder.map((id,i) => {
-    const j = state.jobs.get(id);
-    if (!j) return '';
-    const pending = pendingCount(j);
-    return `
-    <div class="job ${j.id===state.selectedJobId?'sel':''} ${pending?'awaiting':''}" style="animation:rise .4s ${i*40}ms backwards" data-action="select-job" data-job-id="${escapeHtml(j.id)}">
+/* ---------------- render: jobs ----------------
+ * Change-detection lives in `dashboard.client.js` (`applyJobFeed`/`planJobFeed`): this layer only
+ * builds the row view-models and hands prev+next to the helper, which decides whether to write at all
+ * and which rows are first-appearing (→ `rise` animation via `jobFeedApplier.animateRow`, never on a
+ * re-render of an already-visible row). The row markup carries NO inline `animation:rise` — an
+ * identical poll writes nothing, so the feed no longer blinks. */
+function jobRowSig(j){
+  return JSON.stringify({ id: j.id, kind: j.kind || '', root: j.root || '', status: j.status, pending: pendingCount(j), selected: j.id === state.selectedJobId });
+}
+function jobRowHtml(j){
+  const pending = pendingCount(j);
+  return `
+    <div class="job ${j.id===state.selectedJobId?'sel':''} ${pending?'awaiting':''}" data-action="select-job" data-job-id="${escapeHtml(j.id)}">
       <span class="st ${pending?'awaiting':j.status}"></span>
       <div class="j-main">
         <div class="j-line1">
@@ -1298,26 +1305,53 @@ function renderJobs() {
         ${pending?`<span class="j-badge badge-awaiting">awaiting decision${pending>1?` ×${pending}`:''}</span>`:`<span class="j-badge badge-${j.status}">${j.status}</span>`}
       </div>
     </div>`;
-  }).join('');
+}
+function buildJobRows(){
+  const rows = [];
+  for (const id of state.jobOrder) {
+    const j = state.jobs.get(id);
+    if (!j) continue;
+    rows.push({ id, sig: jobRowSig(j), html: jobRowHtml(j) });
+  }
+  return rows;
+}
+/** The real (DOM-writing) job-feed applier the change-detection helper drives. */
+const jobFeedApplier = {
+  writeJobList(rows) {
+    const el = document.getElementById('jobList');
+    if (el) el.innerHTML = rows.map((r) => r.html).join('');
+    const countEl = document.getElementById('jobCount');
+    if (countEl) countEl.textContent = `${rows.length} tracked`;
+  },
+  animateRow(id) {
+    const list = document.getElementById('jobList');
+    if (!list) return;
+    const el = list.querySelector('[data-job-id="' + String(id).replace(/["\\]/g, '\\$&') + '"]');
+    if (el) el.style.animation = 'rise .4s backwards';
+  },
+};
+function renderJobs() {
+  state.displayedJobRows = applyJobFeed(jobFeedApplier, state.displayedJobRows, buildJobRows());
 }
 function selectJob(id){ state.selectedJobId=id; state.summary=undefined; renderJobs(); renderStage(); }
 
 /** How many parked decisions a job is awaiting (holdout-safe projected list from GET /jobs/:id). */
 function pendingCount(j){ return Array.isArray(j && j.pendingDecisions) ? j.pendingDecisions.length : 0; }
 
-/* ---------------- render: detail stage ---------------- */
-function renderStage(){
-  const stage = document.getElementById('stage');
-  if (state.summary) { stage.innerHTML = state.summary.kind === 'unit' ? unitReadout(state.summary.data) : roleReadout(state.summary.data); return; }
-  const j = state.selectedJobId ? state.jobs.get(state.selectedJobId) : undefined;
-  if (!j) { stage.innerHTML = emptyState(); return; }
-  stage.innerHTML = phaseJob(j);
+/* ---------------- render: detail stage ----------------
+ * Change-detection lives in `dashboard.client.js` (`applyStage`/`planStage`): this layer builds the
+ * snapshot (region signatures + the volatile elapsed counter, separated out) and hands prev+next to
+ * the helper, which decides which regions to write. An identical poll writes nothing; a tick updates
+ * ONLY the elapsed node's `textContent`; the log body is a persistent node rewritten only on a real
+ * log-content change (with scroll follow/preserve) — so the detail pane no longer blinks. */
+function elapsedString(j){
+  const ms = j.createdAt ? Date.now() - j.createdAt : undefined;
+  return ms !== undefined ? `${Math.max(0, Math.round(ms / 1000))}s` : '—';
 }
-
-function phaseJob(j){
+/** Upper stage shell (everything EXCEPT the volatile elapsed value — which lives in its own
+ *  `#elapsedVal` node — and the log body, which is a separate persistent node). */
+function jobShellHtml(j){
   const running = j.status === 'running';
-  const elapsedMs = j.createdAt ? Date.now() - j.createdAt : undefined;
-  const elapsed = elapsedMs !== undefined ? `${Math.max(0, Math.round(elapsedMs / 1000))}s` : '—';
   return `
   <div class="detail-head">
     <div class="dh-l">
@@ -1331,7 +1365,7 @@ function phaseJob(j){
   </div>
 
   <div class="metrics">
-    <div class="metric"><div class="m-k">status</div><div class="m-v" style="color:${statusColor(j.status)};text-transform:capitalize">${j.status}</div><div class="m-sub">elapsed ${elapsed}</div></div>
+    <div class="metric"><div class="m-k">status</div><div class="m-v" style="color:${statusColor(j.status)};text-transform:capitalize">${j.status}</div><div class="m-sub">elapsed <span id="elapsedVal" class="tnum"></span></div></div>
     <div class="metric"><div class="m-k">exit code</div><div class="m-v tnum">${j.exitCode!==undefined?j.exitCode:'—'}</div><div class="m-sub">phase subprocess</div></div>
   </div>
 
@@ -1340,15 +1374,74 @@ function phaseJob(j){
   <div class="holdout-note">
     ${IC.shield}
     <span><b>Holdout wall enforced.</b> This is Sparra's own redacted phase log — no raw transcripts, verdict dumps, or evaluator traces cross the bridge.</span>
-  </div>
-
-  <div class="terminal">
-    <div class="term-head">
-      <span class="kicker">GET /jobs/${escapeHtml(j.id)} · phase log</span>
-      ${running?'<span class="live"><span class="lk"></span>streaming · poll 1.5s</span>':`<span class="kicker" style="color:var(--txt-faint)">closed</span>`}
-    </div>
-    <div class="term-body" id="termBody"><div class="logline"><span class="msg">${j.log ? escapeHtml(j.log) : '(no output yet)'}</span></div></div>
   </div>`;
+}
+/** The terminal header content (its own region so a status flip updates it without touching the log). */
+function jobTermHeadHtml(j){
+  const running = j.status === 'running';
+  return `<span class="kicker">GET /jobs/${escapeHtml(j.id)} · phase log</span>
+      ${running?'<span class="live"><span class="lk"></span>streaming · poll 1.5s</span>':`<span class="kicker" style="color:var(--txt-faint)">closed</span>`}`;
+}
+/** Build the displayed-stage snapshot for the change-detection helper. `shellSig` excludes the elapsed
+ *  value and the log text (both tracked separately) so a tick / new log line doesn't force a shell rewrite. */
+function stageSnapshot(){
+  if (state.summary) {
+    const html = state.summary.kind === 'unit' ? unitReadout(state.summary.data) : roleReadout(state.summary.data);
+    return { key: 'summary:' + state.summary.kind, hasElapsed: false, hasLog: false, shellSig: html, shellHtml: html };
+  }
+  const j = state.selectedJobId ? state.jobs.get(state.selectedJobId) : undefined;
+  if (!j) { const html = emptyState(); return { key: 'empty', hasElapsed: false, hasLog: false, shellSig: html, shellHtml: html }; }
+  const shellHtml = jobShellHtml(j);
+  const termHeadHtml = jobTermHeadHtml(j);
+  const logText = j.log ? j.log : '(no output yet)';
+  const elapsed = elapsedString(j);
+  return {
+    key: 'job:' + j.id,
+    hasElapsed: true,
+    hasLog: true,
+    shellHtml,
+    termHeadHtml,
+    shellSig: shellHtml + ' ' + termHeadHtml,
+    logSig: logText,
+    logText,
+    elapsed,
+    elapsedText: elapsed,
+  };
+}
+/** The real (DOM-writing) detail-stage applier the change-detection helper drives. The log body
+ *  (`#termBody`) is a persistent node OUTSIDE the rewritable shell, so a status/decision-only update
+ *  never replaces it — the reader's log + scroll survive. */
+const stageApplier = {
+  resetStage(next) {
+    const stage = document.getElementById('stage');
+    if (!stage) return;
+    stage.innerHTML = next.hasLog
+      ? '<div id="stageShell"></div><div class="terminal"><div class="term-head" id="stageTermHead"></div><div class="term-body" id="termBody"></div></div>'
+      : '<div id="stageShell"></div>';
+  },
+  writeStageShell(next) {
+    const shell = document.getElementById('stageShell');
+    if (shell) shell.innerHTML = next.shellHtml;
+    if (next.hasLog) {
+      const th = document.getElementById('stageTermHead');
+      if (th) th.innerHTML = next.termHeadHtml || '';
+    }
+  },
+  writeElapsed(text) {
+    const el = document.getElementById('elapsedVal');
+    if (el) el.textContent = text === undefined ? '' : text;
+  },
+  writeLog(next) {
+    const body = document.getElementById('termBody');
+    if (!body) return;
+    const savedTop = body.scrollTop;
+    const wasAtBottom = logAtBottom(body);
+    body.innerHTML = `<div class="logline"><span class="msg">${escapeHtml(next.logText || '(no output yet)')}</span></div>`;
+    body.scrollTop = resolveLogScroll(body, wasAtBottom, savedTop);
+  },
+};
+function renderStage(){
+  state.displayedStage = applyStage(stageApplier, state.displayedStage, stageSnapshot());
 }
 /** Render a decision card per parked decision on a conduct job: the question, each option as a button
  *  (the default marked), and an optional note field. Answering posts through the controller's
