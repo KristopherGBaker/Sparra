@@ -600,6 +600,88 @@
   .modal .hint { font-family: var(--mono); font-size: 10px; color: var(--txt-faint); margin-top: 12px; display: flex; align-items: center; gap: 6px; }
   .modal .hint svg { width: 12px; height: 12px; }
 
+  /* ---------- mode switch (header segmented control) ---------- */
+  .mode-switch {
+    display: inline-flex; align-items: stretch;
+    border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
+    background: var(--panel-2);
+  }
+  .mode-switch button {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+    padding: 6px 13px; background: transparent; color: var(--txt-3);
+    border: none; border-right: 1px solid var(--line); cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .mode-switch button:last-child { border-right: none; }
+  .mode-switch button:hover { color: var(--txt); }
+  .mode-switch button.active { background: var(--brand-glow); color: var(--brand); }
+  .mode-switch button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+  /* ---------- workspace + conduct deck ---------- */
+  .workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .deck { flex: none; padding: 12px 12px 0; }
+  /* the deck is the conduct-mode front door — hidden in the expert full-cycle posture. */
+  [data-mode="full cycle"] .deck { display: none; }
+  .deck-inner { padding: 15px 16px 16px; }
+  .deck-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 11px; }
+  .deck-head .kicker { flex: none; }
+  .deck-targets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .deck-chip {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel-hi); color: var(--txt-2);
+    transition: border-color .12s, color .12s, background .12s;
+  }
+  .deck-chip:hover { border-color: var(--tick); color: var(--txt); }
+  .deck-chip.sel { border-color: var(--brand-dim); color: var(--brand); background: var(--brand-glow); }
+  .deck-chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .deck-prompt {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 92px;
+    font-family: var(--mono); font-size: 14px; line-height: 1.55;
+    background: var(--bg); color: var(--txt);
+    border: 1px solid var(--line); border-radius: 7px; padding: 12px 14px;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .deck-prompt::placeholder { color: var(--txt-faint); }
+  .deck-prompt:focus, .deck-prompt:focus-visible { outline: none; border-color: var(--brand-dim); box-shadow: 0 0 0 3px var(--brand-glow); }
+  .pipeline {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 10px 2px 13px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--txt-3);
+  }
+  .pipeline .pl-step { color: var(--txt-3); }
+  .pipeline .pl-arrow { color: var(--brand-dim); }
+  .deck-ctrls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+  .deck-ctrls .conduct-mode-select {
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 5px;
+    font-family: var(--mono); font-size: 11px; padding: 7px 8px; cursor: pointer; min-height: 40px;
+  }
+  .deck-ctrls .conduct-mode-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .deck-toggles { display: flex; flex-direction: column; gap: 6px; }
+  .deck-launch { display: flex; align-items: center; gap: 13px; margin-top: 14px; flex-wrap: wrap; }
+  .deck-launch .btn.primary { flex: 0 0 auto; min-width: 128px; }
+  .deck-reason { font-family: var(--mono); font-size: 10.5px; color: var(--txt-3); }
+  .deck-resume {
+    display: flex; align-items: stretch; gap: 8px; margin-top: 12px; padding-top: 12px;
+    border-top: 1px dashed var(--line-soft);
+  }
+  .deck-resume .conduct-resume-id {
+    flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+    background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 5px;
+    padding: 7px 10px; font-size: 11px; font-family: var(--mono);
+  }
+  .deck-resume .conduct-resume-id:focus-visible { outline: none; border-color: var(--brand-dim); box-shadow: 0 0 0 3px var(--brand-glow); }
+  .deck-resume .btn { flex: 0 0 auto; }
+  /* keyboard focus is always visible on interactive chrome (no bare outline:none anywhere). */
+  .btn:focus-visible, .icon-btn:focus-visible, .auth-chip:focus-visible,
+  .stepper button:focus-visible, .toggle-fresh:focus-visible, .role-kind-select:focus-visible {
+    outline: 2px solid var(--brand); outline-offset: 1px;
+  }
+
+  /* conduct-mode slim cards: identity + status only, the whole card is a deck selector. */
+  [data-mode="conduct"] .target { cursor: pointer; }
+  [data-mode="conduct"] .target .actions { display: none !important; }
+
   /* responsive */
   @media (max-width: 1180px) {
     .grid { grid-template-columns: 300px 1fr; }
@@ -632,11 +714,35 @@
   /* wide, monospace content NEVER pushes the page wide — it scrolls in its own box. */
   .term-body { overflow-x: auto; }
   .gate { overflow-x: auto; }
+
+  /* the deck stays fluid at narrow widths: controls wrap, nothing forces horizontal overflow. */
+  @media (max-width: 820px) {
+    .deck { padding: 10px 10px 0; }
+    .deck-inner { padding: 13px; }
+    .deck-ctrls { gap: 12px; }
+    .deck-launch { align-items: stretch; }
+    .deck-launch .btn.primary { flex: 1 1 100%; min-height: 46px; }
+    .deck-resume { flex-wrap: wrap; }
+    .deck-resume .btn { min-height: 44px; }
+    .mode-switch button { min-height: 40px; }
+  }
+
+  /* Respect prefers-reduced-motion: this ONE gate neutralizes every console animation/transition —
+     the header LED pulse, card `rise`, job `pulse`/`blink`, toast/log fades, the gauge sweep, AND the
+     new mode-switch/deck/chip transitions — for operators who ask their OS to reduce motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
 
-<div class="app">
+<div class="app" id="app" data-mode="conduct">
   <!-- ============ INSTRUMENT HEADER ============ -->
   <header class="bar">
     <div class="brand-mark">
@@ -649,6 +755,12 @@
         <div class="name">SPARRA<b>·</b>BRIDGE</div>
         <div class="sub">Remote Conductor Console</div>
       </div>
+    </div>
+
+    <!-- operating-mode switch: conduct (default front door) | full cycle (expert phase surface) -->
+    <div class="mode-switch" id="modeSwitch" role="group" aria-label="operating mode">
+      <button type="button" data-action="set-mode" data-mode="conduct">conduct</button>
+      <button type="button" data-action="set-mode" data-mode="full cycle">full cycle</button>
     </div>
 
     <div class="bar-spacer"></div>
@@ -670,6 +782,12 @@
       </svg>
     </button>
   </header>
+
+  <!-- ============ WORKSPACE ============ -->
+  <div class="workspace">
+
+  <!-- ---- CONDUCT DECK (conduct mode only; sits above the three columns) ---- -->
+  <section class="deck" id="deck" aria-label="conduct deck"></section>
 
   <!-- ============ MAIN GRID ============ -->
   <div class="grid">
@@ -702,6 +820,7 @@
     <section class="col">
       <div class="stage" id="stage"></div>
     </section>
+  </div>
   </div>
 </div>
 
@@ -755,6 +874,7 @@
  * ================================================================================================ */
 
 const TOKEN_KEY = "sparra-bridge-token";
+const MODE_KEY = "sparra-bridge-mode";
 const storage = {
   getToken() {
     try { return sessionStorage.getItem(TOKEN_KEY) || undefined; } catch { return undefined; }
@@ -765,14 +885,27 @@ const storage = {
   clearToken() {
     try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* see setToken */ }
   },
+  // The operating-mode posture STICKS across reloads: unlike the per-tab token, it belongs in
+  // `localStorage` so a reload (or a new tab) restores the operator's chosen mode. The controller
+  // validates whatever comes back through `normalizeMode`, so a stale/garbage value is harmless.
+  getMode() {
+    try { return localStorage.getItem(MODE_KEY) || undefined; } catch { return undefined; }
+  },
+  setMode(m) {
+    try { localStorage.setItem(MODE_KEY, m); } catch { /* storage denial: mode stays in-memory for this session */ }
+  },
 };
 
-/* ---------------- state ---------------- */
+/* ---------------- state ----------------
+ * `createConsoleState()` (from the controller) seeds the console-posture fields — `mode` (default
+ * `conduct`), `selectedRoot` (the single choke-point selection), and the per-target `promptDrafts`
+ * map — so the SAME state shape the tests construct backs the live view. The rest (jobs/feed/one-off
+ * summary + the shared conduct/build control values) lives alongside it. */
 const state = {
+  ...createConsoleState(),
   targets: [],           // [{root, phase, next}] — from GET /projects
   jobs: new Map(),        // jobId -> Job (from POST trigger + GET /jobs/:id)
   jobOrder: [],           // most-recent-first jobId order for the feed
-  selectedRoot: undefined,
   selectedJobId: undefined,
   summary: undefined,     // last /role or /unit projected summary (one-off readout, not a job)
   budget: 5,
@@ -808,6 +941,28 @@ const view = {
       state.selectedRoot = state.targets[0].root;
     }
     renderTargets();
+    renderDeck();
+  },
+  /* Apply the operating posture: flip the app's `data-mode` (CSS shows the deck ONLY in conduct and
+   * slims the cards), light the active segment, re-render both surfaces, and — entering conduct —
+   * drop focus into the hero prompt so the operator can just start typing. */
+  renderMode(mode) {
+    const app = document.getElementById("app");
+    if (app) app.setAttribute("data-mode", mode);
+    for (const btn of document.querySelectorAll('#modeSwitch [data-action="set-mode"]')) {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    }
+    renderTargets();
+    renderDeck();
+    if (mode === "conduct") focusDeckPrompt();
+  },
+  renderTargets() { renderTargets(); },
+  renderDeck() { renderDeck(); },
+  /* Restore focus to the (possibly just-rebuilt) hero prompt — the controller calls this AFTER a
+   * project load re-renders the deck, so boot autofocus survives the async /projects round-trip. */
+  focusPrompt() { focusDeckPrompt(); },
+  showPromptRequired() {
+    toast('<span class="code">conduct</span> select a target, type a prompt');
   },
   recordJob({ phase, root, jobId }) {
     if (!jobId) return;
@@ -858,7 +1013,13 @@ const view = {
 };
 
 function controllerDeps() {
-  return { storage, view };
+  return { storage, view, state };
+}
+
+/** Focus the singular deck prompt (conduct mode's hero field) if it's on the page. */
+function focusDeckPrompt() {
+  const el = document.getElementById("deckPrompt");
+  if (el) el.focus();
 }
 
 function escapeHtml(s) {
@@ -901,11 +1062,18 @@ const IC = {
  *  the per-target "run role" control. */
 const ROLE_KINDS = ['evaluator', 'reviewer', 'generator', 'contract-generator', 'contract-evaluator'];
 
-/* ---------------- render: targets ---------------- */
+/* ---------------- render: targets ----------------
+ * Cards are mode-aware. In CONDUCT mode a card is a slim selector: identity (name, path), the phase
+ * chip, and `next ▸` — no action buttons; clicking it selects the deck's target. In FULL CYCLE mode
+ * the selected card reveals the full per-phase action surface (build/reflect/resume/init/freeze, unit,
+ * the role-kind select + run role, budget/turns steppers, the `fresh` toggle). The conduct controls
+ * live ONLY in the deck now, never duplicated on a card. */
 function renderTargets() {
   const el = document.getElementById('targetList');
+  if (!el) return;
   const countEl = document.getElementById('targetCount');
   if (countEl) countEl.textContent = `${state.targets.length} allowlisted`;
+  const fullCycle = state.mode === 'full cycle';
   el.innerHTML = state.targets.map((t,i) => `
     <div class="target ${t.root===state.selectedRoot?'sel':''}" style="animation-delay:${i*60}ms" data-action="select-target" data-root="${escapeHtml(t.root)}">
       <div class="t-top"><span class="t-name">${escapeHtml(targetName(t.root))}</span></div>
@@ -914,6 +1082,16 @@ function renderTargets() {
         <span class="phase ${escapeHtml(t.phase)}">${escapeHtml(t.phase)}</span>
       </div>
       <div class="next mono"><span class="arrow">next ▸</span> ${escapeHtml(t.next)}</div>
+      ${fullCycle ? targetActions(t) : ''}
+    </div>
+  `).join('');
+}
+
+/** The full-cycle per-card action surface (revealed on the selected card). Conduct controls are NOT
+ *  here — they live in the deck; this is exactly the expert phase surface (build/reflect/resume/init/
+ *  freeze, unit, role-kind select + run role, budget/turns steppers, the `fresh` toggle). */
+function targetActions(t) {
+  return `
       <div class="actions" data-action="stop">
         <div class="act-row">
           <button class="btn primary" data-action="trigger" data-root="${escapeHtml(t.root)}" data-phase="build">${IC.build} build</button>
@@ -928,36 +1106,6 @@ function renderTargets() {
             ${ROLE_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}
           </select>
           <button class="btn" data-action="run-role" data-root="${escapeHtml(t.root)}">${IC.check} run role</button>
-        </div>
-        <div class="conduct-row">
-          <textarea class="mono conduct-prompt" rows="2" placeholder="conduct prompt — one line drives decompose → per-unit contract → generate → evaluate → decide"></textarea>
-          <div class="conduct-ctrls">
-            <select class="mono conduct-mode-select" data-action="set-conduct-mode">
-              ${['hybrid','llm'].map((m) => `<option value="${m}" ${state.conductMode===m?'selected':''}>brain: ${m}</option>`).join('')}
-            </select>
-            <div class="ctrl">
-              <label>max units</label>
-              <div class="stepper">
-                <button data-action="step-units" data-delta="-1">−</button>
-                <input class="mono units-input" data-action="set-units" value="${state.maxUnits}"/>
-                <button data-action="step-units" data-delta="1">+</button>
-              </div>
-            </div>
-            <div class="toggle-fresh ${state.conductAuto?'on':''}" data-action="toggle-conduct-auto">
-              <span class="switch"></span> auto — never park a decision
-            </div>
-            <div class="toggle-fresh ${state.conductCommit?'on':''}" data-action="toggle-conduct-commit">
-              <span class="switch"></span> commit — self-land accepted units
-            </div>
-            <div class="toggle-fresh ${state.conductMerge?'on':''}" data-action="toggle-conduct-merge">
-              <span class="switch"></span> merge — integrate onto the run branch (implies commit)
-            </div>
-            <button class="btn primary" data-action="run-conduct" data-root="${escapeHtml(t.root)}">conduct</button>
-          </div>
-          <div class="conduct-ctrls conduct-resume">
-            <input class="mono conduct-resume-id" data-action="set-conduct-resume" placeholder="resume runId — continue a crashed/parked run" value="${escapeHtml(state.conductResumeId)}"/>
-            <button class="btn" data-action="run-conduct-resume" data-root="${escapeHtml(t.root)}">${IC.resume} resume run</button>
-          </div>
         </div>
         <div class="controls">
           <div class="ctrl">
@@ -977,30 +1125,98 @@ function renderTargets() {
             </div>
           </div>
         </div>
-        <div class="toggle-fresh ${state.fresh?'on':''}" data-action="toggle-fresh">
+        <div class="toggle-fresh ${state.fresh?'on':''}" data-action="toggle-fresh" tabindex="0" role="switch" aria-checked="${state.fresh?'true':'false'}">
           <span class="switch"></span> fresh — ignore prior build state (build only)
         </div>
-      </div>
-    </div>
-  `).join('');
-}
-function stepBudget(d){
-  state.budget=Math.max(1,state.budget+d);
-  const input = document.querySelector('.budget-input');
-  if (input) input.value = state.budget;
-}
-function stepTurns(d){
-  state.maxTurns=Math.max(10,state.maxTurns+d);
-  const input = document.querySelector('.turns-input');
-  if (input) input.value = state.maxTurns;
-}
-function stepUnits(d){
-  state.maxUnits=Math.max(1,state.maxUnits+d);
-  const input = document.querySelector('.units-input');
-  if (input) input.value = state.maxUnits;
+      </div>`;
 }
 
-function selectTarget(root){ state.selectedRoot=root; renderTargets(); }
+/* ---------------- render: the conduct deck ----------------
+ * Singular, full-width, bound to the SELECTED target. The hero prompt is backed by that target's own
+ * draft (so switching targets keeps each prompt its own). The launch button is disabled — with a
+ * visible reason — until a target is selected and the prompt is non-blank. */
+function renderDeck() {
+  const el = document.getElementById('deck');
+  if (!el) return;
+  const root = state.selectedRoot;
+  const draft = getPromptDraft(state, root);
+  const targetChips = state.targets.length
+    ? state.targets.map((t) => `<button type="button" class="deck-chip ${t.root===root?'sel':''}" data-action="select-target" data-root="${escapeHtml(t.root)}">${escapeHtml(targetName(t.root))}</button>`).join('')
+    : '<span class="deck-reason">no allowlisted targets — refresh /projects</span>';
+  // merge implies commit: show the commit toggle as ON whenever merge is ON (the controller couples
+  // the body the same way), but keep the stored toggles independent so turning merge off reverts
+  // commit to the operator's own choice.
+  const commitOn = state.conductCommit || state.conductMerge;
+  const canLaunch = root !== undefined && !isBlankPrompt(draft);
+  const reason = root === undefined ? 'select a target, type a prompt' : (isBlankPrompt(draft) ? 'type a prompt to launch' : `ready — conduct on ${escapeHtml(targetName(root))}`);
+  el.innerHTML = `
+    <div class="deck-inner panel tick">
+      <div class="deck-head">
+        <span class="kicker">conduct</span>
+        <div class="deck-targets" id="deckTargets">${targetChips}</div>
+      </div>
+      <textarea class="mono conduct-prompt deck-prompt" id="deckPrompt" data-action="set-conduct-prompt" placeholder="Describe one change in a line — e.g. “add a dark-mode toggle to settings”. Sparra decomposes it, contracts each unit, generates, evaluates, and decides.">${escapeHtml(draft)}</textarea>
+      <div class="pipeline" aria-label="what one line drives">
+        <span class="pl-step">decompose</span><span class="pl-arrow">▸</span><span class="pl-step">contract</span><span class="pl-arrow">▸</span><span class="pl-step">generate</span><span class="pl-arrow">▸</span><span class="pl-step">evaluate</span><span class="pl-arrow">▸</span><span class="pl-step">decide</span>
+      </div>
+      <div class="deck-ctrls">
+        <select class="mono conduct-mode-select" data-action="set-conduct-mode" aria-label="brain">
+          ${['hybrid','llm'].map((m) => `<option value="${m}" ${state.conductMode===m?'selected':''}>brain: ${m}</option>`).join('')}
+        </select>
+        <div class="ctrl">
+          <label>max units</label>
+          <div class="stepper">
+            <button type="button" data-action="step-units" data-delta="-1">−</button>
+            <input class="mono units-input" data-action="set-units" value="${state.maxUnits}"/>
+            <button type="button" data-action="step-units" data-delta="1">+</button>
+          </div>
+        </div>
+        <div class="deck-toggles">
+          <div class="toggle-fresh ${state.conductAuto?'on':''}" data-action="toggle-conduct-auto" tabindex="0" role="switch" aria-checked="${state.conductAuto?'true':'false'}">
+            <span class="switch"></span> auto — never park a decision
+          </div>
+          <div class="toggle-fresh ${commitOn?'on':''}" data-action="toggle-conduct-commit" tabindex="0" role="switch" aria-checked="${commitOn?'true':'false'}">
+            <span class="switch"></span> commit — self-land accepted units
+          </div>
+          <div class="toggle-fresh ${state.conductMerge?'on':''}" data-action="toggle-conduct-merge" tabindex="0" role="switch" aria-checked="${state.conductMerge?'true':'false'}">
+            <span class="switch"></span> merge — integrate onto the run branch (implies commit)
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>budget · usd</label>
+          <div class="stepper">
+            <button type="button" data-action="step-budget" data-delta="-1">−</button>
+            <input class="mono budget-input" data-action="set-budget" value="${state.budget}"/>
+            <button type="button" data-action="step-budget" data-delta="1">+</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>max turns</label>
+          <div class="stepper">
+            <button type="button" data-action="step-turns" data-delta="-10">−</button>
+            <input class="mono turns-input" data-action="set-turns" value="${state.maxTurns}"/>
+            <button type="button" data-action="step-turns" data-delta="10">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="deck-launch">
+        <button class="btn primary" id="deckConduct" data-action="run-conduct" data-root="${escapeHtml(root || '')}" ${canLaunch?'':'disabled'} ${canLaunch?'':`title="${escapeHtml(reason)}"`}>conduct</button>
+        <span class="deck-reason" id="deckReason">${escapeHtml(reason)}</span>
+      </div>
+      <div class="deck-resume">
+        <input class="mono conduct-resume-id" id="deckResumeId" data-action="set-conduct-resume" placeholder="resume runId — continue a crashed or parked run" value="${escapeHtml(state.conductResumeId)}"/>
+        <button class="btn" data-action="run-conduct-resume" data-root="${escapeHtml(root || '')}">${IC.resume} resume run</button>
+      </div>
+    </div>`;
+}
+/* Steppers write to EVERY matching input (the deck's and/or the selected card's), so whichever surface
+ * is on screen stays in sync with the shared control value. */
+function setInputs(selector, value){
+  for (const input of document.querySelectorAll(selector)) input.value = value;
+}
+function stepBudget(d){ state.budget=Math.max(1,state.budget+d); setInputs('.budget-input', state.budget); }
+function stepTurns(d){ state.maxTurns=Math.max(10,state.maxTurns+d); setInputs('.turns-input', state.maxTurns); }
+function stepUnits(d){ state.maxUnits=Math.max(1,state.maxUnits+d); setInputs('.units-input', state.maxUnits); }
 
 /** Trigger one of build/reflect/resume/init/freeze for the given root, over the REAL controller —
  *  the request body/schema/lock/401/409 handling all live in `dashboard.client.js`. */
@@ -1016,52 +1232,46 @@ function runUnit(root){
   triggerUnit(controllerDeps(), { root, budget: state.budget, maxTurns: state.maxTurns });
 }
 
-/** `POST /conduct` — decompose the prompt into units and drive each through the loop. The prompt is
- *  read from the CLICKED card's textarea at click time (scoped to that card, never the page-global
- *  first `.conduct-prompt`, so a second target's conduct sends its own prompt); mode/auto/maxUnits/
- *  budget come from the card controls. An empty prompt is a no-op toast (the server would 400 it —
- *  surface it locally first). */
+/** `POST /conduct` from the deck — decompose the prompt into units and drive each through the loop.
+ *  The prompt is the SELECTED target's own draft (each target keeps its own); `merge` implies `commit`
+ *  in the body (coupled once in the controller's `buildConductBody`). `launchConduct` guards the empty
+ *  prompt: a blank/whitespace prompt fires NOTHING and surfaces a visible reason. */
 function runConduct(el){
-  const root = el.dataset.root;
-  const prompt = cardScopedValue(el, '.conduct-prompt');
-  if (!prompt) { toast('<span class="code">conduct</span> enter a prompt first'); return; }
-  triggerConduct(controllerDeps(), {
+  const root = (el && el.dataset.root) || state.selectedRoot;
+  const prompt = getPromptDraft(state, root);
+  launchConduct(controllerDeps(), {
     root,
     prompt,
     auto: state.conductAuto,
     mode: state.conductMode,
     maxUnits: state.maxUnits,
     budget: state.budget,
-    ...(state.conductCommit ? { commit: true } : {}),
-    ...(state.conductMerge ? { merge: true } : {}),
+    commit: state.conductCommit,
+    merge: state.conductMerge,
   });
 }
 
-/** `POST /conduct` RESUME — continue a persisted `<runId>` in place. The runId is read from the CLICKED
- *  card's own input at click time (scoped to that `.target` card via `cardScopedValue`, NOT the
- *  page-global first `.conduct-resume-id` — so with several targets rendered, the second card's resume
- *  action sends the second card's runId, not the first's); ONLY resume-compatible fields (auto + the
- *  commit/merge toggles) ride along, so the server never 400s a run-shaping field alongside `resume`.
- *  An empty runId is a local no-op toast. */
+/** `POST /conduct` RESUME from the deck — continue a persisted `<runId>` in place. ONLY resume-compatible
+ *  fields ride along (auto + the coupled commit/merge toggles), so the server never 400s a run-shaping
+ *  field alongside `resume`. An empty runId is a local no-op toast. */
 function runConductResume(el){
-  const root = el.dataset.root;
-  const resume = cardScopedValue(el, '.conduct-resume-id');
+  const root = (el && el.dataset.root) || state.selectedRoot;
+  const resume = state.conductResumeId.trim();
   if (!resume) { toast('<span class="code">resume</span> enter a runId first'); return; }
   triggerConduct(controllerDeps(), {
     root,
     resume,
     auto: state.conductAuto,
-    ...(state.conductCommit ? { commit: true } : {}),
-    ...(state.conductMerge ? { merge: true } : {}),
+    commit: state.conductCommit,
+    merge: state.conductMerge,
   });
 }
 
-/** Ad-hoc `POST /role` — one holdout-safe role-run of the kind picked in the target's role-kind
- *  select. Renders through the SAME summary readout `runUnit` uses (`showRoleResult` →
- *  `view.renderRoleSummary` → `roleReadout`), never a separate/raw view. */
-function runRole(root){
-  const select = document.querySelector('.role-kind-select');
-  const kind = (select && select.value) || 'evaluator';
+/** Ad-hoc `POST /role` — one holdout-safe role-run of the kind picked in THIS card's role-kind select
+ *  (scoped to the clicked card via `cardScopedValue`, not a page-global first `.role-kind-select`).
+ *  Renders through the SAME summary readout `runUnit` uses. */
+function runRole(root, el){
+  const kind = cardScopedValue(el, '.role-kind-select') || 'evaluator';
   triggerRole(controllerDeps(), { root, kind });
 }
 
@@ -1347,7 +1557,10 @@ function toggleTheme(){
 
 /* ---------------- boot ---------------- */
 function boot(){
-  renderTargets();
+  // Restore the persisted operating posture first (validated by the controller); `initConsoleMode`
+  // flips `data-mode`, renders both the rail cards and the deck, and — in conduct mode — focuses the
+  // hero prompt so the operator can just start typing.
+  initConsoleMode(controllerDeps());
   renderJobs();
   renderStage();
   const token = storage.getToken();
@@ -1359,6 +1572,26 @@ function boot(){
   view.setAuthorized(true);
   refreshHealth(controllerDeps());
   refreshProjects(controllerDeps());
+}
+
+/** Select a target through the ONE controller choke point, from EITHER surface (a rail card or a deck
+ *  chip). The deck's current prompt text is already saved to its target's draft on every keystroke, so
+ *  switching never loses in-progress typing; `selectTarget` then re-renders both surfaces in sync. */
+function chooseTarget(root){
+  selectTarget(controllerDeps(), root);
+}
+
+/** Live-update the deck's launch affordance as the operator types, without a full re-render (which would
+ *  drop focus). Saves the draft to the selected target and toggles the disabled state + reason. */
+function onDeckPromptInput(el){
+  setPromptDraft(state, state.selectedRoot, el.value);
+  const btn = document.getElementById('deckConduct');
+  const reasonEl = document.getElementById('deckReason');
+  const root = state.selectedRoot;
+  const canLaunch = root !== undefined && !isBlankPrompt(el.value);
+  const reason = root === undefined ? 'select a target, type a prompt' : (isBlankPrompt(el.value) ? 'type a prompt to launch' : `ready — conduct on ${targetName(root)}`);
+  if (btn) { btn.disabled = !canLaunch; if (canLaunch) btn.removeAttribute('title'); else btn.setAttribute('title', reason); }
+  if (reasonEl) reasonEl.textContent = reason;
 }
 
 /* ---------------- event wiring ----------------
@@ -1382,35 +1615,73 @@ function wireDelegatedClicks(container, handlers){
     // `data-action="stop"` (the `.actions` wrapper) and any other unrecognized action intentionally
     // no-op here — this is the delegated equivalent of the old `stopPropagation()` on that wrapper.
   });
+  // Keyboard parity for the non-<button> switches/rows (role="switch", tabindex=0): Enter/Space fires
+  // the same delegated click path, so every control is operable without a pointer.
+  container.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const el = event.target.closest('[data-action][tabindex]');
+    if (!el || !container.contains(el)) return;
+    event.preventDefault();
+    const handler = handlers[el.dataset.action];
+    if (handler) handler(el, event);
+  });
 }
 
+/* ---- rail cards (both modes: slim selectors in conduct, full phase surface in full cycle) ---- */
 wireDelegatedClicks(document.getElementById('targetList'), {
-  'select-target': (el) => selectTarget(el.dataset.root),
+  'select-target': (el) => chooseTarget(el.dataset.root),
   'trigger': (el) => trigger(el.dataset.root, el.dataset.phase),
   'run-unit': (el) => runUnit(el.dataset.root),
-  'run-role': (el) => runRole(el.dataset.root),
+  'run-role': (el) => runRole(el.dataset.root, el),
+  'step-budget': (el) => stepBudget(Number(el.dataset.delta)),
+  'step-turns': (el) => stepTurns(Number(el.dataset.delta)),
+  'toggle-fresh': () => { state.fresh = !state.fresh; renderTargets(); },
+});
+document.getElementById('targetList').addEventListener('change', (event) => {
+  if (event.target.matches('[data-action="set-budget"]')) {
+    state.budget = Number(event.target.value) || 1;
+    setInputs('.budget-input', state.budget);
+  } else if (event.target.matches('[data-action="set-turns"]')) {
+    state.maxTurns = Number(event.target.value) || 10;
+    setInputs('.turns-input', state.maxTurns);
+  }
+});
+
+/* ---- the conduct deck (conduct mode) ---- */
+wireDelegatedClicks(document.getElementById('deck'), {
+  'select-target': (el) => chooseTarget(el.dataset.root),
   'run-conduct': (el) => runConduct(el),
   'run-conduct-resume': (el) => runConductResume(el),
   'step-budget': (el) => stepBudget(Number(el.dataset.delta)),
   'step-turns': (el) => stepTurns(Number(el.dataset.delta)),
   'step-units': (el) => stepUnits(Number(el.dataset.delta)),
-  'toggle-fresh': () => { state.fresh = !state.fresh; renderTargets(); },
-  'toggle-conduct-auto': () => { state.conductAuto = !state.conductAuto; renderTargets(); },
-  'toggle-conduct-commit': () => { state.conductCommit = !state.conductCommit; renderTargets(); },
-  'toggle-conduct-merge': () => { state.conductMerge = !state.conductMerge; renderTargets(); },
+  'toggle-conduct-auto': () => { state.conductAuto = !state.conductAuto; renderDeck(); },
+  'toggle-conduct-commit': () => { state.conductCommit = !state.conductCommit; renderDeck(); },
+  'toggle-conduct-merge': () => { state.conductMerge = !state.conductMerge; renderDeck(); },
 });
-document.getElementById('targetList').addEventListener('change', (event) => {
+document.getElementById('deck').addEventListener('input', (event) => {
+  if (event.target.matches('[data-action="set-conduct-prompt"]')) onDeckPromptInput(event.target);
+});
+document.getElementById('deck').addEventListener('change', (event) => {
   if (event.target.matches('[data-action="set-budget"]')) {
     state.budget = Number(event.target.value) || 1;
+    setInputs('.budget-input', state.budget);
   } else if (event.target.matches('[data-action="set-turns"]')) {
     state.maxTurns = Number(event.target.value) || 10;
+    setInputs('.turns-input', state.maxTurns);
   } else if (event.target.matches('[data-action="set-units"]')) {
     state.maxUnits = Math.max(1, Number(event.target.value) || 1);
+    setInputs('.units-input', state.maxUnits);
   } else if (event.target.matches('[data-action="set-conduct-mode"]')) {
     state.conductMode = event.target.value === 'llm' ? 'llm' : 'hybrid';
   } else if (event.target.matches('[data-action="set-conduct-resume"]')) {
     state.conductResumeId = event.target.value || '';
   }
+});
+
+/* ---- header mode switch: the single posture choke point ---- */
+wireDelegatedClicks(document.getElementById('modeSwitch'), {
+  'set-mode': (el) => setConsoleMode(controllerDeps(), el.dataset.mode),
 });
 
 wireDelegatedClicks(document.getElementById('jobList'), {

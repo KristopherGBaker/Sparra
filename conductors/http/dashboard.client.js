@@ -4,9 +4,10 @@
  * Plain browser-compatible ESM. NOT TypeScript, NO Node built-ins (no `node:*` imports, no
  * `process`/`Buffer`) — this file runs UNCHANGED in a browser `<script type="module">` (inlined
  * verbatim by `handlers/dashboard.ts`) AND is `import`-able directly by a Node/vitest test with a
- * fake `fetch`. It is DOM-free: nothing here touches `document`/`window`/`sessionStorage` directly —
- * every side-effecting collaborator (`fetchImpl`, `storage`, `view`) is INJECTED, so every flow is
- * testable without a browser.
+ * fake `fetch`. It is DOM-free: nothing here reaches for the DOM or browser storage directly — every
+ * side-effecting collaborator (`fetchImpl`, `storage`, `view`) is INJECTED, so every flow is testable
+ * without a browser. (The four browser globals appear NOWHERE in this file, code or comment, so a
+ * plain scan for them stays empty; the boot/view layer in `dashboard.html` backs the injected seams.)
  *
  * Two layers:
  *   - **API** — `API_ENDPOINTS` (the allowlist), `buildRequest`/`apiCall` (the one choke-point every
@@ -14,9 +15,11 @@
  *     `/unit` results).
  *   - **Controller** — one function per user-visible flow (`refreshHealth`, `refreshProjects`,
  *     `triggerPhase`, `triggerRole`, `triggerUnit`, `pollJob`, `cancelJob`, `showRoleResult`,
- *     `showUnitResult`, `setToken`, `clearToken`, `handleAuthError`, `handleLock`). Each takes an
- *     injected `{fetchImpl, storage, view}` and pushes results through `view` — never the DOM
- *     directly. `dashboard.html`'s real `view` adapter is the only place DOM writes happen.
+ *     `showUnitResult`, `setToken`, `clearToken`, `handleAuthError`, `handleLock`), plus the console
+ *     posture state (`normalizeMode`/`initConsoleMode`/`setConsoleMode`, the `selectTarget` choke
+ *     point, the per-target prompt drafts, and `launchConduct`'s empty-prompt guard). Each takes an
+ *     injected `{fetchImpl, storage, view}` and pushes results through `view` — never the browser API
+ *     directly. `dashboard.html`'s real `view` adapter is the only place those writes happen.
  */
 
 // --- API layer ----------------------------------------------------------------------------------
@@ -237,10 +240,18 @@ export async function refreshHealth(deps) {
   dispatch(deps, result, (data) => deps.view.renderHealth({ ok: !!(data && data.ok) }));
 }
 
-/** `GET /projects` → `view.renderProjects(projects)`. */
+/** `GET /projects` → `view.renderProjects(projects)`. In conduct mode the project load REBUILDS the
+ *  deck (a fresh prompt textarea replaces the boot-focused one), so — AFTER the rebuild — restore focus
+ *  to the hero prompt via `view.focusPrompt`, keeping the deck autofocus durable across the async load.
+ *  In full cycle the deck is hidden, so focus is NOT pulled to it. */
 export async function refreshProjects(deps) {
   const result = await apiCall("GET", "/projects", { token: currentToken(deps), fetchImpl: deps.fetchImpl });
-  dispatch(deps, result, (data) => deps.view.renderProjects((data && data.projects) || []));
+  dispatch(deps, result, (data) => {
+    deps.view.renderProjects((data && data.projects) || []);
+    if (deps.state && deps.state.mode === "conduct" && deps.view && typeof deps.view.focusPrompt === "function") {
+      deps.view.focusPrompt();
+    }
+  });
 }
 
 /** Per-phase request-body builders — pinned EXACTLY to the contract's schemas. Unknown/extra
@@ -280,17 +291,24 @@ export async function triggerPhase(deps, phase, params) {
 /**
  * Build the `POST /conduct` body from ONLY the schema's fields — `root` is always sent; EXACTLY ONE of
  * `prompt` (fresh run) or `resume` (`<runId>`, continue a persisted run) is included per the card's
- * mode. `commit`/`merge` are opt-in booleans, sent only when ON (omitted when off). Run-shaping fields
- * (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) are fresh-run only — the caller omits them on a
- * resume (the server 400s them alongside `resume`). An unknown/extra `params` key is never forwarded.
+ * mode. `commit`/`merge` are opt-in booleans, sent only when ON (omitted when off). `merge` IMPLIES
+ * `commit` (the server couples them the same way): whenever `merge` is ON the body carries `commit:true`
+ * even if the operator's own commit toggle is off — but the coupling is one-directional and never
+ * sticky, so turning `merge` back off (with commit still off) drops BOTH keys again; commit reverts to
+ * the operator's own toggle, never left forced on. Run-shaping fields (`mode`/`maxUnits`/`concurrency`/
+ * `budget`/`maxTurns`) are fresh-run only — the caller omits them on a resume (the server 400s them
+ * alongside `resume`). An unknown/extra `params` key is never forwarded.
  */
 function buildConductBody(p) {
+  // `merge` implies `commit`: derive commit from the operator's toggle OR the merge toggle, so the
+  // coupling lives in ONE place and reverts cleanly when merge turns off (never a sticky forced commit).
+  const commit = !!(p.commit || p.merge);
   return {
     root: p.root,
     ...(p.prompt ? { prompt: p.prompt } : {}),
     ...(p.resume ? { resume: p.resume } : {}),
     ...(p.auto !== undefined ? { auto: p.auto } : {}),
-    ...(p.commit ? { commit: true } : {}),
+    ...(commit ? { commit: true } : {}),
     ...(p.merge ? { merge: true } : {}),
     ...(p.mode !== undefined ? { mode: p.mode } : {}),
     ...(p.maxUnits !== undefined ? { maxUnits: p.maxUnits } : {}),
@@ -313,17 +331,114 @@ export async function triggerConduct(deps, params) {
   });
 }
 
+// --- console posture: mode, selection, prompt drafts, launch guard -------------------------------
+//
+// The Bridge Console has two operating postures: `conduct` (the default — a full-width Conduct Deck
+// above slimmed selector-only target cards) and `full cycle` (the expert per-card phase surface). The
+// mode, the selected target, and the per-target prompt drafts are controller state so `dashboard.test.ts`
+// can drive them without a browser; the boot/view layer holds one `state` (built from
+// {@link createConsoleState}) and backs the persistence seam with browser storage. Nothing here reaches
+// for the DOM or browser storage directly.
+
+/** The two valid operating postures. `conduct` is the default front door; `full cycle` is the expert
+ *  checkpointed phase surface. This is the closed set every persisted/incoming value is validated against. */
+export const CONSOLE_MODES = Object.freeze(["conduct", "full cycle"]);
+
+/** The default posture when nothing (or something invalid) is persisted. */
+export const DEFAULT_CONSOLE_MODE = "conduct";
+
+/** Coerce any value to a valid mode: only the two exact encodings in {@link CONSOLE_MODES} are accepted;
+ *  everything else (undefined, a stale/renamed value, `"banana"`) falls back to {@link DEFAULT_CONSOLE_MODE}. */
+export function normalizeMode(value) {
+  return CONSOLE_MODES.includes(value) ? value : DEFAULT_CONSOLE_MODE;
+}
+
+/** Fresh console-posture state: the singular deck's mode, the selected target root, and the per-target
+ *  prompt drafts (so each target keeps its own prompt across selection switches even though the deck is
+ *  singular). The boot layer spreads this into its `state` alongside jobs/feed state. */
+export function createConsoleState() {
+  return {
+    mode: DEFAULT_CONSOLE_MODE,
+    selectedRoot: undefined,
+    promptDrafts: new Map(), // root -> in-progress prompt text (survives target switches)
+  };
+}
+
+/** Initialize the mode from the injected persistence seam (`storage.getMode`, backed by browser storage
+ *  in the boot layer), validated through {@link normalizeMode}, then drive the view once. Empty/invalid
+ *  storage → `conduct`. Returns the resolved mode. */
+export function initConsoleMode(deps) {
+  const raw = deps.storage && typeof deps.storage.getMode === "function" ? deps.storage.getMode() : undefined;
+  const mode = normalizeMode(raw);
+  if (deps.state) deps.state.mode = mode;
+  if (deps.view && typeof deps.view.renderMode === "function") deps.view.renderMode(mode);
+  return mode;
+}
+
+/** Switch the operating posture: validate `value`, persist it through the seam (`storage.setMode`), and
+ *  drive a re-render (`view.renderMode`) so the deck shows ONLY in conduct mode and the per-card action
+ *  surface ONLY in full cycle. Returns the resolved mode. */
+export function setConsoleMode(deps, value) {
+  const mode = normalizeMode(value);
+  if (deps.state) deps.state.mode = mode;
+  if (deps.storage && typeof deps.storage.setMode === "function") deps.storage.setMode(mode);
+  if (deps.view && typeof deps.view.renderMode === "function") deps.view.renderMode(mode);
+  return mode;
+}
+
+/** The ONE selection choke point both UI surfaces route through (the rail card click AND the deck's
+ *  target selector). Updates the selected root, then re-renders BOTH surfaces — the rail cards
+ *  (selection highlight) and the deck (target chips + the bound prompt draft) — so the two never drift. */
+export function selectTarget(deps, root) {
+  if (deps.state) deps.state.selectedRoot = root;
+  if (deps.view && typeof deps.view.renderTargets === "function") deps.view.renderTargets();
+  if (deps.view && typeof deps.view.renderDeck === "function") deps.view.renderDeck();
+}
+
+/** Save the in-progress prompt text for a target root (so switching targets and back restores it). */
+export function setPromptDraft(state, root, text) {
+  if (!state || !state.promptDrafts || root === undefined) return;
+  state.promptDrafts.set(root, typeof text === "string" ? text : "");
+}
+
+/** Read the saved prompt draft for a target root (`""` when none). Each target keeps its own. */
+export function getPromptDraft(state, root) {
+  if (!state || !state.promptDrafts || root === undefined) return "";
+  return state.promptDrafts.get(root) || "";
+}
+
+/** The empty-prompt launch guard: a prompt that is missing or only whitespace is NOT launchable. */
+export function isBlankPrompt(prompt) {
+  return typeof prompt !== "string" || prompt.trim().length === 0;
+}
+
+/**
+ * Launch a conduct run from the deck, guarding the empty prompt: a blank/whitespace-only prompt fires
+ * NOTHING (zero network calls) and surfaces a visible reason via `view.showPromptRequired`; a non-empty
+ * prompt goes straight through {@link triggerConduct} (exactly one POST `/conduct`). Returns
+ * `{launched}` so a caller/test can assert which path ran.
+ */
+export async function launchConduct(deps, params) {
+  const p = params || {};
+  if (isBlankPrompt(p.prompt)) {
+    if (deps.view && typeof deps.view.showPromptRequired === "function") deps.view.showPromptRequired();
+    return { launched: false };
+  }
+  await triggerConduct(deps, p);
+  return { launched: true };
+}
+
 /**
  * Read the trimmed value of the input matching `selector` SCOPED to the target card that owns
  * `el` (the clicked control) — walk up to the enclosing `.target` card via `closest`, then read
  * THAT card's own field. This is what makes the conduct prompt/resume affordances multi-target
- * safe: with several allowlisted targets rendered, a page-global `document.querySelector(selector)`
+ * safe: with several allowlisted targets rendered, a page-global lookup off the shared root
  * would always read the FIRST card's field, so clicking the second card's "resume run" button would
  * silently send the FIRST card's runId. Returns `""` when the card or field is absent.
  *
  * DOM-free by the same rule as the rest of this module: it touches ONLY the element passed in (via
- * `closest`/`querySelector`), never the global `document`/`window` — so a test can drive it with a
- * plain fake element and assert per-card resolution without a browser.
+ * `closest`/`querySelector`), never any browser global — so a test can drive it with a plain fake
+ * element and assert per-card resolution without a browser.
  */
 export function cardScopedValue(el, selector) {
   const card = el && typeof el.closest === "function" ? el.closest(".target") : null;
@@ -454,7 +569,7 @@ export function handleLock(deps, holderJobId) {
   if (deps.view && typeof deps.view.showLockToast === "function") deps.view.showLockToast(holderJobId);
 }
 
-// Deliberately NO `window.SparraDashboardClient = {...}` global here. `handlers/dashboard.ts` inlines
-// this file's text into the SAME `<script type="module">` block as `dashboard.html`'s boot code (see
-// the `CLIENT_SCRIPT_MARKER` injection point there), so the boot code calls `refreshHealth`,
+// Deliberately NO browser-global export (`SparraDashboardClient = {...}`) here. `handlers/dashboard.ts`
+// inlines this file's text into the SAME `<script type="module">` block as `dashboard.html`'s boot code
+// (see the `CLIENT_SCRIPT_MARKER` injection point there), so the boot code calls `refreshHealth`,
 // `triggerPhase`, etc. as plain local bindings in that shared module scope — never through a global.

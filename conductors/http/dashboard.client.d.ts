@@ -7,6 +7,27 @@ export interface ApiEndpoint {
 export const API_ENDPOINTS: readonly ApiEndpoint[];
 export const TRIGGER_PHASES: readonly string[];
 
+/** The two valid console operating postures (closed set). */
+export const CONSOLE_MODES: readonly string[];
+export const DEFAULT_CONSOLE_MODE: string;
+
+/** Console-posture state the boot/view layer spreads into its `state` and tests construct directly. */
+export interface ConsoleState {
+  mode: string;
+  selectedRoot: string | undefined;
+  promptDrafts: Map<string, string>;
+  [key: string]: unknown;
+}
+export function createConsoleState(): ConsoleState;
+export function normalizeMode(value: unknown): string;
+export function initConsoleMode(deps: ControllerDeps): string;
+export function setConsoleMode(deps: ControllerDeps, value: unknown): string;
+export function selectTarget(deps: ControllerDeps, root: string): void;
+export function setPromptDraft(state: ConsoleState, root: string, text: string): void;
+export function getPromptDraft(state: ConsoleState, root: string): string;
+export function isBlankPrompt(prompt: unknown): boolean;
+export function launchConduct(deps: ControllerDeps, params: Record<string, unknown>): Promise<{ launched: boolean }>;
+
 export interface BuildRequestOpts {
   token?: string;
   body?: unknown;

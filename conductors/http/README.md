@@ -118,16 +118,25 @@ then `launchctl load ~/Library/LaunchAgents/com.sparra.bridge.plist`. To stop/un
 ## Dashboard
 
 `GET /` serves the **Sparra Bridge Console** — a self-contained, holdout-safe web dashboard for
-driving + monitoring the bridge (health, per-target phase triggers with budget/maxTurns/fresh
-controls, a live job feed with the redacted phase log, and `/role`/`/unit` summary readouts) from a
-browser over your tailnet, phone included. It needs no token to LOAD (a browser's top-level
-navigation can't attach an `Authorization` header), but every data call the page itself makes is
-Bearer-gated exactly like a `curl` caller — enter your token once via the on-page modal; it's held in
-`sessionStorage`, never persisted to disk. Set `bridge.yaml`'s `dashboard: false` to disable it
-entirely (→ 404), for zero unauthenticated HTTP surface beyond `GET /health`. The page is a single
-static asset — no external script/style/image references, no new dependency — built from
+driving + monitoring the bridge from a browser over your tailnet, phone included. It needs no token to
+LOAD (a browser's top-level navigation can't attach an `Authorization` header), but every data call the
+page itself makes is Bearer-gated exactly like a `curl` caller — enter your token once via the on-page
+modal; it's held in `sessionStorage`, never persisted to disk. Set `bridge.yaml`'s `dashboard: false`
+to disable it entirely (→ 404), for zero unauthenticated HTTP surface beyond `GET /health`. The page is
+a single static asset — no external script/style/image references, no new dependency — built from
 `conductors/http/dashboard.client.js` (the DOM-free API/controller logic, unit-tested in
 `dashboard.test.ts`) inlined into `conductors/http/dashboard.html` at serve time.
+
+A header segmented switch (`conduct` | `full cycle`) picks the operating mode; the choice persists
+across reloads (`localStorage`). **conduct** (the default) puts a full-width **Conduct Deck** above the
+columns — a target selector synced with the rail, a hero mono prompt (autofocused), the `decompose ▸
+contract ▸ generate ▸ evaluate ▸ decide` pipeline strip, the conduct controls (brain `hybrid`|`llm`,
+max units, `auto`/`commit`/`merge` toggles with `merge`⇒`commit`, budget, maxTurns), a `conduct` launch
+button (disabled-with-reason on an empty prompt), and a `resume run` affordance; each target keeps its
+own prompt draft. Rail cards slim to identity + status and act as deck selectors. **full cycle** hides
+the deck and restores the expert per-card action surface (build/reflect/resume/init/freeze triggers,
+`unit`, the role-kind select + run role, budget/maxTurns/`fresh` controls). The live job feed with the
+redacted phase log and the `/role`/`/unit` summary readouts stay available in both modes.
 
 ## Endpoints
 

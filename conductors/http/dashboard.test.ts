@@ -10,16 +10,27 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   API_ENDPOINTS,
+  CONSOLE_MODES,
+  DEFAULT_CONSOLE_MODE,
   apiCall,
   buildRequest,
   cancelJob,
   cardScopedValue,
+  createConsoleState,
+  getPromptDraft,
   handleAuthError,
   handleLock,
+  initConsoleMode,
+  isBlankPrompt,
+  launchConduct,
+  normalizeMode,
   pollJob,
   projectSummary,
   refreshHealth,
   refreshProjects,
+  selectTarget,
+  setConsoleMode,
+  setPromptDraft,
   showRoleResult,
   showUnitResult,
   submitDecision,
@@ -58,6 +69,27 @@ function fakeView() {
     showReauth: vi.fn(),
     showLockToast: vi.fn(),
     showError: vi.fn(),
+    // console-posture surfaces (deck/mode/selection)
+    renderMode: vi.fn(),
+    renderTargets: vi.fn(),
+    renderDeck: vi.fn(),
+    focusPrompt: vi.fn(),
+    showPromptRequired: vi.fn(),
+  };
+}
+
+/** A fake mode store backing the injected persistence seam (`getMode`/`setMode`) — the boot layer backs
+ *  this with `localStorage`; a test can seed it and assert writes without a browser. */
+function fakeModeStore(initial?: string) {
+  let mode: string | undefined = initial;
+  return {
+    getMode: vi.fn(() => mode),
+    setMode: vi.fn((m: string) => {
+      mode = m;
+    }),
+    getToken: vi.fn(() => undefined),
+    setToken: vi.fn(),
+    clearToken: vi.fn(),
   };
 }
 
@@ -410,6 +442,223 @@ describe("cardScopedValue — resume/prompt read the CLICKED card, not the page-
     expect(bodies[0]!.resume).not.toBe("run-FIRST");
     // sanity: the first card genuinely holds a DIFFERENT id (fixture is non-vacuous).
     expect(cardScopedValue(first.button, ".conduct-resume-id")).toBe("run-FIRST");
+  });
+});
+
+// --- console posture: mode / selection / drafts / launch guard (U4 two-mode redesign) ------------
+
+describe("console mode — closed set, default conduct, invalid-value fallback (A1)", () => {
+  it("exposes exactly the two valid postures with conduct as default", () => {
+    expect([...CONSOLE_MODES]).toEqual(["conduct", "full cycle"]);
+    expect(DEFAULT_CONSOLE_MODE).toBe("conduct");
+  });
+
+  it("normalizeMode accepts ONLY the two encodings, else falls back to conduct", () => {
+    expect(normalizeMode("conduct")).toBe("conduct");
+    expect(normalizeMode("full cycle")).toBe("full cycle");
+    for (const bad of ["banana", "", "Conduct", "full-cycle", "fullcycle", undefined, null, 3, {}]) {
+      expect(normalizeMode(bad as unknown as string)).toBe("conduct");
+    }
+  });
+
+  it("init with EMPTY storage → conduct; with an INVALID seed (\"banana\") → conduct", () => {
+    const view1 = fakeView();
+    const state1 = createConsoleState();
+    const mode1 = initConsoleMode({ storage: fakeModeStore(undefined), view: view1, state: state1 });
+    expect(mode1).toBe("conduct");
+    expect(state1.mode).toBe("conduct");
+    expect(view1.renderMode).toHaveBeenCalledWith("conduct");
+
+    const view2 = fakeView();
+    const state2 = createConsoleState();
+    const mode2 = initConsoleMode({ storage: fakeModeStore("banana"), view: view2, state: state2 });
+    expect(mode2).toBe("conduct");
+    expect(view2.renderMode).toHaveBeenCalledWith("conduct");
+  });
+});
+
+describe("console mode — persistence + toggle drives rendering (A2)", () => {
+  it("init RESTORES a persisted full-cycle value", () => {
+    const view = fakeView();
+    const state = createConsoleState();
+    const mode = initConsoleMode({ storage: fakeModeStore("full cycle"), view, state });
+    expect(mode).toBe("full cycle");
+    expect(state.mode).toBe("full cycle");
+    expect(view.renderMode).toHaveBeenCalledWith("full cycle");
+  });
+
+  it("toggling WRITES the new value to storage AND drives a re-render with the new mode", () => {
+    const storage = fakeModeStore("conduct");
+    const view = fakeView();
+    const state = createConsoleState();
+    const mode = setConsoleMode({ storage, view, state }, "full cycle");
+    expect(mode).toBe("full cycle");
+    expect(state.mode).toBe("full cycle");
+    expect(storage.setMode).toHaveBeenCalledWith("full cycle"); // persisted
+    expect(view.renderMode).toHaveBeenCalledWith("full cycle"); // rendered
+  });
+
+  it("an invalid toggle value is coerced to conduct before persisting/rendering", () => {
+    const storage = fakeModeStore("full cycle");
+    const view = fakeView();
+    const state = createConsoleState();
+    const mode = setConsoleMode({ storage, view, state }, "banana");
+    expect(mode).toBe("conduct");
+    expect(storage.setMode).toHaveBeenCalledWith("conduct");
+    expect(view.renderMode).toHaveBeenCalledWith("conduct");
+  });
+});
+
+describe("selectTarget — the ONE selection choke point drives BOTH surfaces (A7)", () => {
+  it("updates the selected root and re-renders the rail cards AND the deck", () => {
+    const view = fakeView();
+    const state = createConsoleState();
+    selectTarget({ view, state }, "/tmp/proj-b");
+    expect(state.selectedRoot).toBe("/tmp/proj-b");
+    expect(view.renderTargets).toHaveBeenCalled(); // rail card selection
+    expect(view.renderDeck).toHaveBeenCalled(); // deck target selector
+  });
+});
+
+describe("per-target prompt drafts survive target switches (A6)", () => {
+  it("A→type→B→type→back-to-A restores A's exact text (not one shared buffer)", () => {
+    const state = createConsoleState();
+    // select A, type A's draft
+    selectTarget({ view: fakeView(), state }, "/tmp/proj-a");
+    setPromptDraft(state, "/tmp/proj-a", "add dark mode");
+    // select B, type a DIFFERENT draft
+    selectTarget({ view: fakeView(), state }, "/tmp/proj-b");
+    setPromptDraft(state, "/tmp/proj-b", "fix the login bug");
+    // switch back to A — A's text is intact, B's too
+    selectTarget({ view: fakeView(), state }, "/tmp/proj-a");
+    expect(getPromptDraft(state, "/tmp/proj-a")).toBe("add dark mode");
+    expect(getPromptDraft(state, "/tmp/proj-b")).toBe("fix the login bug");
+    // a never-typed target has an empty draft
+    expect(getPromptDraft(state, "/tmp/proj-c")).toBe("");
+  });
+});
+
+describe("empty-prompt launch guard — non-degenerate triple (A5)", () => {
+  it("whitespace-only prompt disables launch (ZERO fetch); the SAME state with text fires EXACTLY ONE POST /conduct", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      return jsonResponse(202, { jobId: "cjob-1" });
+    });
+    const view = fakeView();
+    const deps = { fetchImpl, storage: fakeStorage(TOKEN), view };
+
+    // whitespace-only prompt: predicate blank, no fetch, a visible reason surfaces
+    expect(isBlankPrompt("  \n  ")).toBe(true);
+    const blank = await launchConduct(deps, { root: "/tmp/proj-a", prompt: "  \n  " });
+    expect(blank).toEqual({ launched: false });
+    expect(calls).toHaveLength(0);
+    expect(view.showPromptRequired).toHaveBeenCalled();
+
+    // same deck state, now a non-empty prompt: enabled, exactly one POST /conduct
+    expect(isBlankPrompt("add dark mode")).toBe(false);
+    const ok = await launchConduct(deps, { root: "/tmp/proj-a", prompt: "add dark mode" });
+    expect(ok).toEqual({ launched: true });
+    expect(calls).toEqual(["/conduct"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /conduct body — full-control + minimal deep-equal fixtures (A3, A4)", () => {
+  async function bodyFor(params: Record<string, unknown>) {
+    let sent: unknown;
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(init.body as string);
+      return jsonResponse(202, { jobId: "c" });
+    });
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, params);
+    return sent;
+  }
+
+  it("full-control (non-default brain) → body DEEP-EQUALS exactly the fixture, no extra keys", async () => {
+    expect(
+      await bodyFor({ root: "/tmp/proj-a", prompt: "add dark mode", mode: "llm", maxUnits: 3, auto: true, commit: true, merge: true, budget: 2.5, maxTurns: 40 }),
+    ).toEqual({ root: "/tmp/proj-a", prompt: "add dark mode", mode: "llm", maxUnits: 3, auto: true, commit: true, merge: true, budget: 2.5, maxTurns: 40 });
+  });
+
+  it("minimal request → body deep-equals {root, prompt} only", async () => {
+    expect(await bodyFor({ root: "/tmp/proj-a", prompt: "fix login" })).toEqual({ root: "/tmp/proj-a", prompt: "fix login" });
+  });
+
+  it("resume path → only {root, resume, auto?, commit?, merge?} — no prompt, no run-shaping fields (A4)", async () => {
+    expect(await bodyFor({ root: "/tmp/proj-a", resume: "run-42", auto: false })).toEqual({ root: "/tmp/proj-a", resume: "run-42", auto: false });
+  });
+});
+
+describe("merge ⇒ commit coupling with a defined, non-sticky reverse transition (A19)", () => {
+  async function bodyFor(params: Record<string, unknown>) {
+    let sent: unknown;
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(init.body as string);
+      return jsonResponse(202, { jobId: "c" });
+    });
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, params);
+    return sent;
+  }
+
+  it("merge ON with commit toggle OFF → body carries commit:true AND merge:true", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: false, merge: true })).toEqual({ root: "/a", prompt: "p", commit: true, merge: true });
+  });
+
+  it("then merge toggled OFF (commit still off) → body carries NEITHER commit nor merge (never left forced on)", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: false, merge: false })).toEqual({ root: "/a", prompt: "p" });
+  });
+
+  it("contrast: commit ON + merge OFF → commit:true, no merge key", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: true, merge: false })).toEqual({ root: "/a", prompt: "p", commit: true });
+  });
+});
+
+describe("boot autofocus is DURABLE across the async /projects load (A20a)", () => {
+  it("conduct mode: after projects load rebuilds the deck, focus is restored to the hero prompt (AFTER the rebuild)", async () => {
+    const order: string[] = [];
+    const view = fakeView();
+    view.renderProjects = vi.fn(() => order.push("renderProjects"));
+    view.focusPrompt = vi.fn(() => order.push("focusPrompt"));
+    const state = createConsoleState(); // default conduct
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { projects: [{ root: "/a", phase: "build", next: "x" }] }));
+    await refreshProjects({ fetchImpl, storage: fakeStorage(TOKEN), view, state });
+    expect(view.renderProjects).toHaveBeenCalledTimes(1);
+    expect(view.focusPrompt).toHaveBeenCalledTimes(1);
+    // focus lands AFTER the deck is rebuilt, so the FINAL (loaded) textarea owns focus — not the
+    // transient boot-time one that renderProjects replaced.
+    expect(order).toEqual(["renderProjects", "focusPrompt"]);
+  });
+
+  it("full-cycle mode: the hidden deck prompt does NOT steal focus on project load", async () => {
+    const view = fakeView();
+    const state = { ...createConsoleState(), mode: "full cycle" };
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { projects: [{ root: "/a", phase: "build", next: "x" }] }));
+    await refreshProjects({ fetchImpl, storage: fakeStorage(TOKEN), view, state });
+    expect(view.renderProjects).toHaveBeenCalledTimes(1);
+    expect(view.focusPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe("DOM-free proven behaviorally (A13a)", () => {
+  it("runs in a plain Node env (no document) yet every console-posture flow works", async () => {
+    // Precondition: vitest's plain Node env has no DOM — any direct document/window/localStorage/
+    // sessionStorage access on an executed path would throw ReferenceError and fail this test. (Read via
+    // `globalThis` so the assertion type-checks without pulling in the DOM lib.)
+    expect(typeof (globalThis as Record<string, unknown>).document).toBe("undefined");
+
+    const storage = fakeModeStore("full cycle");
+    const view = fakeView();
+    const state = createConsoleState();
+    expect(initConsoleMode({ storage, view, state })).toBe("full cycle");
+    expect(setConsoleMode({ storage, view, state }, "conduct")).toBe("conduct");
+    selectTarget({ view, state }, "/tmp/proj-a");
+    setPromptDraft(state, "/tmp/proj-a", "draft text");
+    expect(getPromptDraft(state, "/tmp/proj-a")).toBe("draft text");
+
+    const fetchImpl = vi.fn(async () => jsonResponse(202, { jobId: "j" }));
+    await launchConduct({ fetchImpl, storage: fakeStorage(TOKEN), view }, { root: "/tmp/proj-a", prompt: "go" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -811,15 +1060,17 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
   });
 
-  it("the resume runId is read scoped to the clicked card, NOT via a page-global querySelector", () => {
+  it("per-card reads (role kind) go through the card-scoped helper, NOT a page-global querySelector", () => {
     const body = servedBody();
-    // The round-2 regression: a page-global `document.querySelector('.conduct-resume-id')` always
-    // reads the FIRST rendered card, so a second target's resume would send the first's runId.
+    // The conduct prompt/resume now live in the singular full-width deck (read by id), so there is no
+    // page-global `.conduct-prompt`/`.conduct-resume-id` lookup that could read the wrong card.
     expect(body).not.toMatch(/document\.querySelector\(\s*['"]\.conduct-resume-id['"]\s*\)/);
     expect(body).not.toMatch(/document\.querySelector\(\s*['"]\.conduct-prompt['"]\s*\)/);
-    // Resolution goes through the card-scoped helper (walks up to `.target` via `closest`).
+    // The remaining per-card control (the full-cycle role-kind select) is read scoped to the clicked
+    // card via the helper (walks up to `.target` via `closest`), never a page-global first match.
+    expect(body).not.toMatch(/document\.querySelector\(\s*['"]\.role-kind-select['"]\s*\)/);
     expect(body).toMatch(/function cardScopedValue\(/);
-    expect(body).toMatch(/cardScopedValue\(\s*el\s*,\s*['"]\.conduct-resume-id['"]\s*\)/);
+    expect(body).toMatch(/cardScopedValue\(\s*el\s*,\s*['"]\.role-kind-select['"]\s*\)/);
   });
 
   it("exposes the decision card + answer flow (answer-decision data-action → submitDecision) with an awaiting badge", () => {
@@ -829,5 +1080,102 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     expect(body).toContain("badge-awaiting"); // distinct pending visual state
     // the answer flow uses the real controller (POST /jobs/:id/decision), not a bespoke fetch.
     expect(body).toMatch(/function submitDecision\(/);
+  });
+
+  // ---- two-mode redesign: header mode switch + conduct deck + slim cards ----
+
+  it("carries the header mode switch (conduct | full cycle), default conduct, backed by the controller", () => {
+    const body = servedBody();
+    expect(body).toContain('class="mode-switch"');
+    expect(body).toMatch(/data-action=["']set-mode["'][^>]*data-mode=["']conduct["']/);
+    expect(body).toMatch(/data-action=["']set-mode["'][^>]*data-mode=["']full cycle["']/);
+    // the app container defaults to conduct posture; the switch calls the real controller.
+    expect(body).toMatch(/data-mode=["']conduct["']/);
+    expect(body).toMatch(/function setConsoleMode\(/);
+    expect(body).toMatch(/function initConsoleMode\(/);
+    expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
+  });
+
+  it("the deck exists, is hidden ONLY in full-cycle mode, and carries the pipeline strip tokens (A10)", () => {
+    const body = servedBody();
+    expect(body).toContain('id="deck"');
+    // deck hidden only in the expert full-cycle posture (data-mode attribute selector).
+    expect(body).toMatch(/\[data-mode=["']full cycle["']\]\s*\.deck\s*\{[^}]*display:\s*none/);
+    // the pipeline strip renders the real sequence tokens, in order.
+    for (const token of ["decompose", "contract", "generate", "evaluate", "decide"]) {
+      expect(body).toContain(token);
+    }
+    expect(body).toContain("pipeline");
+  });
+
+  it("the deck is the conduct front door: hero prompt, brain select, target chips, launch + resume", () => {
+    const body = servedBody();
+    expect(body).toContain("deck-prompt");
+    expect(body).toContain("conduct-prompt");
+    expect(body).toContain("deck-chip"); // target selector chips synced with the rail
+    expect(body).toContain("conduct-mode-select");
+    expect(body).toMatch(/data-action=["']run-conduct["']/);
+    expect(body).toMatch(/data-action=["']run-conduct-resume["']/);
+    expect(body).toContain("conduct-resume-id");
+    // launch is disabled-with-reason when the prompt is blank (guard wired to the controller).
+    expect(body).toMatch(/function launchConduct\(/);
+    expect(body).toContain("deck-reason");
+    // the deck routes selection through the ONE choke point (chip → chooseTarget → selectTarget).
+    expect(body).toMatch(/function selectTarget\(/);
+  });
+
+  it("conduct-mode cards are slim selectors (no action buttons); full-cycle reveals the phase surface (A9)", () => {
+    const body = servedBody();
+    // the phase-action block is emitted by a dedicated helper, only when full cycle is active.
+    expect(body).toMatch(/function targetActions\(/);
+    expect(body).toMatch(/fullCycle\s*\?\s*targetActions\(t\)\s*:\s*''/);
+    // full-cycle actions still exist in the source (build/reflect/…/role/unit + fresh toggle).
+    expect(body).toMatch(/data-action=["']trigger["'][^>]*data-phase=["']build["']/);
+    expect(body).toMatch(/data-action=["']run-role["']/);
+    expect(body).toMatch(/data-action=["']run-unit["']/);
+    expect(body).toMatch(/data-action=["']toggle-fresh["']/);
+    // conduct-mode cards slim down via the data-mode selector (no visible actions).
+    expect(body).toMatch(/\[data-mode=["']conduct["']\]\s*\.target\s*\.actions\s*\{[^}]*display:\s*none/);
+  });
+
+  it("jobs feed + detail stage render OUTSIDE the mode-conditional branches (present in BOTH modes, A11)", () => {
+    const body = servedBody();
+    // the grid (targets rail + jobs feed + stage) is not gated by data-mode — only the deck and the
+    // card variant are. The feed/stage containers are always in the markup.
+    expect(body).toContain('id="jobList"');
+    expect(body).toContain('id="stage"');
+    // no CSS hides the feed/stage per mode.
+    expect(body).not.toMatch(/\[data-mode=[^\]]*\]\s*#jobList\s*\{[^}]*display:\s*none/);
+    expect(body).not.toMatch(/\[data-mode=[^\]]*\]\s*#stage\s*\{[^}]*display:\s*none/);
+  });
+
+  it("UI qualities: autofocus, theme tokens, narrow-width handling, reduced-motion, visible focus (A20)", () => {
+    const body = servedBody();
+    // (a) the prompt receives focus on conduct-mode entry/boot AND the focus survives the async
+    // /projects load: refreshProjects re-focuses via the view's focusPrompt seam after the rebuild.
+    expect(body).toMatch(/function focusDeckPrompt\(/);
+    expect(body).toMatch(/if \(mode === ["']conduct["']\) focusDeckPrompt\(\)/);
+    expect(body).toMatch(/focusPrompt\(\)\s*\{\s*focusDeckPrompt\(\)/);
+    expect(body).toMatch(/deps\.view\.focusPrompt\(\)/);
+    // (b) deck/mode CSS uses the shared theme tokens and the light theme covers it.
+    expect(body).toMatch(/\.deck-prompt\s*\{[^}]*var\(--/);
+    expect(body).toMatch(/\.mode-switch\b[^{]*\{[^}]*var\(--/);
+    expect(body).toMatch(/:root\[data-theme=["']light["']\]/);
+    // (c) narrow-width handling for the deck (media query + wrap, no fixed px width forcing overflow).
+    expect(body).toMatch(/@media\s*\(max-width:\s*820px\)/);
+    const deckRules = body.match(/\.deck[\w-]*\s*\{[^}]*\}/g) ?? [];
+    for (const rule of deckRules) expect(rule).not.toMatch(/\bwidth\s*:\s*\d+px/);
+    // (d) animations/transitions gated by prefers-reduced-motion.
+    expect(body).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+    // (e) visible keyboard focus on the switch + deck controls (focus-visible), no bare outline:none.
+    expect(body).toMatch(/\.mode-switch button:focus-visible\s*\{[^}]*outline/);
+    expect(body).toMatch(/:focus-visible\s*\{[^}]*outline/);
+  });
+
+  it("the mode posture is persisted via localStorage in the boot layer (grep hit)", () => {
+    const body = servedBody();
+    expect(body).toContain("localStorage");
+    expect(body).toMatch(/getMode\s*\(\)/);
+    expect(body).toMatch(/setMode\s*\(/);
   });
 });

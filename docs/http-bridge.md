@@ -22,14 +22,33 @@ in a log. A re-install preserves that token; `make bridge-install ROTATE=1` (or 
 
 `GET /` serves the **Sparra Bridge Console**: a self-contained, responsive web dashboard (dark
 instrument-console styling, light/dark theme, no external assets or new dependency) for driving +
-monitoring the bridge from a browser — health, the `/projects` targets rail, per-target
-build/reflect/resume/init/freeze triggers, a live job feed polling `GET /jobs/:id`'s already-redacted
-phase log, cancel, and `/role`/`/unit` summary readouts rendered as finite holdout-safe cards (never
-scrollback). It is served WITHOUT auth, like `GET /health` — a browser's top-level navigation can't
-attach an `Authorization` header — but every data call the page's own client script makes is still
-Bearer-gated; the token is entered once via an on-page modal and held only in `sessionStorage`.
-`bridge.yaml`'s `dashboard` field (default `true`) gates the route: `false` → `404`, for operators who
-want zero unauthenticated HTTP surface beyond `/health`.
+monitoring the bridge from a browser — the `/projects` targets rail, a live job feed polling
+`GET /jobs/:id`'s already-redacted phase log, cancel, and `/role`/`/unit` summary readouts rendered as
+finite holdout-safe cards (never scrollback). It is served WITHOUT auth, like `GET /health` — a
+browser's top-level navigation can't attach an `Authorization` header — but every data call the page's
+own client script makes is still Bearer-gated; the token is entered once via an on-page modal and held
+only in `sessionStorage`. `bridge.yaml`'s `dashboard` field (default `true`) gates the route: `false`
+→ `404`, for operators who want zero unauthenticated HTTP surface beyond `/health`.
+
+**Two operating modes.** A header segmented switch (`conduct` | `full cycle`) chooses the operator's
+posture; the choice persists across reloads (`localStorage`). The default is **conduct**:
+
+- A full-width **Conduct Deck** sits above the three columns, bound to the selected target. It carries a
+  target selector (chips synced with the rail selection), a large mono multi-line prompt (the hero of
+  the page, autofocused on entry), a subtle pipeline strip — `decompose ▸ contract ▸ generate ▸
+  evaluate ▸ decide` — that names what one line drives, the conduct controls (brain `hybrid`|`llm`, max
+  units, the `auto`/`commit`/`merge` toggles where `merge` implies `commit`, budget, max turns), the
+  primary `conduct` launch button (disabled with a reason until a target is selected and the prompt is
+  non-blank), and a secondary runId + `resume run` affordance. Each target keeps its own prompt draft
+  across selection switches.
+- Target cards in the rail slim to identity + status (name, path, phase chip, `next ▸`) and act as
+  selectors for the deck — no per-card action buttons.
+
+Switching to **full cycle** hides the deck and restores the full per-card action surface — per-target
+build/reflect/resume/init/freeze triggers, `unit`, the role-kind select + run-role row, budget/maxTurns
+steppers, and the `fresh` toggle. The conduct controls live only in the deck (not duplicated here).
+Every action reachable in one mode is reachable in exactly one of the two. The jobs feed and detail
+stage (job list, terminal, pending-decision cards, `/role`/`/unit` readouts) are present in both modes.
 
 The client logic lives in `conductors/http/dashboard.client.js` — a DOM-free, plain-ESM module (no
 Node built-ins) that is BOTH inlined verbatim into the served page (by `handlers/dashboard.ts`, read
