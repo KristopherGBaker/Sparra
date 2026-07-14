@@ -1,15 +1,18 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 import { roleWorkerMain } from "./roleWorker.ts";
+import { describeRealBin } from "../../test/helpers/judgeEnv.ts";
 
 const CANARY = "SPARRA_HOLDOUT_CANARY_DO_NOT_LEAK";
 const STUB = fileURLToPath(new URL("./__fixtures__/stub-sparra.mjs", import.meta.url));
 const WORKER = fileURLToPath(new URL("./roleWorker.ts", import.meta.url));
 
-describe("roleWorker", () => {
+// Both tests spawn the real SPARRA_BIN via a tsx subprocess (Unix-socket-dependent) → SKIP visibly
+// under the judge sandbox flag (`SPARRA_JUDGE_SANDBOX=1`); run normally otherwise.
+describeRealBin("roleWorker", () => {
   it("roleWorkerMain returns summary JSON with no canary", async () => {
     process.env.SPARRA_BIN = STUB;
     try {

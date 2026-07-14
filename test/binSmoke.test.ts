@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import net from "node:net";
 import fs from "node:fs";
@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJudgeScratch, judgeScratchEnvLayer } from "../src/build/judgeScratch.ts";
+import { describeRealBin } from "./helpers/judgeEnv.ts";
 
 // U-A #7: the packaged CLI shells out to tsx, whose IPC pipe is derived from `os.tmpdir()`
 // (installed tsx 4.x: `dist/temporary-directory-*.cjs` → `join(os.tmpdir(), 'tsx-<uid>')`, then
@@ -61,7 +62,9 @@ function canListenUnixSocket(): Promise<boolean> {
   });
 }
 
-describe("packaged CLI smoke — tsx IPC socket lands in scratch TMPDIR (U-A #7)", () => {
+// Spawns the real packaged CLI via tsx (Unix-socket-dependent) → SKIPS visibly under the judge
+// sandbox flag (`SPARRA_JUDGE_SANDBOX=1`); runs normally otherwise. Single source: helpers/judgeEnv.
+describeRealBin("packaged CLI smoke — tsx IPC socket lands in scratch TMPDIR (U-A #7)", () => {
   it(
     "node bin/sparra.mjs --help exits 0 with TMPDIR pointed at a per-run scratch dir",
     async (ctx) => {

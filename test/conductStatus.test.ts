@@ -14,6 +14,9 @@ import {
 } from "../src/phases/conduct.ts";
 import { projectPendingDecisions } from "../src/conduct/pending.ts";
 import { parse } from "../src/util/args.ts";
+// Real-bin/tsx-subprocess describe blocks + tests below SKIP visibly under `SPARRA_JUDGE_SANDBOX=1`
+// (the evaluator/judge sandbox denies unix-socket listen); the injected/faked tests keep running.
+import { describeRealBin, itRealBin } from "./helpers/judgeEnv.ts";
 
 /**
  * `sparra conduct --status` / `--list` — the ZERO-SPEND, read-only reporting surfaces. Fully offline:
@@ -701,7 +704,7 @@ describe("conduct report — fail-closed VALUED-boolean flag parsing (round-3 bl
     if (r.kind === "usage-error") expect(r.error).toMatch(/--json/);
   });
 
-  it("`--list <token>` via the REAL bin exits 1 (no silent success)", () => {
+  itRealBin("`--list <token>` via the REAL bin exits 1 (no silent success)", () => {
     const dir = tmpdir();
     try {
       seedFixture(dir);
@@ -743,7 +746,7 @@ describe("marketplace plugin version (assertion 14, FLOOR compare)", () => {
 // REAL-PATH coverage: drive the ACTUAL `bin/sparra.mjs` argv → cli.ts routing → cmd, so the reporting
 // surfaces are proven through the same entry point the evaluator runs (not just the exported cmds).
 // Zero spend by construction (report paths never call the model; a bogus key belts any regression).
-describe("conduct --status/--list via the REAL bin (cli.ts routing)", () => {
+describeRealBin("conduct --status/--list via the REAL bin (cli.ts routing)", () => {
   function bin_(argv: string[], cwd: string) {
     const res = spawnSync(process.execPath, [bin, "conduct", ...argv], { cwd, encoding: "utf8", env: childEnv, timeout: 60_000 });
     return { out: `${res.stdout ?? ""}${res.stderr ?? ""}`, status: res.status };

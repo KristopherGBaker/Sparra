@@ -16,7 +16,7 @@ import { selectMapContext } from "./mapContext.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import type { WorkItem } from "./types.ts";
 import { getBackend } from "../sdk/session.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 
 import { CONTRACT_AGREED_MARKER as AGREED } from "../roleEnvelope.ts";
@@ -76,6 +76,10 @@ export async function negotiateContract(
   // on the build worktree) — so a verify command the negotiation dry-checks against a Swift package
   // runs AS SHIPPED, matching the generator/evaluator of the same worktree. `build.env` still wins.
   const sessionEnv = () => createSandboxSessionEnv(ctx.config, wtDir);
+  // The contract-EVALUATOR is a sandboxed judge: layer SPARRA_JUDGE_SANDBOX=1 onto its session env
+  // (and the harness verify-probe env it drives) so socket-dependent real-bin/tsx suites vitest-SKIP
+  // and the full suite is expected green. The contract-GENERATOR keeps the plain scratch env (no flag).
+  const judgeSessionEnv = () => withJudgeSandboxFlag(sessionEnv());
 
   // Resume: if a contract was already agreed, reuse it. A human may have edited it
   // (interactive contract steering), so leak-check the reused text here — fail clearly
@@ -202,7 +206,7 @@ export async function negotiateContract(
       // the base set of available built-in tools, so without this the model literally cannot invoke
       // Bash on the autonomous negotiation path.
       tools: evaluatorVerifyCommands.length > 0 ? ["Read", "Glob", "Grep", "Bash"] : ["Read", "Glob", "Grep"],
-      env: sessionEnv(),
+      env: judgeSessionEnv(),
       // Forbid role: run in a holdout-free cwd (worktree when isolated; else ctx.root). Deny-decider
       // tracks THAT cwd as defense-in-depth on hooks-aware backends.
       ...contractEvaluatorGuard(ctx, evaluatorVerifyCommands, { extraDeny: [makeHoldoutReadDecider(ctx, cwd)] }),
@@ -225,7 +229,7 @@ export async function negotiateContract(
           // build.verifyCommands = the explicit opt-in past the executor's argv[0] allowlist.
           const o = await exec(workspaceDir ?? ctx.root, cmd, {
             allowPrefixes: ctx.config.build.verifyCommands,
-            env: sessionEnv(),
+            env: judgeSessionEnv(),
           });
           if (!o.ran || classifyExec(o) === "usage") brokenCommands.push(renderExecOutcome(o));
         }

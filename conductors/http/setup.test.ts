@@ -23,6 +23,9 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { realDeps, runSetup, type SetupDeps } from "./setup.ts";
+// The real-bin smoke below spawns the bridge-setup bin via tsx (Unix-socket-dependent) → SKIPS
+// visibly under `SPARRA_JUDGE_SANDBOX=1`; the injected in-memory-fs tests keep running.
+import { describeRealBin } from "../../test/helpers/judgeEnv.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REAL_TEMPLATE = readFileSync(path.join(here, "com.sparra.bridge.plist.example"), "utf8");
@@ -348,7 +351,7 @@ describe("realDeps().fs.writeFile — production mode semantics (real temp fs, n
   });
 });
 
-describe("bin/sparra-bridge-setup.mjs — real-bin smoke (the ONE real-bin gate)", () => {
+describeRealBin("bin/sparra-bridge-setup.mjs — real-bin smoke (the ONE real-bin gate)", () => {
   it("exits non-zero with usage on a bogus subcommand", () => {
     // Real tsx spawn (no $HOME/launchctl reached — invalid argv touches only stderr). UN-RUN if the
     // tsx binary isn't present in this environment, never a failure. Mirrors packaging.test.ts.

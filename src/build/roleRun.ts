@@ -34,7 +34,7 @@ import { costUsdOrZero } from "./budget.ts";
 import { REPORT_REASK_MAX_BUDGET_USD, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -1268,9 +1268,15 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // `swift build` reuses it). NB: PATH writability only — the sandbox still denies unix-socket LISTEN
   // as policy (see the per-attempt capability notes below), so a tsx-launched socket smoke still
   // UN-RUNs. The read-only proposer roles (reviewer, contract-generator) keep the plain merged env.
-  const sessionEnv = isSandboxedJudge(roleKind) || roleKind === "generator"
-    ? createSandboxSessionEnv(ctx.config, workspace)
-    : mergedBuildEnv(ctx.config);
+  // SPARRA_JUDGE_SANDBOX=1 is layered ONLY onto the sandboxed-judge roles (evaluator +
+  // contract-evaluator), so their socket-dependent real-bin/tsx suites vitest-SKIP and the full suite
+  // is expected green. The GENERATOR keeps the plain scratch env — its self-verify must run everything
+  // it can (never the flag). Read-only proposer roles (reviewer, contract-generator) keep merged env.
+  const sessionEnv = isSandboxedJudge(roleKind)
+    ? withJudgeSandboxFlag(createSandboxSessionEnv(ctx.config, workspace))
+    : roleKind === "generator"
+      ? createSandboxSessionEnv(ctx.config, workspace)
+      : mergedBuildEnv(ctx.config);
 
   // Parity context the real roles inject (cheap reads; improves single-shot fidelity).
   const memory = memorySection(await readMemory(ctx.paths));

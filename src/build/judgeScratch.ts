@@ -101,6 +101,21 @@ export function createSandboxSessionEnv(config: SparraConfig, workspaceDir: stri
   return sandboxEnv(config, createJudgeScratch(), { swiftpmDir: ensureSwiftpmCacheDir(workspaceDir) });
 }
 
+/** The env flag an EVALUATOR/JUDGE session sets so its socket-dependent test suites vitest-SKIP
+ *  (test/helpers/judgeEnv.ts is the consumer). NEVER set on generator/self-verify paths. */
+export const JUDGE_SANDBOX_FLAG = "SPARRA_JUDGE_SANDBOX";
+
+/**
+ * Layer `SPARRA_JUDGE_SANDBOX=1` onto an evaluator/judge session env. Under this flag every suite
+ * that spawns the real CLI / a tsx subprocess (Unix-socket-dependent — denied by the sandbox policy)
+ * SKIPS visibly instead of EPERM-failing, so the full suite is EXPECTED green and a nonzero full-suite
+ * exit is a REAL artifact signal. Applied ONLY to sandboxed-judge sessions (evaluator +
+ * contract-evaluator) — never the generator, whose self-verify must keep running everything it can.
+ */
+export function withJudgeSandboxFlag(env: Record<string, string>): Record<string, string> {
+  return { ...env, [JUDGE_SANDBOX_FLAG]: "1" };
+}
+
 /**
  * Create a fresh per-run scratch root (and each redirected sub-dir) on disk, returning its path.
  * Kept SHORT (`sprj-<8hex>`): tsx builds its Unix-domain IPC socket UNDER `TMPDIR`, and socket paths
@@ -161,7 +176,10 @@ export function sandboxCapabilityNotes(args: {
       detail:
         `listen(2) on a Unix-domain socket is denied by the ${args.backendId} sandbox POLICY even inside a ` +
         `writable scratch TMPDIR (proved with a raw net.createServer().listen() probe) — so a tsx-launched ` +
-        `CLI smoke that IPCs over a .pipe, or any dev-server bind, cannot run under this ${args.sandboxMode} judge.`,
+        `CLI smoke that IPCs over a .pipe, or any dev-server bind, cannot run under this ${args.sandboxMode} judge. ` +
+        `This session runs the suite with SPARRA_JUDGE_SANDBOX=1, so those socket-dependent suites vitest-SKIP ` +
+        `(visibly counted, never silently filtered) instead of EPERM-failing — the full suite is therefore ` +
+        `EXPECTED green, and a NONZERO full-suite exit is a REAL artifact signal, not an environment limit.`,
     },
   ];
   if (args.sandboxMode === "read-only") {
@@ -188,10 +206,14 @@ export function sandboxCapabilityNotesText(caps: DeniedCapability[]): string {
   const lines = caps.map((c) => `- ${c.capability}: ${c.detail}`).join("\n");
   return (
     `\nKNOWN SANDBOX CAPABILITY LIMITS (policy denies, independent of path/TMPDIR writability — do NOT re-prove):\n${lines}\n\n` +
-    `If a gate fails ONLY because of a listed denied capability, classify it environment-blocked / UN-RUN ` +
-    `(cite the exact error as evidence) — it is NOT an artifact FAIL. Spend AT MOST ONE confirming probe; ` +
-    `do not re-prove a known limitation across multiple rounds. A live harness-side probe is impossible ` +
-    `(the harness runs OUTSIDE your sandbox), so this matrix is the source of truth.\n`
+    `This session runs the test suite with SPARRA_JUDGE_SANDBOX=1: every socket-dependent real-bin/tsx ` +
+    `suite vitest-SKIPS visibly under that flag, so the FULL suite is EXPECTED green here. A NONZERO ` +
+    `full-suite exit is therefore a REAL artifact signal — NOT auto-classifiable as UN-RUN / ` +
+    `environment-blocked / "mixed" — investigate the actual failing test.\n\n` +
+    `If some OTHER gate fails ONLY because of a listed denied capability, classify THAT one ` +
+    `environment-blocked / UN-RUN (cite the exact error as evidence) — it is NOT an artifact FAIL. Spend ` +
+    `AT MOST ONE confirming probe; do not re-prove a known limitation across multiple rounds. A live ` +
+    `harness-side probe is impossible (the harness runs OUTSIDE your sandbox), so this matrix is the source of truth.\n`
   );
 }
 

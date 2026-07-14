@@ -14,6 +14,10 @@ import { describe, expect, it } from "vitest";
 
 import { registerBridgeRoutes } from "./register.ts";
 import { startBridge } from "./server.ts";
+// The informational real-subprocess bin smoke below spawns `bin/sparra-bridge.mjs` via tsx
+// (Unix-socket-dependent) → SKIPS visibly under `SPARRA_JUDGE_SANDBOX=1`; the deterministic
+// injected-`startBridge` gate + the file/doc assertions keep running.
+import { itRealBin } from "../../test/helpers/judgeEnv.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -218,7 +222,7 @@ describe("bin smoke — fails closed on the missing token", () => {
   // shebang + tsx + real env/config plumbing, but never asserts on it failing to run at all — empty
   // output or a timeout under concurrent load is a SKIP, not a failure (the deterministic test above
   // is what the suite's gate depends on).
-  it(
+  itRealBin(
     "node bin/sparra-bridge.mjs exits nonzero, naming SPARRA_BRIDGE_TOKEN, given a VALID config (informational; load/env-blocked cases are skipped)",
     () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-bridge-smoke-"));
