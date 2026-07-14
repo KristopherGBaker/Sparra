@@ -47,6 +47,14 @@
 		<key>SPARRA_BRIDGE_TOKEN</key>
 		<string>REPLACE_WITH_A_LONG_RANDOM_SECRET_TOKEN</string>
 
+		<!-- launchd starts services with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin) that omits your
+		     node install (e.g. nvm/Homebrew). The bridge re-execs `tsx` via a `#!/usr/bin/env node`
+		     shebang, so without node on PATH the service crash-loops with `env: node: No such file`.
+		     The setup script fills this with the running node's bin directory prepended to the
+		     system PATH. -->
+		<key>PATH</key>
+		<string>REPLACE_WITH_NODE_BIN_PATH</string>
+
 		<!-- Path to your bridge.yaml (see conductors/http/bridge.yaml.example). The setup script
 		     fills this with ~/.sparra/bridge.yaml. -->
 		<key>SPARRA_BRIDGE_CONFIG</key>

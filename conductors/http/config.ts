@@ -153,15 +153,43 @@ export interface ResolveBindDeps {
   tailscaleIp?: () => string | undefined;
 }
 
-/** Default `tailscale ip -4` resolver: first line, trimmed; `undefined` on any failure. */
-function defaultTailscaleIp(): string | undefined {
-  try {
-    const out = execFileSync("tailscale", ["ip", "-4"], { encoding: "utf8" });
-    const first = out.split("\n")[0]?.trim();
-    return first && first.length > 0 ? first : undefined;
-  } catch {
-    return undefined;
+/**
+ * Candidate `tailscale` CLI locations, tried in order. `tailscale` (bare) covers a PATH install; the
+ * rest cover the two GUI distributions whose CLI is NOT on PATH — the Mac App Store / standalone app
+ * (inside the .app bundle) and Homebrew (Intel + Apple Silicon prefixes). Under launchd the bare PATH
+ * omits all of these, so probing the known absolute paths is what lets auto-bind resolve a tailnet IP.
+ */
+const TAILSCALE_CLI_CANDIDATES = [
+  "tailscale",
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  "/opt/homebrew/bin/tailscale",
+  "/usr/local/bin/tailscale",
+];
+
+/** A dotted-quad IPv4 (0-255 per octet). Guards against a CLI that prints an error line, not an IP. */
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
+/**
+ * Default `tailscale ip -4` resolver: first line of the first CLI that answers with a well-formed
+ * IPv4; `undefined` if none. The IPv4 guard matters because the GUI (App Store / standalone) CLI,
+ * when it can't reach its helper — e.g. run from a launchd session — prints a human error line and may
+ * still exit 0; without the guard that text would be handed to `server.listen` as a bind host.
+ *
+ * `run` is the CLI-exec seam (defaults to `execFileSync`); a test injects it to exercise the guard
+ * without shelling out. Exported for that reason only.
+ */
+export function defaultTailscaleIp(
+  run: (cli: string) => string = (cli) => execFileSync(cli, ["ip", "-4"], { encoding: "utf8" }),
+): string | undefined {
+  for (const cli of TAILSCALE_CLI_CANDIDATES) {
+    try {
+      const first = run(cli).split("\n")[0]?.trim();
+      if (first && IPV4.test(first)) return first;
+    } catch {
+      // try the next candidate
+    }
   }
+  return undefined;
 }
 
 /**

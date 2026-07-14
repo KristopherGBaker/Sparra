@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { loadBridgeConfig, resolveBind } from "./config.ts";
+import { defaultTailscaleIp, loadBridgeConfig, resolveBind } from "./config.ts";
 
 const HOME = "/home/tester";
 
@@ -147,5 +147,36 @@ describe("resolveBind", () => {
 
   it("THROWS on a wildcard from tailscale rather than silently using loopback", () => {
     expect(() => resolveBind({}, { env: {}, tailscaleIp: () => "::" })).toThrow(/wildcard/);
+  });
+});
+
+describe("defaultTailscaleIp", () => {
+  it("returns the first CLI's IPv4 (first line, trimmed)", () => {
+    expect(defaultTailscaleIp(() => "  100.100.100.100  \nfe80::1\n")).toBe("100.100.100.100");
+  });
+
+  it("IGNORES a non-IPv4 line — e.g. the GUI CLI's error text under launchd — returning undefined", () => {
+    expect(defaultTailscaleIp(() => "The Tailscale GUI failed to start: (Tailscale.CLIError error 3.)")).toBe(
+      undefined,
+    );
+  });
+
+  it("skips a CLI that throws and uses the next candidate that answers with an IPv4", () => {
+    const answers = new Map<string, string>([["/opt/homebrew/bin/tailscale", "100.64.7.7"]]);
+    expect(
+      defaultTailscaleIp((cli) => {
+        const a = answers.get(cli);
+        if (a === undefined) throw new Error("not found");
+        return a;
+      }),
+    ).toBe("100.64.7.7");
+  });
+
+  it("returns undefined when no candidate answers", () => {
+    expect(
+      defaultTailscaleIp(() => {
+        throw new Error("command not found");
+      }),
+    ).toBe(undefined);
   });
 });

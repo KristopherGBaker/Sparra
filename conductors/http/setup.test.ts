@@ -117,6 +117,11 @@ describe("runSetup install — rendering + placeholder guard", () => {
     expect(plist).toContain(`<string>${BRIDGE_YAML}</string>`); // SPARRA_BRIDGE_CONFIG
     expect(tokenIn(plist)).toBe("cafef00d".repeat(8));
 
+    // PATH carries the running node's bin dir prepended to the system PATH, so the bridge's
+    // `#!/usr/bin/env node` re-exec of tsx resolves under launchd's bare PATH (else exit-127 loop).
+    expect(plist).toContain("<key>PATH</key>");
+    expect(plist).toContain("<string>/opt/node/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>");
+
     // wrote to the LaunchAgents path with mode 0600
     const w = rec.writes.find((x) => x.path === PLIST)!;
     expect(w.mode).toBe(0o600);

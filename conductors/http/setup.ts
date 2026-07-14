@@ -108,11 +108,16 @@ function placeholderMap(v: {
   logPath: string;
   errLogPath: string;
 }): Record<string, string> {
+  // launchd's default PATH omits nvm/Homebrew node; the bridge re-execs `tsx` via a
+  // `#!/usr/bin/env node` shebang, so node's bin dir must be on PATH or the service crash-loops
+  // (`env: node: No such file`). Prepend the running node's dir to the system PATH.
+  const nodeBinPath = `${path.dirname(v.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
   return {
     "/Users/example/code/Sparra/bin/sparra-bridge.mjs": v.binPath,
     "/Users/example/code/Sparra": v.checkout,
     "/usr/local/bin/node": v.execPath,
     REPLACE_WITH_A_LONG_RANDOM_SECRET_TOKEN: v.token,
+    REPLACE_WITH_NODE_BIN_PATH: nodeBinPath,
     "/Users/example/.sparra/bridge.yaml": v.configPath,
     "/Users/example/Library/Logs/sparra-bridge.err.log": v.errLogPath,
     "/Users/example/Library/Logs/sparra-bridge.log": v.logPath,

@@ -8,8 +8,9 @@ uses); this doc covers the HTTP-specific surface. Setup/on-ramp: [`conductors/ht
 ## Install (one command)
 
 `make bridge-install` (equivalently `node bin/sparra-bridge-setup.mjs install`) is the whole install:
-it auto-derives the LaunchAgent plist from this checkout (node path, `bin/sparra-bridge.mjs`, working
-directory, `~/Library/Logs` log paths, `~/.sparra/bridge.yaml` config), generates a crypto-random
+it auto-derives the LaunchAgent plist from this checkout (node path, a `PATH` env var carrying node's
+bin dir so the `tsx` re-exec resolves under launchd's bare environment, `bin/sparra-bridge.mjs`,
+working directory, `~/Library/Logs` log paths, `~/.sparra/bridge.yaml` config), generates a crypto-random
 Bearer **token**, seeds `~/.sparra/bridge.yaml` once (never clobbering an existing one), writes the
 plist mode `0600`, and loads it via `launchctl`. The token is printed **once** on stdout as a
 ready-to-paste `export SPARRA_BRIDGE_TOKEN=<token>` line — it lives only in the plist otherwise, never
@@ -144,8 +145,10 @@ escape the allowlist), and caps total results at 500 for a deterministic, sorted
 ## Safety invariants
 
 - **Tailscale-only bind.** `resolveBind` never yields a wildcard address (`0.0.0.0`/`::`) — it throws
-  instead. Default: this host's Tailscale IPv4, or `127.0.0.1` when Tailscale is unavailable.
-  Override via `$SPARRA_BRIDGE_BIND` or `bridge.yaml`'s `bind` (still refused if it's a wildcard).
+  instead. Default: this host's Tailscale IPv4 (probed via `tailscale ip -4`, trying the PATH binary
+  then the App Store/standalone `.app` bundle and Homebrew CLI locations, accepting only a well-formed
+  IPv4), or `127.0.0.1` when Tailscale is unavailable. Override via `$SPARRA_BRIDGE_BIND` or
+  `bridge.yaml`'s `bind` (still refused if it's a wildcard).
 - **Fail-closed auth.** The bridge refuses to construct a server (`createRequestListener`/`createServer`)
   with an unset/empty token, and refuses to start (`startBridge`) with an unset/empty
   `$SPARRA_BRIDGE_TOKEN` — there is no state in which it comes up allow-all. Bearer comparison is
@@ -222,3 +225,25 @@ most ONE in-flight mutating job per resolved target (root or workspace). This is
 No TLS termination (the tailnet IS the transport encryption), no multi-tenant auth (one shared
 token), no public-internet exposure (the bind guard forbids it), and no file-read endpoint of any
 kind — by design, so the holdout wall has no HTTP-shaped way around it.
+
+## Troubleshooting the LaunchAgent
+
+The bridge runs under `launchd`, which starts services with a **bare environment** (`PATH` =
+`/usr/bin:/bin:/usr/sbin:/sbin`, no login shell). Two symptoms follow from that; both are handled by
+the installer/resolver, but if you see them on an older plist or a hand-edited config:
+
+- **`env: node: No such file or directory` in `~/Library/Logs/sparra-bridge.err.log`, service
+  crash-loops with `last exit code = 127`.** The bridge re-execs `tsx` via a `#!/usr/bin/env node`
+  shebang, and launchd's bare `PATH` omits an nvm/Homebrew node. Fix: the rendered plist sets a `PATH`
+  env var (running node's bin dir prepended to the system PATH). Re-run `make bridge-install` to
+  regenerate a plist that has it.
+- **Health works on `127.0.0.1:8787` but the tailnet IP refuses the connection** — `lsof -nP
+  -iTCP:8787 -sTCP:LISTEN` shows it bound to `127.0.0.1`. Auto-bind fell back to loopback because the
+  GUI (Mac App Store / standalone) Tailscale CLI can't reach its helper from a launchd session and so
+  can't report the tailnet IP. Fix: set `bind:` to this host's Tailscale IPv4 explicitly in
+  `~/.sparra/bridge.yaml` (find it with `/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4`),
+  then `make bridge-update`. The open-source/Homebrew `tailscaled` doesn't have this limitation.
+
+Quick end-to-end check: `curl http://<tailnet-ip>:8787/health` → `{"ok":true}`, and
+`curl -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" http://<tailnet-ip>:8787/projects` lists your
+allowlisted roots.
