@@ -27,13 +27,14 @@ const plistExample = path.join(here, "com.sparra.bridge.plist.example");
 const readmePath = path.join(here, "README.md");
 const detailDocPath = path.join(repoRoot, "docs", "http-bridge.md");
 
-/** The exact 13 method+path pairs the shipped bridge exposes (built-ins from server.ts + the
+/** The exact method+path pairs the shipped bridge exposes (built-ins from server.ts + the
  *  phase/conductor/dashboard routes registered via register.ts). Kept in lockstep with
  *  docs/http-bridge.md's endpoint table and conductors/http/README.md's curl examples. */
 const SHIPPED_ENDPOINTS = [
   "GET /",
   "GET /health",
   "GET /projects",
+  "GET /jobs",
   "POST /init",
   "POST /freeze",
   "POST /plan",
@@ -144,10 +145,10 @@ describe("docs match shipped code", () => {
   it("register.ts + the built-ins produce EXACTLY the documented method+path pairs", () => {
     const routes = registerBridgeRoutes({});
     const registered = routes.map((r) => `${r.method} ${r.path}`).sort();
-    // Built-ins (GET /health, GET /jobs/:id, POST /jobs/:id/cancel) are compiled inside
+    // The built-in routes (health, the jobs listing, per-job detail, cancel) are compiled inside
     // createRequestListener, not returned by registerBridgeRoutes — add them here to reconstruct the
     // FULL live route table, mirroring what a running server actually exposes.
-    const builtins = ["GET /health", "GET /jobs/:id", "POST /jobs/:id/cancel"];
+    const builtins = ["GET /health", "GET /jobs", "GET /jobs/:id", "POST /jobs/:id/cancel"];
     const full = [...builtins, ...registered].sort();
     expect(full).toEqual([...SHIPPED_ENDPOINTS].sort());
   });
@@ -161,10 +162,11 @@ describe("docs match shipped code", () => {
   it("README has exactly one authenticated curl per endpoint (Bearer except /health)", () => {
     const curlBlocks = readme.split("```bash").slice(1);
     const bearerCurls = curlBlocks.filter((b) => b.includes("Authorization: Bearer"));
-    // 13 authenticated curls: one per authed endpoint (everything but GET /health and the
+    // 14 authenticated curls: one per authed endpoint (everything but GET /health and the
     // unauthenticated GET / dashboard load) — the conduct example block adds /conduct + the
-    // /jobs/:id/decision answer. GET /health has its own no-Bearer curl.
-    expect(bearerCurls.length).toBe(13);
+    // /jobs/:id/decision answer, and GET /jobs (the listing) has its own. GET /health has its own
+    // no-Bearer curl.
+    expect(bearerCurls.length).toBe(14);
     expect(readme).toMatch(/curl "http:\/\/\$HOST:\$PORT\/health"/);
   });
 

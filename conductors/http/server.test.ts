@@ -176,6 +176,82 @@ describe("server — built-in job routes", () => {
   });
 });
 
+describe("server — GET /jobs listing (assertions 1/2/3)", () => {
+  function fixedClock(start = 1000): () => number {
+    let t = start;
+    return () => t++;
+  }
+  let n = 0;
+  function seqIds(): () => string {
+    n = 0;
+    return () => `job-${n++}`;
+  }
+
+  it("401 without a valid Bearer token; 200 JSON array with one", async () => {
+    const jobs = new JobStore({ genId: seqIds() });
+    jobs.createJob({ kind: "build", root: "/tmp/root/a" });
+    const h = makeHarness({ jobs });
+    const noauth = await dispatch(h.listener, { url: "/jobs" });
+    expect(noauth.status).toBe(401);
+    const bad = await dispatch(h.listener, { url: "/jobs", headers: authHeaders("wrong") });
+    expect(bad.status).toBe(401);
+    const ok = await dispatch(h.listener, { url: "/jobs", headers: authHeaders() });
+    expect(ok.status).toBe(200);
+    expect(Array.isArray(ok.json)).toBe(true);
+    expect(ok.json.length).toBe(1);
+  });
+
+  it("returns tracked jobs NEWEST-FIRST by createdAt", async () => {
+    // Distinct createdAt via the injected clock: job-0=1000, job-1=1001, job-2=1002.
+    const jobs = new JobStore({ now: fixedClock(1000), genId: seqIds() });
+    jobs.createJob({ kind: "build" });
+    jobs.createJob({ kind: "reflect" });
+    jobs.createJob({ kind: "conduct" });
+    const h = makeHarness({ jobs });
+    const res = await dispatch(h.listener, { url: "/jobs", headers: authHeaders() });
+    expect(res.status).toBe(200);
+    expect(res.json.map((j: { id: string }) => j.id)).toEqual(["job-2", "job-1", "job-0"]);
+    expect(res.json.map((j: { createdAt: number }) => j.createdAt)).toEqual([1002, 1001, 1000]);
+  });
+
+  it("each listing item has the SAME fields as GET /jobs/:id MINUS log (no item carries a log key)", async () => {
+    const jobs = new JobStore({ now: fixedClock(2000), genId: seqIds() });
+    jobs.createJob({ kind: "build", root: "/tmp/root/x" });
+    jobs.createJob({ kind: "reflect" });
+    jobs.finish("job-0", { status: "succeeded", exitCode: 0 });
+    jobs.appendLog("job-0", "some redacted phase log output");
+    const h = makeHarness({ jobs });
+
+    const listing = await dispatch(h.listener, { url: "/jobs", headers: authHeaders() });
+    expect(listing.status).toBe(200);
+    // Every item drops `log` but keeps the detail projection's other fields.
+    for (const item of listing.json) {
+      expect(item).not.toHaveProperty("log");
+      expect(item).toHaveProperty("id");
+      expect(item).toHaveProperty("kind");
+      expect(item).toHaveProperty("status");
+      expect(item).toHaveProperty("createdAt");
+      // internal routing fields never cross the wire (same as GET /jobs/:id).
+      expect(item).not.toHaveProperty("runDir");
+      expect(item).not.toHaveProperty("runId");
+    }
+    // The listing entry equals GET /jobs/:id with `log` removed — proving the shared projection.
+    const detail = await dispatch(h.listener, { url: "/jobs/job-0", headers: authHeaders() });
+    const { log: _log, ...detailNoLog } = detail.json as Record<string, unknown>;
+    const listedJob0 = listing.json.find((j: { id: string }) => j.id === "job-0");
+    expect(listedJob0).toEqual(detailNoLog);
+    // GET /jobs/:id DOES carry the log — confirming `log` is a real, dropped field (non-vacuous).
+    expect(detail.json).toHaveProperty("log");
+  });
+
+  it("an empty store lists as an empty array (200)", async () => {
+    const h = makeHarness();
+    const res = await dispatch(h.listener, { url: "/jobs", headers: authHeaders() });
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual([]);
+  });
+});
+
 describe("server — cross-cutting behaviors", () => {
   it("404 for an unknown path (authed)", async () => {
     const h = makeHarness();

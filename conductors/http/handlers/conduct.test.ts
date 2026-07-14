@@ -446,6 +446,53 @@ describe("GET /jobs/:id — pendingDecisions projection (assertions 4/5/6)", () 
   });
 });
 
+describe("GET /jobs listing — shared pendingDecisions plumbing + canary absence (assertions 4/5/6)", () => {
+  it("a conduct job's listing entry carries the SAME pendingDecisions projection as GET /jobs/:id (shared plumbing)", async () => {
+    const root = tmpRoot();
+    const { spawn, children } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const { jobId, runDir } = await conductAndAnnounce(listener, children, root);
+    seedParked(runDir, 1, { options: ["finalize", "abandon"], def: "finalize" });
+
+    const detail = await dispatch(listener, { method: "GET", url: `/jobs/${jobId}` });
+    const listing = await dispatch(listener, { method: "GET", url: "/jobs" });
+    expect(listing.status).toBe(200);
+    const entry = (listing.json as Array<{ id: string; pendingDecisions?: unknown }>).find((j) => j.id === jobId);
+    expect(entry).toBeDefined();
+    // IDENTICAL projection, produced by the one shared `projectPendingDecisions` plumbing.
+    expect(entry!.pendingDecisions).toEqual(detail.json.pendingDecisions);
+    expect(entry!.pendingDecisions).toEqual([
+      { seq: 1, unit: "unit-001", kind: "unit-exhausted", question: "Q?", options: ["finalize", "abandon"], default: "finalize", expiresAt: "2026-07-13T00:00:00.000Z" },
+    ]);
+    // The listing entry has no `log` (detail-only) and no internal routing fields.
+    expect(entry).not.toHaveProperty("log");
+    expect(entry).not.toHaveProperty("runDir");
+    expect(entry).not.toHaveProperty("runId");
+  });
+
+  it("a planted holdout canary (in the job log AND the run's request artifact) never appears in the GET /jobs body; a canary-free job still lists (non-vacuous guard)", async () => {
+    const root = tmpRoot();
+    const { spawn, children } = fakeSpawner();
+    const { listener, jobs } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const { jobId, runDir } = await conductAndAnnounce(listener, children, root);
+    // Canary in the run's raw request artifact...
+    seedParked(runDir, 1, { options: ["finalize", "abandon"], def: "finalize", extra: { secret: "CANARY-LEAK-777", context: { verdict: "fail" } } });
+    // ...AND in the job's accumulated (detail-only) log.
+    jobs.appendLog(jobId, "streamed phase output CANARY-LEAK-777 more output");
+
+    // A second job WITHOUT the canary must still list — the guard discriminates, it isn't vacuous.
+    const cleanJob = jobs.createJob({ kind: "build", root });
+
+    const listing = await dispatch(listener, { method: "GET", url: "/jobs" });
+    expect(listing.status).toBe(200);
+    // The canary is absent from the ENTIRE serialized listing body (no log field, projected decisions only).
+    expect(JSON.stringify(listing.json)).not.toContain("CANARY-LEAK-777");
+    const ids = (listing.json as Array<{ id: string }>).map((j) => j.id);
+    expect(ids).toContain(jobId); // the canary-carrying job lists (redacted)
+    expect(ids).toContain(cleanJob.id); // the canary-free job lists normally
+  });
+});
+
 describe("run dir is canonicalized + allowlist-guarded (round-2 #16: symlink escape refused)", () => {
   it("a symlinked <runId> dir pointing OUTSIDE the root → no pendingDecisions, decision POST 404 (never followed)", async () => {
     const root = tmpRoot();

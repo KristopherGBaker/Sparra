@@ -1,6 +1,6 @@
 /**
  * `conductors/http/server.ts` — the `node:http` server: routing, auth middleware, JSON/body
- * handling, audit, and the three built-in routes (`/health`, `/jobs/:id`, `/jobs/:id/cancel`).
+ * handling, audit, and the built-in routes (`/health`, `/jobs`, `/jobs/:id`, `/jobs/:id/cancel`).
  *
  * `createServer(deps)` is fully dependency-injected and is THE tested unit. `startBridge()` is the
  * thin entry that assembles real deps from env/config and binds a socket. Trigger endpoints are OUT
@@ -68,6 +68,18 @@ function projectJob(job: Job, roots: string[]): Record<string, unknown> {
   // `readPendingDecisions` re-asserts the realpath allowlist guard on `runDir` (symlink-escape safe).
   if (runDir !== undefined) out.pendingDecisions = readPendingDecisions(runDir, roots);
   return out;
+}
+
+/**
+ * Project a {@link Job} for the `GET /jobs` LISTING: the SAME holdout-safe projection {@link projectJob}
+ * produces (reusing the one `projectPendingDecisions` plumbing — no forked projection) MINUS the `log`
+ * field, which stays detail-only (`GET /jobs/:id`) so the listing stays light. Because it delegates to
+ * `projectJob`, `runDir`/`runId` are already dropped and `pendingDecisions` still flows through the
+ * shared, allowlist-guarded reader.
+ */
+function projectJobListing(job: Job, roots: string[]): Record<string, unknown> {
+  const { log: _log, ...rest } = projectJob(job, roots);
+  return rest;
 }
 
 /**
@@ -149,6 +161,18 @@ function builtinRoutes(): Array<RouteDefinition & { public?: boolean }> {
       path: "/health",
       public: true,
       handler: () => ({ status: 200, body: { ok: true } }),
+    },
+    {
+      method: "GET",
+      path: "/jobs",
+      handler: ({ jobs, config }) => {
+        // Newest-first by `createdAt` (a stable copy — never mutating the store's insertion order).
+        // Each entry is the SAME holdout-safe per-job projection `GET /jobs/:id` uses, MINUS `log`.
+        const listing = [...jobs.listJobs()]
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .map((job) => projectJobListing(job, config.roots));
+        return { status: 200, body: listing };
+      },
     },
     {
       method: "GET",

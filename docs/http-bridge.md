@@ -70,6 +70,7 @@ offset).
 | `GET /` | — (unauthenticated) | `200 text/html; charset=utf-8` (the dashboard) or `404` when `dashboard: false` |
 | `GET /health` | — (unauthenticated) | `200 { ok: true }` |
 | `GET /projects` | — | `200 { projects: [{ root, phase, next }] }` — one entry per allowlisted root, unless `discoverProjects:true` (see below) |
+| `GET /jobs` | — | `200 [Job, …]` — every tracked job NEWEST-FIRST; each entry is the `GET /jobs/:id` projection MINUS `log` (`{ id, kind, root?, status, exitCode?, result?, createdAt, pendingDecisions? }`). Jobs are in-memory since bridge boot (last-N, dropped on restart) — see below |
 | `POST /init` | `{ root, mode?, docs? }` | `202 { jobId }` |
 | `POST /freeze` | `{ root }` | `202 { jobId }` |
 | `POST /plan` | `{ root, content }` | `200 { ok: true }` (403 unless `allowRemotePlan: true`) |
