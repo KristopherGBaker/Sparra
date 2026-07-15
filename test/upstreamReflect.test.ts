@@ -302,7 +302,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // saturation (a concurrent probe OR a constrained/few-core eval worktree), NOT an artifact defect, and
     // is confirmed by re-running the aborted file(s) in isolation rather than failing the artifact. One
     // existing prompt edited; no new prompt.
-    expect(h.digest("hex")).toBe("a4ac1c970fc5c67677e563b878d28d221cd6497dc8be0c207e9f1d96772f8e2c");
+    // Regenerated 2026-07-15 (harness-owned git-lifecycle satisfiability): folded a commit/branch-
+    // history/clean-tree/landing-state clause into the existing SATISFIABILITY guidance for BOTH
+    // contract-generator (extends the "NEVER assert ABSENCE" bullet) and contract-evaluator (extends
+    // the "SATISFIABILITY:" bullet to REJECT such assertions during negotiation) — the committer +
+    // merge run AFTER acceptance, so contracts must gate on worktree CONTENT only. Two existing
+    // prompts edited; no new prompt.
+    expect(h.digest("hex")).toBe("2848dcc9071d2187a3f66ef02ed7b3193abc3c98b4d78ca9bf3f3d0e43256a97");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

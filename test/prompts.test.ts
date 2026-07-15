@@ -86,6 +86,30 @@ describe("capability-gap reflect clauses folded into DEFAULT_PROMPTS", () => {
   });
 });
 
+describe("git-lifecycle state is harness-owned — contracts gate on worktree CONTENT only", () => {
+  const cg = DEFAULT_PROMPTS["contract-generator"]!;
+  const ce = DEFAULT_PROMPTS["contract-evaluator"]!;
+  it("contract-generator's satisfiability bullet names commit/branch-history/clean-tree/landing state as harness-owned (post-acceptance committer+merge)", () => {
+    expect(cg).toContain("clean-tree/landing state");
+    expect(cg).toContain("committer + merge run AFTER acceptance");
+    expect(cg).toContain("main...HEAD");
+    expect(cg).toContain("worktree CONTENT only");
+  });
+  it("contract-evaluator's SATISFIABILITY bullet rejects such assertions during negotiation", () => {
+    expect(ce).toContain("REJECT any such assertion during negotiation");
+    expect(ce).toContain("harness-owned and unsatisfiable by the generator");
+    expect(ce).toContain("main...HEAD");
+  });
+  it("stated ONCE per role — no new top-level section, no restatement in PROCESS/steps", () => {
+    // Each role's clause appears exactly once (folded into the existing bullet, not duplicated).
+    expect(cg.match(/committer \+ merge run AFTER acceptance/g)?.length).toBe(1);
+    expect(ce.match(/harness-owned and unsatisfiable by the generator/g)?.length).toBe(1);
+    // No new "## " / all-caps standalone section header was introduced for this rule.
+    expect(cg).not.toMatch(/^HARNESS-OWNED/m);
+    expect(ce).not.toMatch(/^HARNESS-OWNED/m);
+  });
+});
+
 describe("prompt-auditor / reflector — audit for readability, not just terseness", () => {
   it("prompt-auditor scores READABILITY alongside low redundancy and won't cram into a denser wall", () => {
     const pa = DEFAULT_PROMPTS["prompt-auditor"]!;
