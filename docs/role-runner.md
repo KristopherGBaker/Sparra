@@ -347,7 +347,8 @@ report** (empty text, prose, or incidental/wrong-shape JSON — a properly-shape
 alone), the runner does the **same one-shot re-ask** it does for a budget-cap death: with
 `build.jsonReask` on it resumes the same session ONCE, tightly capped (1 turn, a model-aware budget
 derived from this session's own observed cost — `jsonReask.ts`'s `reaskBudgetUsd`, sized to cover
-one turn on an expensive model like opus while staying materially tighter than the run's own cap)
+one turn on an expensive model like opus, never exceeding the run's own cap — tightness comes from
+the 1-turn text-only pin, not the USD number)
 and **text-only** (`tools: []`/`readOnly: true`/`permissionMode: "default"`/hooks cleared — tool-stripping
 is the write-block for Claude; plan mode was dropped because plan mode's own prompt induces a
 plan-file Write that the sandbox blocks, burning the single turn with no JSON emitted), with a report-only prompt (never the full brief). On a

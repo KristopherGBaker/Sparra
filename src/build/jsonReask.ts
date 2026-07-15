@@ -61,10 +61,18 @@ const REASK_OBSERVED_MARGIN = 1.25;
  *   1. **Covers one turn on an expensive model** — floored at `REASK_MIN_BUDGET_USD` (with margin
  *      over `observedCostUsd`, in case the dying run itself ran hotter than that floor), so the
  *      resumed turn isn't killed by `error_max_budget_usd` before it can emit JSON.
- *   2. **Stays materially tighter than the run that just died** — when `runCapUsd` is a real
- *      (positive) limit, the derived value is clamped to it: the re-ask can never authorize MORE
- *      spend than the run it's recovering from. `runCapUsd <= 0` means unlimited (existing Sparra
- *      budget semantics — see `budgetExceeded`), so no clamp applies.
+ *   2. **Never authorizes MORE spend than the run it's recovering from** — when `runCapUsd` is a
+ *      real (positive) limit, the derived value is clamped to it. `runCapUsd <= 0` means unlimited
+ *      (existing Sparra budget semantics — see `budgetExceeded`), so no clamp applies.
+ *      NOTE this is a ceiling, NOT the old constant's "materially tighter than the dying run"
+ *      guarantee, and deliberately so: the two intents conflict when the cap is small (a flat
+ *      fraction of a $1 cap reintroduces the very `error_max_budget_usd` death this fixes). On a
+ *      BUDGET-cap death `observedCostUsd ≈ runCapUsd`, so the clamp returns the run's FULL cap —
+ *      reached today only by `roleRun.ts`'s evaluator `hitBudget` re-ask (`generate.ts` and
+ *      `evaluate.ts` gate theirs behind `budgetExceeded`, so they only ever fire below the cap).
+ *      Tightness is enforced STRUCTURALLY instead, by `reportReaskOverrides`' `tightCap`: ONE turn,
+ *      text-only, no tools — which bounds real spend to a single turn whatever this number says.
+ *      Don't "fix" this by shrinking the USD value; the turn pin is the control that matters.
  * All four re-ask call sites — the autonomous generator's turn-cap recovery (`generate.ts`), the
  * interactive role-runner's writer cap-death AND evaluator verdict re-ask (`roleRun.ts`), and the
  * evaluator verdict re-ask (`evaluate.ts`) — derive their `maxBudgetUsd` through this ONE helper so

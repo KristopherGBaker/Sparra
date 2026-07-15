@@ -28,6 +28,17 @@ describe("reaskBudgetUsd", () => {
     expect(roomy).toBeLessThan(25);
   });
 
+  // The clamp is a CEILING, not a "materially tighter than the dying run" guarantee. On a BUDGET-cap
+  // death observedCostUsd ≈ runCapUsd, so the re-ask is handed the run's FULL cap — pinned here so the
+  // honest behavior is asserted rather than left to a roomy-cap case that hides it. Real spend stays
+  // bounded by reportReaskOverrides' tightCap (1 turn, text-only), NOT by this number.
+  it("on a budget-cap death (observed ≈ cap) it returns the run's full cap — a ceiling, never more", () => {
+    expect(reaskBudgetUsd(5, 5)).toBe(5);
+    expect(reaskBudgetUsd(4.9, 5)).toBe(5);
+    // …and never exceeds it, however hot the dying run ran.
+    expect(reaskBudgetUsd(50, 5)).toBe(5);
+  });
+
   it("runCapUsd 0 means unlimited (existing Sparra semantics) — no clamp toward 0", () => {
     expect(reaskBudgetUsd(OBSERVED_OPUS_TURN_USD, 0)).toBeGreaterThan(OBSERVED_OPUS_TURN_USD);
   });
