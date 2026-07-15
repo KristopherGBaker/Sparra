@@ -345,8 +345,10 @@ completion-report JSON — the calibration machinery (`assertionsClaimed`) would
 writer dies at the turn cap with landed work (`filesChanged > 0`) but **no parseable completion
 report** (empty text, prose, or incidental/wrong-shape JSON — a properly-shaped report is left
 alone), the runner does the **same one-shot re-ask** it does for a budget-cap death: with
-`build.jsonReask` on it resumes the same session ONCE, tightly capped (1 turn, small budget) and
-**text-only** (`tools: []`/`readOnly: true`/`permissionMode: "default"`/hooks cleared — tool-stripping
+`build.jsonReask` on it resumes the same session ONCE, tightly capped (1 turn, a model-aware budget
+derived from this session's own observed cost — `jsonReask.ts`'s `reaskBudgetUsd`, sized to cover
+one turn on an expensive model like opus while staying materially tighter than the run's own cap)
+and **text-only** (`tools: []`/`readOnly: true`/`permissionMode: "default"`/hooks cleared — tool-stripping
 is the write-block for Claude; plan mode was dropped because plan mode's own prompt induces a
 plan-file Write that the sandbox blocks, burning the single turn with no JSON emitted), with a report-only prompt (never the full brief). On a
 usable reply the report surfaces in `resultText` and an `errors` note records the recovery, while
@@ -361,7 +363,8 @@ cap OR the turn cap** (`hitBudget` / `hitMaxTurns`, never a provider `limitHit`)
 incidental or wrong-shape JSON such as `{"cmd":…}` never counts and is re-asked, while a
 properly-shaped verdict is left alone), the runner **resumes the same session ONCE** with
 `build.jsonReask` on, tightly capped
-(1 turn, small budget) and **text-only/read-only** (same `tools: []`/`readOnly: true`/
+(1 turn, the same `reaskBudgetUsd`-derived model-aware budget as the writer path) and
+**text-only/read-only** (same `tools: []`/`readOnly: true`/
 `permissionMode: "default"`/cleared hooks tightCap as the writer path), prompted with
 `VERDICT_REASK_PROMPT` to re-emit **only** the JSON verdict block — never re-grade past the cap. On a
 usable verdict-shaped reply the recovered verdict is parsed into `result.verdict` (and
