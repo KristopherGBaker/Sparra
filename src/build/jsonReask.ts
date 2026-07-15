@@ -38,16 +38,50 @@ export function verdictReaskPrompt(missingFields: string[]): string {
  *  quietly keep building past the cap it just hit. */
 export const REPORT_REASK_MAX_TURNS = 1;
 
-/** Default tight USD cap for a cap-death report re-ask (role-runner). Small on purpose — a report
- *  re-emit is one short turn — and clamped below the original run's cap by the caller so it stays
- *  materially tighter than the run that just died. */
-export const REPORT_REASK_MAX_BUDGET_USD = 0.5;
+/**
+ * Minimum USD floor for a re-ask, independent of the dying run's own observed cost: enough to
+ * cover one turn on an EXPENSIVE model. Real-world evidence (trace 2026-07-13T07-52-03): a single
+ * opus turn cost $1.5775 — well above the old blind, hard-coded per-re-ask budget this helper
+ * replaces (previously a flat half-dollar), so an opus re-ask died with `error_max_budget_usd`
+ * before ever emitting the JSON block, making the whole cap-death recovery inert on exactly the
+ * role (opus fallback) most likely to need it. This floor sits with headroom above that observed
+ * cost.
+ */
+const REASK_MIN_BUDGET_USD = 2;
+
+/** Headroom multiplier over the dying run's own `observedCostUsd`: a resumed turn re-emitting the
+ *  same report/verdict tends to cost roughly what the dying turn cost, so give it margin rather
+ *  than a bare 1x (which could clip on a session that ran slightly hotter than usual). */
+const REASK_OBSERVED_MARGIN = 1.25;
+
+/**
+ * Derive the one-shot re-ask's USD budget cap from the run that just died, replacing the old
+ * blind, hard-coded per-re-ask budget constant this module used to export. Both documented design
+ * intents from that constant are preserved, just computed instead of hard-coded:
+ *   1. **Covers one turn on an expensive model** — floored at `REASK_MIN_BUDGET_USD` (with margin
+ *      over `observedCostUsd`, in case the dying run itself ran hotter than that floor), so the
+ *      resumed turn isn't killed by `error_max_budget_usd` before it can emit JSON.
+ *   2. **Stays materially tighter than the run that just died** — when `runCapUsd` is a real
+ *      (positive) limit, the derived value is clamped to it: the re-ask can never authorize MORE
+ *      spend than the run it's recovering from. `runCapUsd <= 0` means unlimited (existing Sparra
+ *      budget semantics — see `budgetExceeded`), so no clamp applies.
+ * All four re-ask call sites — the autonomous generator's turn-cap recovery (`generate.ts`), the
+ * interactive role-runner's writer cap-death AND evaluator verdict re-ask (`roleRun.ts`), and the
+ * evaluator verdict re-ask (`evaluate.ts`) — derive their `maxBudgetUsd` through this ONE helper so
+ * the cap can't silently drift out of sync between them; no caller should keep its own cap literal.
+ */
+export function reaskBudgetUsd(observedCostUsd: number, runCapUsd: number): number {
+  const observed = Number.isFinite(observedCostUsd) && observedCostUsd > 0 ? observedCostUsd : 0;
+  const desired = Math.max(REASK_MIN_BUDGET_USD, observed * REASK_OBSERVED_MARGIN);
+  return runCapUsd > 0 ? Math.min(desired, runCapUsd) : desired;
+}
 
 /**
  * Session-request overrides for the one-shot report re-ask: resume the dying session with the
- * report-only prompt. Spread over the caller's base request. `tightCap` (used by BOTH the
- * autonomous generator's turn-cap recovery AND the interactive role-runner's budget/turn-cap
- * recovery) additionally PINS the re-ask to one turn + a small USD budget AND makes the resumed
+ * report-only prompt. Spread over the caller's base request. `tightCap` (used by all four re-ask
+ * call sites — the autonomous generator's turn-cap recovery, the interactive role-runner's
+ * budget/turn-cap recovery for both writer and evaluator, and the evaluator verdict re-ask)
+ * additionally PINS the re-ask to one turn + a `reaskBudgetUsd`-derived USD cap AND makes the resumed
  * turn genuinely TEXT-ONLY so it can only re-emit the report — it can't re-enter work:
  *   • `tools: []` — the Claude backend maps `req.tools → options.tools`; an empty array means NO
  *     built-in tools are available, so nothing (Write/Edit/Bash) can be induced or invoked.
@@ -61,13 +95,17 @@ export const REPORT_REASK_MAX_BUDGET_USD = 0.5;
  *   • `mcpServers: undefined`, `allowedTools: undefined` — a text-only re-emit needs no MCP tools;
  *     clearing these prevents any inherited tool-enabling fields from reaching the resumed turn.
  * Spread AFTER `commonReq`, these win. No `tightCap` → exactly `{role, prompt, resume}` (the
- * autonomous generator passes `tightCap` on the turn-cap path; a base re-ask without it is a
- * separate path and stays unchanged).
+ * autonomous generator's own clean-end no-JSON path — the run ended normally, so re-entering a
+ * turn without the tight cap is fine — is the one re-ask path that omits `tightCap`; every other
+ * caller, including `evaluate.ts`'s verdict re-ask, passes it).
  *
  * `prompt` overrides the default report-only prompt — the interactive EVALUATOR cap-death re-ask
- * passes `VERDICT_REASK_PROMPT` (re-emit the verdict block, not a generator report) so both the
- * writer and evaluator resumes share this ONE overrides builder and keep every re-ask prompt
- * literal in this module. Defaults to `REPORT_REASK_PROMPT` (writer/generator path unchanged).
+ * passes `VERDICT_REASK_PROMPT`, and both it and the `evaluate.ts` verdict re-ask pass a
+ * field-targeted `verdictReaskPrompt(...)` on a wrong-shape block (re-emit the verdict, not a
+ * generator report), so every writer and evaluator resume shares this ONE overrides builder and
+ * every re-ask *prompt-building* literal stays here (or in the caller's own no-JSON verdict prompt,
+ * which pre-dates this module and is intentionally a separate short literal). Defaults to
+ * `REPORT_REASK_PROMPT` (writer/generator path unchanged).
  */
 export function reportReaskOverrides(opts: {
   role: string;

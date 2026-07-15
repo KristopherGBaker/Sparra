@@ -1,10 +1,42 @@
 import { describe, it, expect } from "vitest";
 import {
   reportReaskOverrides,
+  reaskBudgetUsd,
   REPORT_REASK_PROMPT,
   REPORT_REASK_MAX_TURNS,
   VERDICT_REASK_PROMPT,
 } from "../src/build/jsonReask.ts";
+
+// Real-world evidence the floor must clear: a single observed opus turn cost this much
+// (trace 2026-07-13T07-52-03) and died under the old blind $0.5 cap.
+const OBSERVED_OPUS_TURN_USD = 1.5775;
+
+describe("reaskBudgetUsd", () => {
+  it("floors at a value that covers one expensive (opus) turn even with zero/absent observed cost", () => {
+    expect(reaskBudgetUsd(0, 0)).toBeGreaterThan(OBSERVED_OPUS_TURN_USD);
+  });
+
+  it("never exceeds the dying run's own (constrained) cap", () => {
+    const capped = reaskBudgetUsd(OBSERVED_OPUS_TURN_USD, 1);
+    expect(capped).toBeGreaterThan(0);
+    expect(capped).toBeLessThanOrEqual(1);
+  });
+
+  it("a roomy run cap covers the observed expensive turn while staying materially tighter than the run", () => {
+    const roomy = reaskBudgetUsd(OBSERVED_OPUS_TURN_USD, 25);
+    expect(roomy).toBeGreaterThan(OBSERVED_OPUS_TURN_USD);
+    expect(roomy).toBeLessThan(25);
+  });
+
+  it("runCapUsd 0 means unlimited (existing Sparra semantics) — no clamp toward 0", () => {
+    expect(reaskBudgetUsd(OBSERVED_OPUS_TURN_USD, 0)).toBeGreaterThan(OBSERVED_OPUS_TURN_USD);
+  });
+
+  it("a negative/NaN observed cost is treated as zero, not laundered into a negative/NaN budget", () => {
+    expect(reaskBudgetUsd(-5, 0)).toBeGreaterThan(0);
+    expect(Number.isNaN(reaskBudgetUsd(NaN, 0))).toBe(false);
+  });
+});
 
 describe("reportReaskOverrides", () => {
   const base = { role: "role-run-generator-reask", sessionId: "sess-1" };

@@ -12,7 +12,7 @@ import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { budgetExceeded, costUsdOrZero } from "./budget.ts";
 import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
-import { verdictReaskPrompt } from "./jsonReask.ts";
+import { reaskBudgetUsd, reportReaskOverrides, verdictReaskPrompt } from "./jsonReask.ts";
 import { writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -231,6 +231,10 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
   // provider-limit reply (the round loop's fallback chain owns those), and skipped when this
   // session already exhausted the item budget. If the re-ask still yields no valid verdict,
   // behavior is today's forced-FAIL fallback below (unchanged).
+  // Routed through the shared `reportReaskOverrides` `tightCap` (same mechanics as the writer/
+  // evaluator re-asks in `roleRun.ts` and the generator turn-cap re-ask in `generate.ts`) so the
+  // resumed turn is genuinely ONE turn, text-only, and its `maxBudgetUsd` is derived via
+  // `reaskBudgetUsd` from this session's own observed cost — never a blind literal.
   const itemBudget = args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem;
   const allBlocks = extractAllJson(resultText);
   const noJson = allBlocks.length === 0;
@@ -244,9 +248,12 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
     );
     const retry = await run({
       ...baseReq,
-      role: `evaluator-${item.id}-r${round}-reask`,
-      prompt: reaskPrompt,
-      resume: res.sessionId,
+      ...reportReaskOverrides({
+        role: `evaluator-${item.id}-r${round}-reask`,
+        sessionId: res.sessionId,
+        prompt: reaskPrompt,
+        tightCap: { maxBudgetUsd: reaskBudgetUsd(costUsd, itemBudget) },
+      }),
     });
     costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;
