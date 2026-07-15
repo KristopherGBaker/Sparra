@@ -542,6 +542,116 @@ describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
   });
 });
 
+describe("cmdBuild — git.pullBeforeWork (opt-in ff-only upstream sync before a fresh workspace)", () => {
+  it("knob ON, fresh run: injected pullUpstream is called once with ctx.root BEFORE prepareWorkspace", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.pullBeforeWork = true;
+    const order: string[] = [];
+    const pullCalls: string[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      pullUpstream: (root: string) => {
+        order.push("pull");
+        pullCalls.push(root);
+        return { ok: true, updated: true, note: "fast-forwarded" };
+      },
+      prepareWorkspace: () => {
+        order.push("prepareWorkspace");
+        return { dir, branch: "sparra/test", note: "t" };
+      },
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps); // no workspaceOverride → the fresh-workspace seam runs
+    expect(pullCalls).toEqual([ctx.root]);
+    expect(order).toEqual(["pull", "prepareWorkspace"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("knob OFF (default): injected pullUpstream is never called", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    expect(ctx.config.git.pullBeforeWork).toBe(false); // default
+    let called = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      pullUpstream: () => {
+        called = true;
+        return { ok: true, updated: false, note: "n/a" };
+      },
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps);
+    expect(called).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a failed pull (ok:false) never blocks workspace creation — the build proceeds", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.pullBeforeWork = true;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      pullUpstream: () => ({ ok: false, updated: false, note: "offline — skipping" }),
+      prepareWorkspace: () => ({ dir, branch: "sparra/test", note: "t" }),
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    const res = await cmdBuild(ctx, {}, deps);
+    expect(res.passed).toBe(1);
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("knob ON but resuming an existing workspaceDir: pullUpstream is NOT called", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.pullBeforeWork = true;
+    // Simulate a resumed run: a workspaceDir is already persisted before cmdBuild runs.
+    ctx.store.data.build.runId = "build-existing";
+    ctx.store.data.build.workspaceDir = dir;
+    ctx.store.data.build.workspaceNote = "resumed";
+    let called = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      pullUpstream: () => {
+        called = true;
+        return { ok: true, updated: false, note: "n/a" };
+      },
+      prepareWorkspace: () => {
+        throw new Error("prepareWorkspace must not run on a resumed workspace");
+      },
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, {}, deps); // fresh:false, workspaceDir already set → resume path
+    expect(called).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("knob ON but with workspaceOverride: pullUpstream is NOT called", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });
+    ctx.config.git.pullBeforeWork = true;
+    let called = false;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      pullUpstream: () => {
+        called = true;
+        return { ok: true, updated: false, note: "n/a" };
+      },
+      decompose: async () => [items[0]!],
+      generateItem: async () => genOut(),
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(called).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("cmdBuild — hybrid generation routing (gen: local)", () => {
   it("routes items tagged gen:'local' to roles.generatorLocal and others to roles.generator", async () => {
     const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0, maxRoundsPerItem: 2 });

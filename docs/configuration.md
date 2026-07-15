@@ -59,6 +59,17 @@ git:
     swiftPackages: true       # SwiftPM package? prewarm `swift package resolve` into the durable
                               #   worktree-local cache so an offline swift build/test runs as-shipped
                               #   (non-fatal no-op off-knob / non-Swift / in-place)
+  pullBeforeWork: false       # true → before build/conduct/prototype cut a FRESH workspace from
+                              #   local HEAD, fast-forward-only sync the current branch with its
+                              #   upstream (`git pull --ff-only`), so a stale local clone doesn't
+                              #   silently build on stale code. Skipped (non-fatal note, no
+                              #   fetch/pull attempted) with no repo, no commits, a detached HEAD,
+                              #   or no upstream configured; a failed pull (offline, diverged)
+                              #   never blocks the run. Never pushes, never touches another branch.
+                              #   Applies to build's fresh worktree/branch (not resume, not
+                              #   --workspace-override), a fresh `conduct` run (once, before any
+                              #   unit worktree — never on --resume), and `prototype`'s worktree.
+                              #   Default false (opt-in; today's behavior unchanged).
 
 rubric:
   weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 }

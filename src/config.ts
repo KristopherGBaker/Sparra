@@ -191,6 +191,16 @@ export interface SparraConfig {
        */
       swiftPackages: boolean;
     };
+    /**
+     * Opt-in: before Sparra cuts a FRESH workspace from local HEAD (`build`'s worktree/branch,
+     * a `conduct` run's unit worktrees, `prototype`'s worktree), fast-forward-only sync the
+     * current branch with its upstream (`git pull --ff-only`) — so a stale local clone doesn't
+     * silently build on stale code. Skipped (non-fatally, with a logged note) when there's no
+     * git repo, no commits, a detached HEAD, or no upstream configured; a failed pull (offline,
+     * diverged) never blocks the run. Only the fresh-workspace path pulls — a resumed run or an
+     * explicit `workspaceOverride` does not. Default false (preserves today's behavior).
+     */
+    pullBeforeWork: boolean;
   };
 
   rubric: {
@@ -604,6 +614,8 @@ export function defaultConfig(): SparraConfig {
       autoCommit: false,
       agentCommits: "agent",
       provisionDeps: { enabled: true, dirs: ["node_modules"], swiftPackages: true },
+      // Off by default (opt-in): a config-less run cuts its workspace from local HEAD unchanged.
+      pullBeforeWork: false,
     },
     rubric: {
       weights: { design: 0.25, originality: 0.15, craft: 0.3, functionality: 0.3 },

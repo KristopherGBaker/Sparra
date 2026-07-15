@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { mergeFfOnly, defaultBranch, isLinkedWorktree, revParse, diffNames } from "../src/util/git.ts";
+import { mergeFfOnly, defaultBranch, isLinkedWorktree, revParse, diffNames, pullUpstream } from "../src/util/git.ts";
 
 /** A fake git runner that records the argv of every invocation and answers from a map. */
 function fakeRunner(answers: (args: string[]) => { ok: boolean; out: string }) {
@@ -154,5 +154,148 @@ describe("revParse / diffNames (eval-provenance seams)", () => {
     expect(names).not.toBeNull();
     expect(names!.sort()).toEqual([path.resolve(dir, "a.txt"), path.resolve(dir, "b.txt")]);
     expect(diffNames(dir, "bogus-base")).toBeNull();
+  });
+});
+
+describe("pullUpstream (git.pullBeforeWork helper, offline / local-path remotes only)", () => {
+  function g(dir: string, args: string[]): string {
+    return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  }
+  function initRepo(dir: string, branch = "main"): void {
+    g(dir, ["init", "-b", branch]);
+    g(dir, ["config", "user.email", "t@t"]);
+    g(dir, ["config", "user.name", "t"]);
+  }
+  function commit(dir: string, file: string, content: string, msg: string): void {
+    fs.writeFileSync(path.join(dir, file), content);
+    g(dir, ["add", "-A"]);
+    g(dir, ["commit", "-m", msg]);
+  }
+  function tmp(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  it("skip: not a git repo — no fetch/pull attempted", () => {
+    const dir = tmp("sparra-pull-norepo-");
+    try {
+      const r = pullUpstream(dir);
+      expect(r.ok).toBe(false);
+      expect(r.updated).toBe(false);
+      expect(r.note).toMatch(/not a git repo/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skip: repo with no commits yet", () => {
+    const dir = tmp("sparra-pull-nocommits-");
+    try {
+      g(dir, ["init"]);
+      const r = pullUpstream(dir);
+      expect(r.ok).toBe(false);
+      expect(r.updated).toBe(false);
+      expect(r.note).toMatch(/no commits/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skip: detached HEAD", () => {
+    const dir = tmp("sparra-pull-detached-");
+    try {
+      initRepo(dir);
+      commit(dir, "a.txt", "one\n", "base");
+      const head = g(dir, ["rev-parse", "HEAD"]).trim();
+      g(dir, ["checkout", "--detach", head]);
+      const r = pullUpstream(dir);
+      expect(r.ok).toBe(false);
+      expect(r.updated).toBe(false);
+      expect(r.note).toMatch(/detached/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skip: no upstream configured for the current branch", () => {
+    const dir = tmp("sparra-pull-noupstream-");
+    try {
+      initRepo(dir);
+      commit(dir, "a.txt", "one\n", "base");
+      const r = pullUpstream(dir);
+      expect(r.ok).toBe(false);
+      expect(r.updated).toBe(false);
+      expect(r.note).toMatch(/no upstream/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("positive fast-forward: a clone behind its local-path remote advances to the remote tip", () => {
+    const parent = tmp("sparra-pull-ff-");
+    const remote = path.join(parent, "remote");
+    const clone = path.join(parent, "clone");
+    try {
+      fs.mkdirSync(remote);
+      initRepo(remote);
+      commit(remote, "a.txt", "one\n", "base");
+      execFileSync("git", ["clone", remote, clone], { encoding: "utf8" });
+      // Advance the remote AFTER cloning — the clone is now behind its configured upstream.
+      commit(remote, "a.txt", "two\n", "advance");
+      const remoteHead = g(remote, ["rev-parse", "HEAD"]).trim();
+      expect(g(clone, ["rev-parse", "HEAD"]).trim()).not.toBe(remoteHead);
+
+      const r = pullUpstream(clone);
+      expect(r.ok).toBe(true);
+      expect(r.updated).toBe(true);
+      expect(g(clone, ["rev-parse", "HEAD"]).trim()).toBe(remoteHead);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("already up to date: ok:true, updated:false, tip unchanged", () => {
+    const parent = tmp("sparra-pull-uptodate-");
+    const remote = path.join(parent, "remote");
+    const clone = path.join(parent, "clone");
+    try {
+      fs.mkdirSync(remote);
+      initRepo(remote);
+      commit(remote, "a.txt", "one\n", "base");
+      execFileSync("git", ["clone", remote, clone], { encoding: "utf8" });
+      const head = g(clone, ["rev-parse", "HEAD"]).trim();
+
+      const r = pullUpstream(clone);
+      expect(r.ok).toBe(true);
+      expect(r.updated).toBe(false);
+      expect(g(clone, ["rev-parse", "HEAD"]).trim()).toBe(head);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("diverged history: non-fatal ok:false, local branch tip UNCHANGED, never throws", () => {
+    const parent = tmp("sparra-pull-diverge-");
+    const remote = path.join(parent, "remote");
+    const clone = path.join(parent, "clone");
+    try {
+      fs.mkdirSync(remote);
+      initRepo(remote);
+      commit(remote, "a.txt", "one\n", "base");
+      execFileSync("git", ["clone", remote, clone], { encoding: "utf8" });
+      // Diverge: the clone gets its OWN local commit, and the remote ALSO advances independently —
+      // neither is an ancestor of the other, so a ff-only pull must refuse without mutating either.
+      commit(clone, "b.txt", "local\n", "local-only");
+      const cloneHeadBefore = g(clone, ["rev-parse", "HEAD"]).trim();
+      commit(remote, "a.txt", "two\n", "remote-advance");
+
+      let r: ReturnType<typeof pullUpstream> | undefined;
+      expect(() => {
+        r = pullUpstream(clone);
+      }).not.toThrow();
+      expect(r!.ok).toBe(false);
+      expect(g(clone, ["rev-parse", "HEAD"]).trim()).toBe(cloneHeadBefore);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 });

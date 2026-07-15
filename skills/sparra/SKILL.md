@@ -315,6 +315,12 @@ The few that matter most:
   grade never demotes (accept proceeds). Stops a lenient primary evaluator laundering slop.
 - **`git.autoCommit`** — when true, each accepted item is one **conventional commit** onto
   the Sparra worktree/branch (never your main branch; never in-place). Default false.
+- **`git.pullBeforeWork`** — opt-in (default false). When true, **before** `build`/`conduct`/
+  `prototype` cut a **fresh** workspace from local HEAD, Sparra fast-forward-only syncs the
+  current branch with its upstream (`git pull --ff-only`) — so a stale local clone doesn't
+  silently build on stale code. Non-fatal: skipped (with a logged note) when there's no repo,
+  no commits, a detached HEAD, or no upstream; a failed pull (offline, diverged) never blocks
+  the run. Never on a resumed run, never with `--workspace-override`/`conduct --resume`.
 - **`build.skills` / `roles.<role>.skills`** — **agent skills** (SKILL.md) for roles.
   Builder roles (generator, prototyper) inherit `build.skills`; others (e.g. evaluator) opt
   in via their own list. Resolved from repo `skills/`, `~/.claude/skills`, `~/.agents/skills`.

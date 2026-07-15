@@ -5,7 +5,7 @@ import { newRunId } from "../context.ts";
 import type { ItemState } from "../state.ts";
 import { banner, color, detail, info, ok, step, warn } from "../util/log.ts";
 import { appendText, exists, readText } from "../util/io.ts";
-import { prepareWorkspace, changedFiles } from "../util/git.ts";
+import { prepareWorkspace, changedFiles, pullUpstream } from "../util/git.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { commitItem } from "../build/commit.ts";
 import { writeScopeViolations } from "../sdk/scoping.ts";
@@ -51,6 +51,9 @@ import type { RoleConfig } from "../config.ts";
 export interface BuildDeps {
   ensureAutoProbed: typeof ensureAutoProbed;
   prepareWorkspace: typeof prepareWorkspace;
+  /** Opt-in (`git.pullBeforeWork`) ff-only upstream sync, run on `ctx.root` right BEFORE cutting a
+   *  FRESH workspace (never on resume, never with `workspaceOverride`). Real fn by default. */
+  pullUpstream: typeof pullUpstream;
   decompose: typeof decompose;
   negotiateContract: typeof negotiateContract;
   generateItem: typeof generateItem;
@@ -75,6 +78,7 @@ export interface BuildDeps {
 const defaultDeps: BuildDeps = {
   ensureAutoProbed,
   prepareWorkspace,
+  pullUpstream,
   decompose,
   negotiateContract,
   generateItem,
@@ -177,6 +181,13 @@ export async function cmdBuild(
       b.build.workspaceDir = opts.workspaceOverride;
       b.build.workspaceNote = `isolated workspace ${path.relative(ctx.root, opts.workspaceOverride)}`;
     } else {
+      // Opt-in (`git.pullBeforeWork`): ff-only sync the current branch with its upstream BEFORE
+      // cutting the fresh worktree/branch, so a stale local clone doesn't silently build on stale
+      // code. Non-fatal — a failed pull never blocks workspace creation.
+      if (ctx.config.git.pullBeforeWork) {
+        const pull = d.pullUpstream(ctx.root);
+        detail(`upstream pull: ${pull.note}`);
+      }
       const ws = d.prepareWorkspace(ctx.root, ctx.config.git.strategy, ctx.config.git.branchPrefix, runId);
       b.build.workspaceDir = ws.dir;
       b.build.branch = ws.branch;

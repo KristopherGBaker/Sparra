@@ -9,7 +9,7 @@ import { scopedWriterGuard, ensureAutoProbed } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { banner, info, ok, warn, detail } from "../util/log.ts";
 import { ensureDir, exists, readText } from "../util/io.ts";
-import { isGitRepo, hasCommits, prepareWorkspace } from "../util/git.ts";
+import { isGitRepo, hasCommits, prepareWorkspace, pullUpstream } from "../util/git.ts";
 import { mergedBuildEnv } from "../build/env.ts";
 import { environmentNotesSection } from "../environment.ts";
 
@@ -20,7 +20,11 @@ function slug(s: string): string {
 export async function cmdPrototype(
   ctx: Ctx,
   idea: string,
-  opts: { runSessionFn?: (p: RunSessionParams) => Promise<RunResult> } = {}
+  opts: {
+    runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+    /** Injectable seam (real `pullUpstream` by default), mirroring `BuildDeps.pullUpstream`. */
+    pullUpstream?: typeof pullUpstream;
+  } = {}
 ): Promise<void> {
   banner("Phase B · PROTOTYPE (throwaway, for learning)");
   if (!idea.trim()) {
@@ -35,6 +39,11 @@ export async function cmdPrototype(
   let protoDir: string;
   let note: string;
   if (isExisting && isGitRepo(ctx.root) && hasCommits(ctx.root)) {
+    // Opt-in (`git.pullBeforeWork`): ff-only sync BEFORE cutting the prototype worktree. Non-fatal.
+    if (ctx.config.git.pullBeforeWork) {
+      const pull = (opts.pullUpstream ?? pullUpstream)(ctx.root);
+      detail(`upstream pull: ${pull.note}`);
+    }
     const ws = prepareWorkspace(ctx.root, "worktree", "sparra-proto/", name);
     protoDir = ws.dir;
     note = ws.note;

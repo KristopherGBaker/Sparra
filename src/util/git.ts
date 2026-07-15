@@ -154,6 +154,45 @@ export function prepareWorkspace(
   return { dir: wtDir, branch, note: `created worktree ${wtDir} on branch ${branch}` };
 }
 
+/**
+ * Fast-forward-ONLY sync of the CURRENT branch with its configured upstream (`git.pullBeforeWork`),
+ * run before a fresh build/conduct/prototype workspace is cut from local HEAD — so a stale local
+ * clone doesn't silently build on stale code. NEVER throws and NEVER touches any branch other than
+ * fast-forwarding the one currently checked out: never pushes, never fetches/merges another branch,
+ * never commits. Skips (with a descriptive, non-fatal note) rather than attempting any fetch/pull
+ * when: `root` isn't a git repo, the repo has no commits yet, HEAD is detached, or the current
+ * branch has no upstream configured (`git rev-parse --abbrev-ref @{u}` fails). Otherwise runs
+ * `git pull --ff-only`; a failure (offline, diverged history, dirty-tree conflict) is reported as a
+ * non-fatal `ok: false` note — the working tree/branch tip is left exactly as found.
+ */
+export function pullUpstream(root: string): { ok: boolean; updated: boolean; note: string } {
+  if (!isGitRepo(root)) return { ok: false, updated: false, note: "not a git repo — skipping upstream pull" };
+  if (!hasCommits(root)) return { ok: false, updated: false, note: "repo has no commits yet — skipping upstream pull" };
+  const branch = currentBranch(root);
+  if (!branch || branch === "HEAD") {
+    return { ok: false, updated: false, note: "detached HEAD — skipping upstream pull" };
+  }
+  if (!git(root, ["rev-parse", "--abbrev-ref", "@{u}"]).ok) {
+    return { ok: false, updated: false, note: `no upstream configured for ${branch} — skipping upstream pull` };
+  }
+  const before = git(root, ["rev-parse", "HEAD"]).out.trim();
+  const pull = git(root, ["pull", "--ff-only"]);
+  if (!pull.ok) {
+    return {
+      ok: false,
+      updated: false,
+      note: `ff-only pull failed (offline, diverged, or a dirty-tree conflict) — left unchanged: ${pull.out.trim().slice(0, 300)}`,
+    };
+  }
+  const after = git(root, ["rev-parse", "HEAD"]).out.trim();
+  const updated = !!before && !!after && before !== after;
+  return {
+    ok: true,
+    updated,
+    note: updated ? `fast-forwarded ${branch} to its upstream` : `${branch} already up to date with its upstream`,
+  };
+}
+
 // ── Cycle-finish seam (land + teardown). Real implementations behind `FinishDeps`. ──
 
 /** True if the working tree at `dir` has uncommitted changes (tracked or untracked). */

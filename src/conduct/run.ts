@@ -19,6 +19,7 @@ import { makeOnRequestWritten } from "./decisionParked.ts";
 import { loadPrompt } from "../prompts.ts";
 import { mergedBuildEnv } from "../build/env.ts";
 import { runSession, type RunResult, type RunSessionParams } from "../sdk/session.ts";
+import { pullUpstream } from "../util/git.ts";
 import { exists, writeText } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
 import { makeBrain, type Brain } from "./brain.ts";
@@ -93,6 +94,10 @@ export interface ConductDeps {
   strategy?: JudgmentStrategy;
   /** Override the spawned sparra bin (default: `resolveSparraBin()`). */
   sparraBin?: string;
+  /** Opt-in (`git.pullBeforeWork`) ff-only upstream sync, run ONCE on `ctx.root` at the start of a
+   *  FRESH `runConduct` — before decomposition and before any unit worktree can be created.
+   *  `resumeConduct` never calls this (units already exist on disk). Real fn by default. */
+  pullUpstream?: typeof pullUpstream;
 
   // ── U2 conductor-brain + decision-engine seams (all injectable so tests run with no live calls) ──
   /** The conductor brain. A `Brain` object uses it directly; `null` forces NO brain (deterministic
@@ -268,6 +273,14 @@ export async function runConduct(
   const fireRunComplete = async (status: string): Promise<void> => {
     await runHooks("onRunComplete", { runId, runDir, status }, ctx.config);
   };
+
+  // Opt-in (`git.pullBeforeWork`): ff-only sync the current branch with its upstream ONCE at fresh
+  // run start — BEFORE decomposition and before any unit worktree can be created, so a stale local
+  // clone doesn't silently build on stale code. Non-fatal — a failed pull never blocks the run.
+  if (ctx.config.git.pullBeforeWork) {
+    const pull = (deps.pullUpstream ?? pullUpstream)(ctx.root);
+    detail(`upstream pull: ${pull.note}`);
+  }
 
   // 1. Decompose (the ONE role that always runs, even on --dry-run).
   const units = await decomposeConduct(
