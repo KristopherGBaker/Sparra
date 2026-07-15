@@ -10,6 +10,8 @@ import {
   branchExists,
   currentBranch,
   defaultBranch,
+  fastForwardBranchRef,
+  isBranchMerged,
   isDirty,
   listWorktrees,
   mergeCheckedOut,
@@ -33,8 +35,9 @@ import type { ConductRunState, UnitStateEntry } from "./types.ts";
  * After a unit is ACCEPTED, `--commit` commits its worktree WIP onto its `sparra/<name>` unit branch
  * (see {@link ./commit.ts}). `--merge` (which implies `--commit`) then integrates the accepted
  * branch into a SAFE target — a new/reused run branch `sparra/<runId>` when conduct started FROM the
- * default branch, or the current branch otherwise — NEVER the repo's default branch (that land is the
- * human's job). Rebase+ff is preferred, with a merge-commit fallback. A conflict or a dirty target is
+ * default branch, or the current branch otherwise — NEVER the repo's default branch UNLESS the
+ * further opt-in `--land` (below) fast-forwards it there. Rebase+ff is preferred, with a merge-commit
+ * fallback. A conflict or a dirty target is
  * routed through the existing {@link ./decisionEngine.ts} as a PARKED decision. On a successful merge
  * the unit worktree is torn down via the existing `removeUnitWorktree` machinery (force-removed only
  * AFTER the branch is merged into the target). `run.json` records `committedSha` + `mergedInto`.
@@ -42,6 +45,15 @@ import type { ConductRunState, UnitStateEntry } from "./types.ts";
  * Merges into the shared target are SERIALIZED: {@link landAcceptedUnits} processes accepted units
  * one at a time (each `await`ed), so concurrently-completing units never interleave git ops on the
  * target — no lost update, no duplicate.
+ *
+ * `--land` (opt-in, implies `--merge`, gated a SECOND time on `conduct.landToDefault: true`) runs
+ * AFTER every accepted unit has been landed on the run branch above. Only when the run started ON the
+ * default branch AND the run is FULLY clean (every unit terminal ACCEPTED, no unresolved parked
+ * decision, no unit skipped the run-branch merge) does it re-resolve the default branch's tip and, if
+ * the run branch is a true fast-forward of it, advance the default branch to the run branch's tip —
+ * never a merge commit, never `--force`, never a push. A non-default start is a documented no-op; a
+ * non-ff run, or a failure of the landing write itself, PARKS a `land-blocked` decision through the
+ * same decision engine and leaves the default branch untouched.
  */
 
 /** The run branch a default-branch-started conduct run merges accepted units into. `runId` already
@@ -68,6 +80,11 @@ export interface LandingGit {
   abortRebase: typeof abortRebase;
   mergeCheckedOut: typeof mergeCheckedOut;
   abortMerge: typeof abortMerge;
+  /** `--land` only: true iff `ancestor`'s tip is reachable from `descendant` (a fast-forward check). */
+  isBranchMerged: typeof isBranchMerged;
+  /** `--land` only: advance a NAMED branch (the default branch) to `sourceRef`'s tip without checking
+   *  it out — the worktree-safe path used when the default branch is NOT the live checkout. */
+  fastForwardBranchRef: typeof fastForwardBranchRef;
 }
 
 export const realLandingGit: LandingGit = {
@@ -82,12 +99,19 @@ export const realLandingGit: LandingGit = {
   abortRebase,
   mergeCheckedOut,
   abortMerge,
+  isBranchMerged,
+  fastForwardBranchRef,
 };
 
 /** Everything the landing phase needs beyond the per-unit entries. All I/O/clock/TTY injected. */
 export interface LandingDeps {
   /** `commit` → commit only; `merge` → commit + merge (merge implies commit). */
   mode: "commit" | "merge";
+  /** Opt-in `--land` (implies `merge`; the CLI/config double gate is enforced BEFORE this deps object
+   *  is built — this seam trusts it). After every accepted unit lands on the run branch, attempt to
+   *  fast-forward the DEFAULT branch to it (default-branch-started, fully-clean, true-ff runs only).
+   *  See {@link attemptLandToDefault}. */
+  land?: boolean;
   runId: string;
   runDir: string;
   writer: RunStateWriter;
@@ -142,7 +166,11 @@ export async function landAcceptedUnits(ctx: Ctx, deps: LandingDeps): Promise<vo
   const accepted = deps.state.units.filter(
     (u) => u.outcome === "accepted" && (!deps.restrictTo || deps.restrictTo.has(u.id)),
   );
-  if (accepted.length === 0) return;
+  // `--land` must still evaluate the run's overall cleanliness (and park a reason) even when THIS
+  // invocation's accepted set is empty (e.g. a resume whose re-run unit landed non-accepted while
+  // every other unit was already accepted+merged in an earlier invocation) — so only the ORIGINAL
+  // no-op short-circuit (nothing to commit/merge, and no land requested) returns early here.
+  if (accepted.length === 0 && !deps.land) return;
 
   const gi: LandingGit = { ...realLandingGit, ...deps.git };
 
@@ -204,6 +232,19 @@ export async function landAcceptedUnits(ctx: Ctx, deps: LandingDeps): Promise<vo
       }
     }
     await deps.writer.write(deps.state);
+  }
+
+  // `--land`: AFTER every accepted unit has been landed on the run branch above, attempt to
+  // fast-forward the DEFAULT branch to it. The CLI/resume flag+config double gate is enforced before
+  // `deps.land` is ever set true — this seam trusts it and applies only the run-safety gates below.
+  if (deps.land) {
+    if (mergeMode && target) {
+      await attemptLandToDefault(ctx, deps, gi, target);
+    } else {
+      // The merge target itself could not be resolved this invocation (see the --merge warning above,
+      // if any) — there is nothing safe to fast-forward the default branch to.
+      await parkLandDecision(ctx, deps, "the merge target could not be resolved — nothing to land");
+    }
   }
 }
 
@@ -370,6 +411,168 @@ async function parkMergeDecision(
   await deps.writer.write(deps.state);
   info(`conduct: merge decision #${seq} on ${entry.id} → "${res.answer}" (target ${target.branch} unchanged).`);
   return "parked";
+}
+
+/**
+ * The FULLY-CLEAN precondition for `--land`: EVERY decomposed unit is a terminal ACCEPTED (any other
+ * outcome — failed/error/pending/running/abandoned, or anything else — fails this, never an allowlist
+ * of named non-accepted states), no unit carries an unresolved (`status: "pending"`) decision, no
+ * run-level land decision is itself still unresolved, and every accepted unit actually landed on the
+ * run branch (`mergedInto === target.branch` — a unit whose merge-to-run-branch parked, whichever way
+ * it was answered, never got `mergedInto` set, so this catches it too). Returns the FIRST failing
+ * condition, so the park note names something concrete.
+ */
+function computeLandReadiness(state: ConductRunState, target: MergeTarget): { ready: true } | { ready: false; reason: string } {
+  for (const u of state.units) {
+    if (u.outcome !== "accepted") {
+      return { ready: false, reason: `unit ${u.id} is not accepted (outcome "${u.outcome}")` };
+    }
+  }
+  for (const u of state.units) {
+    const pending = (u.decisions ?? []).find((d) => d.status === "pending");
+    if (pending) return { ready: false, reason: `unit ${u.id} has an unresolved parked decision (#${pending.seq})` };
+  }
+  const pendingLand = (state.landDecisions ?? []).find((d) => d.status === "pending");
+  if (pendingLand) return { ready: false, reason: `an earlier land decision is still unresolved (#${pendingLand.seq})` };
+  for (const u of state.units) {
+    if (u.mergedInto !== target.branch) {
+      return {
+        ready: false,
+        reason: `unit ${u.id} was not merged into the run branch ${target.branch} (mergedInto=${u.mergedInto ?? "none"}) — its merge to the run branch parked`,
+      };
+    }
+  }
+  return { ready: true };
+}
+
+/**
+ * Opt-in `--land`: once every accepted unit landed cleanly on the run branch, fast-forward the
+ * DEFAULT branch to the run branch's tip. Runs ONLY when the run started on the default branch
+ * (`target.startedOnDefault`) — a non-default start is a documented no-op that never reads or writes
+ * the default branch. Requires {@link computeLandReadiness} to pass AND a TRUE fast-forward: the
+ * default branch's tip is RE-RESOLVED here (never trusted from an earlier point in the run) and must
+ * be an ancestor of the run branch's tip. Either miss PARKS a `land-blocked` decision through the same
+ * decision engine `merge-blocked` uses, naming the failing condition, and leaves the default branch
+ * completely untouched. Never a merge commit, never `--force`, never a push.
+ *
+ * WORKTREE-SAFE: when the default branch is NOT the branch currently checked out at `ctx.root` (the
+ * main checkout), its ref is advanced directly (`fastForwardBranchRef` — no checkout, no worktree
+ * dirtied); a checked-out ff-only merge (`mergeCheckedOut`) is used ONLY when it IS. A failure of that
+ * landing write itself (distinct from the non-ff precheck above) is likewise non-fatal: it PARKS
+ * (never throws), never sets `landedInto`, and never leaves the default branch half-updated — either
+ * the write fully lands or it doesn't happen at all. On success, `state.landedInto` records
+ * `"<default>@<sha>"`; the run branch is NEVER deleted and no existing teardown changes.
+ */
+async function attemptLandToDefault(ctx: Ctx, deps: LandingDeps, gi: LandingGit, target: MergeTarget): Promise<void> {
+  if (!target.startedOnDefault) {
+    detail(`conduct: --land — started on ${target.branch}, not the default branch; nothing to land.`);
+    return;
+  }
+
+  const readiness = computeLandReadiness(deps.state, target);
+  if (!readiness.ready) {
+    await parkLandDecision(ctx, deps, readiness.reason);
+    return;
+  }
+
+  const def = gi.defaultBranch(ctx.root);
+  if (!def) {
+    await parkLandDecision(ctx, deps, "could not resolve the default branch (refusing to guess a safe target)");
+    return;
+  }
+  const srcTip = gi.revParse(ctx.root, target.branch);
+  if (!srcTip) {
+    await parkLandDecision(ctx, deps, `could not resolve the run branch ${target.branch}'s tip`);
+    return;
+  }
+
+  // Re-resolve the default tip HERE (never trust an earlier resolution) and require a TRUE
+  // fast-forward: the (re-resolved) default tip must be an ancestor of the run branch's tip.
+  const defTipBefore = gi.revParse(ctx.root, def);
+  if (!defTipBefore || !gi.isBranchMerged(ctx.root, def, target.branch)) {
+    await parkLandDecision(
+      ctx,
+      deps,
+      `default branch ${def} advanced to ${defTipBefore ?? "an unresolved tip"} since the run branch was cut; ` +
+        `${target.branch} no longer fast-forwards`,
+    );
+    return;
+  }
+
+  // Worktree-safe: advance the ref directly UNLESS the default branch is the live checkout at
+  // ctx.root, in which case a checked-out ff-only merge is used instead.
+  const cur = gi.currentBranch(ctx.root);
+  const result =
+    cur === def ? gi.mergeCheckedOut(ctx.root, target.branch, {}) : gi.fastForwardBranchRef(ctx.root, def, target.branch);
+  if (!result.ok) {
+    // The landing WRITE itself failed (distinct from the non-ff precheck above) — non-fatal: park,
+    // never throw, never set landedInto, default branch left exactly as found.
+    await parkLandDecision(ctx, deps, `the landing write failed: ${result.out.trim().slice(0, 300)}`);
+    return;
+  }
+
+  const landedTip = gi.revParse(ctx.root, def) ?? srcTip;
+  deps.state.landedInto = `${def}@${landedTip}`;
+  await deps.writer.write(deps.state);
+  info(`conduct: --land — fast-forwarded ${def} to ${landedTip.slice(0, 8)} (from run branch ${target.branch}).`);
+}
+
+/** Surface a run-scoped `land-blocked` PARKED decision through the same decision engine + audit-trail
+ *  pattern `parkMergeDecision` uses — but at the RUN level (`state.landDecisions`), since `--land`
+ *  targets the whole run, not one unit. Always non-fatal: the default branch is left untouched by the
+ *  caller before this is ever invoked. */
+async function parkLandDecision(ctx: Ctx, deps: LandingDeps, reason: string): Promise<void> {
+  const seq = (deps.seqRef.n += 1);
+  const requestedAt = new Date(deps.nowMs()).toISOString();
+  const req = buildDecisionRequest({
+    seq,
+    unit: "run",
+    kind: "land-blocked" as JudgmentKind,
+    nowMs: deps.nowMs(),
+    timeoutSec: deps.timeoutSec,
+    passThreshold: ctx.config.rubric.passThreshold,
+  });
+
+  const pending: DecisionRecord = {
+    seq,
+    unit: "run",
+    kind: "land-blocked",
+    question: req.question,
+    options: req.options,
+    default: req.default,
+    status: "pending",
+    requestedAt,
+    reason,
+  };
+  (deps.state.landDecisions ??= []).push(pending);
+  await deps.writer.write(deps.state);
+  detail(`conduct: land decision #${seq} — ${reason} — awaiting ${req.options.join("/")} (default ${req.default}).`);
+
+  const engine: DecisionEngineDeps = {
+    surface: deps.surface,
+    runDir: deps.runDir,
+    nowMs: deps.nowMs,
+    sleep: deps.sleep,
+    ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
+    ...(deps.brainJudge ? { brainJudge: deps.brainJudge } : {}),
+    ...(deps.tty ? { tty: deps.tty } : {}),
+    onRequestWritten: makeOnRequestWritten(
+      ctx,
+      { ...(deps.runScriptHooksFn ? { runScriptHooksFn: deps.runScriptHooksFn } : {}), ...(deps.onDecisionRequest ? { onDecisionRequest: deps.onDecisionRequest } : {}) },
+      { runId: deps.runId, runDir: deps.runDir },
+    ),
+  };
+  const res = await resolveDecision(req, engine);
+
+  pending.status = "resolved";
+  pending.chosen = res.answer;
+  pending.source = res.source;
+  pending.via = res.via;
+  if (res.rationale) pending.rationale = res.rationale;
+  if (res.note) pending.note = res.note;
+  pending.resolvedAt = new Date(deps.nowMs()).toISOString();
+  await deps.writer.write(deps.state);
+  warn(`conduct: --land blocked — ${reason} (default branch unchanged).`);
 }
 
 /** Tear down a merged unit's worktree via the existing rm-worktree machinery (force — its branch is

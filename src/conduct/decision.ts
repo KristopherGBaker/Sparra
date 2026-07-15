@@ -8,20 +8,23 @@ import type { ParentSummary } from "../../conductors/core/index.ts";
  * choose. Five arise DURING a unit's build (the fixed loop set): contract non-convergence, unit
  * exhaustion, cross-model gate collapse, budget/limit recovery, and a borderline final accept. A
  * sixth, `merge-blocked`, arises AFTER acceptance in the opt-in `--merge` landing phase (a merge
- * conflict or a dirty merge target). At each, the run surfaces a {@link DecisionRequest} — built ONLY
- * from holdout-safe, `ParentSummary`-derived material, so a request/record can never quote holdout
- * evidence.
+ * conflict or a dirty merge target). A seventh, `land-blocked`, arises in the further opt-in `--land`
+ * step (a non-fast-forward default branch, or a failure of the landing write itself). At each, the
+ * run surfaces a {@link DecisionRequest} — built ONLY from holdout-safe, `ParentSummary`-derived
+ * material, so a request/record can never quote holdout evidence.
  */
 
 /** The judgment points. The first five arise in a unit's build loop; `merge-blocked` in the
- *  post-accept `--merge` landing phase (conflict / dirty target). */
+ *  post-accept `--merge` landing phase (conflict / dirty target); `land-blocked` in the further
+ *  opt-in `--land` step (non-fast-forward / landing-write failure). */
 export type JudgmentKind =
   | "contract-nonconvergence"
   | "unit-exhausted"
   | "gate-collapse"
   | "recovery"
   | "borderline-accept"
-  | "merge-blocked";
+  | "merge-blocked"
+  | "land-blocked";
 
 /**
  * Where a resolved decision's answer came from — a CLOSED enum covering every resolution path:
@@ -86,6 +89,10 @@ export interface DecisionRecord {
   chosen?: string;
   rationale?: string;
   note?: string;
+  /** The concrete first-failing condition for a blocked/parked decision, persisted for post-exit
+   *  diagnosis (e.g. which unit/outcome, which advanced sha, which write error) — distinct from the
+   *  generic `question`. */
+  reason?: string;
   source?: DecisionSource;
   via?: DecisionVia;
   resolvedAt?: string;
@@ -110,6 +117,10 @@ export const JUDGMENT_OPTIONS: Record<JudgmentKind, { options: string[]; default
   // keep the unit's worktree+branch: `skip-unit` skips just this unit; `abort-merge` stops merging
   // the rest of the run's accepted units too. Default keeps the unit for the human to merge by hand.
   "merge-blocked": { options: ["skip-unit", "abort-merge"], default: "skip-unit" },
+  // Land-to-default blocked (non-fast-forward, or the landing write itself failed). The run branch and
+  // every accepted unit's work are untouched either way; the only offered answer acknowledges the skip
+  // (the default branch is left for a human/later run to land) — never a merge commit, never `--force`.
+  "land-blocked": { options: ["skip-land"], default: "skip-land" },
 };
 
 /** A one-line question for each judgment kind (no holdout material). */
@@ -127,6 +138,8 @@ export function judgmentQuestion(kind: JudgmentKind, unit: string): string {
       return `Unit ${unit}: the verdict is a borderline pass — accept, revise once more, or abandon?`;
     case "merge-blocked":
       return `Unit ${unit}: the merge is blocked (conflict or a dirty target) — skip this unit (keep its worktree) or abort the merge?`;
+    case "land-blocked":
+      return `The default-branch land is blocked (non-fast-forward, or the landing write itself failed) — the run branch and every accepted unit's work are intact; acknowledge and land it yourself when ready?`;
   }
 }
 

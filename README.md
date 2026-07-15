@@ -68,8 +68,10 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 > **Headless conductor (`sparra conduct`).** `sparra conduct "<prompt>"` drives the whole
 > conductor pattern from ONE prompt with no `.sparra/` setup: decompose → per unit
 > contract-negotiate → generate → cross-model evaluate → decide, all through the isolated role-run
-> machinery, writing `.sparra/conduct/<runId>/` and generating each unit on its own worktree (nothing
-> lands on your branch). Two brain modes (`--brain hybrid` = deterministic loop + an LLM conductor at
+> machinery, writing `.sparra/conduct/<runId>/` and generating each unit on its own worktree — by
+> default nothing lands on your branch (opt-in `--commit`/`--merge` land on a unit/run branch; the
+> further opt-in, double-gated `--land` can fast-forward your default branch itself). Two brain modes
+> (`--brain hybrid` = deterministic loop + an LLM conductor at
 > the judgment points, `--brain llm` = the brain drives turn-by-turn) plus a decision engine that
 > parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` — or the HTTP
 > bridge's `POST /jobs/:id/decision` — to answer). A crashed or interrupted run is **continued in

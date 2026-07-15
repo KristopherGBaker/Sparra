@@ -105,13 +105,20 @@ evaluate → decide, all through the isolated `role run … --json` machinery. F
 `--max-units N` (default 4), `--concurrency N` (default 2), `--budget <usd>` (0 = unlimited),
 `--max-turns <n>`, `--dry-run` (decompose + briefs only, no role spend beyond the decomposer), plus the
 opt-in landing flags `--commit` (commit an accepted unit's WIP onto its `sparra/<name>` branch — message
-carries the unit's score + conduct `runId`) and `--merge` (implies `--commit`: integrate accepted
+carries the unit's score + conduct `runId`), `--merge` (implies `--commit`: integrate accepted
 branches into a safe target — a run branch `sparra/<runId>` when started on the default branch, else the
 current branch, **never** the default branch — rebase+ff preferred with a merge-commit fallback,
-conflicts/dirty target parked, merged worktrees torn down; `run.json` records `committedSha`/`mergedInto`).
-Writes `.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating each unit
-on its own `sparra/<name>` worktree — by default nothing is committed or merged and the default branch is
-never touched; `run.json` reports each accepted unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
+conflicts/dirty target parked, merged worktrees torn down; `run.json` records `committedSha`/`mergedInto`),
+and the further opt-in `--land` (implies `--merge`; ALSO requires `conduct.landToDefault: true` in
+config — a hard error otherwise, never a silent downgrade): once every accepted unit landed cleanly on
+the run branch, fast-forwards the **default branch itself** to that tip — but ONLY on a
+default-branch-started, fully-clean (every unit terminal `accepted`, no unresolved parked decision, no
+merge park), true-fast-forward run; any miss parks a `land-blocked` decision and leaves the default
+branch untouched. Never a merge commit, never `--force`, never a push. `run.json` records `landedInto`
+on success. Writes `.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating
+each unit on its own `sparra/<name>` worktree — by default (no `--commit`/`--merge`/`--land`) nothing is
+committed, merged, or landed, and the default branch is never touched; `run.json` reports each accepted
+unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
 decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
 an inline TTY prompt, `sparra conduct --decide <runId> <seq> <answer>` in another terminal, or the HTTP
@@ -119,7 +126,7 @@ bridge (`POST /jobs/:id/decision`). The bridge's `POST /conduct` has full parity
 (`{root,prompt,…,commit?,merge?}`, self-landing forwarded verbatim) OR a resume (`{root,resume,commit?,
 merge?,auto?}`, EXACTLY ONE of `prompt`|`resume`), and a resumed run re-announces so its
 `pendingDecisions` stay answerable remotely. **Resume a crashed/interrupted run in place** with
-`sparra conduct --resume <runId> [--commit|--merge] [--auto]` (any prompt arg is ignored): it skips
+`sparra conduct --resume <runId> [--commit|--merge|--land] [--auto]` (any prompt arg is ignored): it skips
 already-accepted/dry-run units, re-enters pending/running/error units at the right stage (agreed/forced
 contract → straight to generate, no re-negotiation; else renegotiate from the persisted brief), reuses
 or recreates each unit worktree by stable name, and **appends to the same `run.json`** (monotonic

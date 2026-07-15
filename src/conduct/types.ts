@@ -92,4 +92,14 @@ export interface ConductRunState {
   /** How decisions surfaced for this run (`park`/`park-timeout`/`auto`). */
   decisionSurface?: "park" | "park-timeout" | "auto";
   units: UnitStateEntry[];
+  /** Opt-in `--land` (implies `--merge`; requires `conduct.landToDefault: true`): once the run's
+   *  accepted units all landed cleanly on the run branch, the DEFAULT branch was fast-forwarded to it —
+   *  `"<defaultBranch>@<sha>"` (the branch name + the landed commit). Absent when `--land` was off,
+   *  the run started off the default branch, the run wasn't fully clean, or the land parked/failed
+   *  (see `landDecisions`). Never set except on a genuine fast-forward of the default branch. */
+  landedInto?: string;
+  /** Run-scoped (not per-unit) `land-blocked` decisions surfaced by the opt-in `--land` step — a
+   *  non-fast-forward default branch, or a failure of the landing write itself. Mirrors each unit's
+   *  `decisions` array but lives at the run level since `--land` targets the whole run, not one unit. */
+  landDecisions?: DecisionRecord[];
 }

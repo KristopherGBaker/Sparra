@@ -23,6 +23,7 @@ import type { DecisionRequest } from "../src/conduct/decision.ts";
 import { defaultUnitWorktreeDir } from "../src/build/unitWorktree.ts";
 import {
   addNamedWorktree,
+  branchExists,
   isDirty,
   mergeOrRebaseInProgress,
   rebaseBranch,
@@ -885,6 +886,89 @@ describe("conduct --merge (real git)", () => {
   });
 });
 
+describe("conduct --land (real git)", () => {
+  it("a fully-clean default-branch-started run FAST-FORWARDS the default branch to the run branch's tip; run.json records landedInto; the run branch is NOT deleted", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    try {
+      const mainTipBefore = revParse(repo, "main");
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+      });
+      const target = conductRunBranch(res.runId);
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      const entry = res.state.units[0]!;
+      expect(entry.mergedInto).toBe(target);
+      // The default branch ACTUALLY advanced, to the run branch's tip.
+      const mainTipAfter = revParse(repo, "main");
+      expect(mainTipAfter).not.toBe(mainTipBefore);
+      expect(mainTipAfter).toBe(revParse(repo, target));
+      expect(res.state.landedInto).toBe(`main@${mainTipAfter}`);
+      // The run branch is NOT deleted, and no unit-worktree teardown behavior changed (still torn down).
+      expect(branchExists(repo, target)).toBe(true);
+      expect(fs.existsSync(defaultUnitWorktreeDir(repo, entry.worktree!))).toBe(false); // existing teardown, unchanged
+      // No land-blocked decision was ever parked on a clean run.
+      expect(res.state.landDecisions ?? []).toHaveLength(0);
+    } finally {
+      cleanup(repo, ...runWts);
+    }
+  });
+
+  it("a run started on a NON-default branch performs no land — no-op note, default branch untouched, no landedInto", GIT_IT, async () => {
+    const repo = makeRepo();
+    try {
+      g(repo, ["checkout", "-b", "feature"]);
+      const mainTipBefore = revParse(repo, "main");
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+      });
+      expect(res.state.units[0]!.mergedInto).toBe("feature");
+      expect(res.state.landedInto).toBeUndefined();
+      expect(res.state.landDecisions ?? []).toHaveLength(0); // a no-op, not even a park
+      expect(revParse(repo, "main")).toBe(mainTipBefore);
+    } finally {
+      cleanup(repo);
+    }
+  });
+
+  it("the default branch advancing (out from under the run) after the run branch was cut ABORTS + PARKS the land — default tip stays wherever it advanced to, untouched by us", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    try {
+      const ctx = await makeCtx(repo);
+      // Force the ff-precheck to see a "no longer fast-forwards" situation, deterministically, via DI
+      // (a real race would need a second concurrent committer on `main` — this exercises the SAME
+      // precheck code path the real race would hit, without a flaky timing dependency).
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, concurrency: 1, surface: "auto" }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+        landingGit: { isBranchMerged: () => false },
+      });
+      const target = conductRunBranch(res.runId);
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      expect(res.state.units[0]!.mergedInto).toBe(target); // the run-branch merge itself still succeeded
+      expect(res.state.landedInto).toBeUndefined();
+      const rec = res.state.landDecisions?.find((d) => d.kind === "land-blocked");
+      expect(rec).toBeDefined();
+      expect(rec?.status).toBe("resolved");
+      // main is UNCHANGED — still at the base commit, never advanced to the run branch's tip.
+      expect(revParse(repo, "main")).not.toBe(revParse(repo, target));
+    } finally {
+      cleanup(repo, ...runWts);
+    }
+  });
+});
+
 /**
  * `conduct --resume` composed with `--commit`/`--merge`, exercised against REAL git in a throwaway
  * repo. A crashed run is simulated by hand-writing `run.json` + the unit brief/contract, then
@@ -1040,6 +1124,69 @@ describe("conduct --resume (real git)", () => {
       // Default branch untouched.
       expect(revParse(repo, "main")).toBe(mainTipBefore);
     } finally {
+      cleanup(repo);
+    }
+  });
+
+  it("assertion 10: --land on resume evaluates the clean-run gate over the FULL persisted state — a unit UNTOUCHED by this resume still blocks the land even though the re-run unit itself succeeded", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runId = "conduct-resume-land-block";
+    const prev = process.env.SPARRA_LOG_IN_TESTS;
+    process.env.SPARRA_LOG_IN_TESTS = "1";
+    const writes: string[] = [];
+    const spy = vi
+      .spyOn(process.stdout, "write")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation(((s: unknown) => (writes.push(String(s)), true)) as any);
+    try {
+      const ctx = await makeCtx(repo); // on the default branch (main)
+      const mainTipBefore = revParse(repo, "main");
+      const runDir = seedResumableRun(ctx, runId, [{ id: "unit-002", title: "Resumed unit" }]);
+      // Hand-add unit-001: a TERMINAL, non-accepted outcome from an earlier phase of THIS run —
+      // untouched by this resume (not in the resumable set), so it's absent from `reenterIds`.
+      const state: ConductRunState = JSON.parse(fs.readFileSync(runStatePath(runDir), "utf8"));
+      state.units.unshift({
+        id: "unit-001",
+        title: "One",
+        outcome: "abandoned",
+        briefPath: path.join(runDir, "unit-001", "brief.md"),
+      });
+      fs.writeFileSync(runStatePath(runDir), JSON.stringify(state, null, 2));
+
+      const res = await resumeConduct(
+        ctx,
+        runId,
+        { surface: "auto", merge: true, land: true },
+        {
+          runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+          ensureUnitWorktreeFn: passthroughEnsureWt,
+          brain: null,
+          now: () => Date.now(),
+          sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+        },
+      );
+      expect(res.status).toBe("resumed");
+      const final = (res.status === "resumed" ? res.state : undefined)!;
+      const unit2 = final.units.find((u) => u.id === "unit-002")!;
+      // This resume's OWN unit succeeded and merged onto the run branch...
+      expect(unit2.outcome).toBe("accepted");
+      expect(unit2.mergedInto).toBe(conductRunBranch(runId));
+      // ...but land did NOT proceed — because unit-001 (untouched by THIS resume, still "abandoned"
+      // from earlier) fails the "every decomposed unit is terminal accepted" precondition. Proves the
+      // gate evaluates the FULL persisted state, not just the units re-run this invocation.
+      expect(final.landedInto).toBeUndefined();
+      const rec = final.landDecisions?.find((d) => d.kind === "land-blocked");
+      expect(rec).toBeDefined();
+      expect(rec?.status).toBe("resolved");
+      // Default branch is completely untouched.
+      expect(revParse(repo, "main")).toBe(mainTipBefore);
+      // The park reason (log-only, not persisted on the record) names the blocking unit.
+      const blockedLine = writes.find((w) => w.includes("--land blocked"));
+      expect(blockedLine).toContain("unit-001");
+    } finally {
+      spy.mockRestore();
+      if (prev === undefined) delete process.env.SPARRA_LOG_IN_TESTS;
+      else process.env.SPARRA_LOG_IN_TESTS = prev;
       cleanup(repo);
     }
   });

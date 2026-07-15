@@ -355,6 +355,26 @@ export function abortMerge(
 }
 
 /**
+ * Fast-forward a NAMED branch to `sourceRef`'s tip WITHOUT checking it out anywhere (`git fetch .
+ * <sourceRef>:<branch>`) — used by the conduct `--land` step to advance the DEFAULT branch onto an
+ * accepted run branch's tip from a LINKED worktree, without disturbing the main checkout. A plain
+ * (non-`+`-prefixed) fetch refspec REFUSES a non-fast-forward update by construction, and git itself
+ * refuses to update a branch that is checked out in ANY worktree (`branch` is already checked out
+ * at …`) — both refusals surface as `ok:false`, never a mutation. Never `--force`/`+`, never a merge
+ * commit.
+ *
+ * `run` is an injectable git runner (default = real `git`) so the seam is unit-testable.
+ */
+export function fastForwardBranchRef(
+  root: string,
+  branch: string,
+  sourceRef: string,
+  run: (root: string, args: string[]) => { ok: boolean; out: string } = git
+): { ok: boolean; out: string } {
+  return run(root, ["fetch", ".", `${sourceRef}:${branch}`]);
+}
+
+/**
  * True iff `dir` has an in-progress rebase or merge (a mid-operation git state): a `.git/MERGE_HEAD`,
  * or a `rebase-merge/` / `rebase-apply/` state dir under the resolved git dir. Used by the conduct
  * merge path's post-resolution cleanliness checks (and available to callers verifying no operation

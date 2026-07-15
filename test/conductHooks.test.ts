@@ -595,11 +595,13 @@ describe("runConduct — onDecisionParked at the build-loop park seam (U4 assert
     }
   });
 
-  it("assertion 7 (source): all THREE DecisionEngineDeps sites route onRequestWritten through the shared handleDecisionParked (makeOnRequestWritten) — 2 in run.ts, 1 in merge.ts", () => {
+  it("assertion 7 (source): all FOUR DecisionEngineDeps sites route onRequestWritten through the shared handleDecisionParked (makeOnRequestWritten) — 2 in run.ts, 2 in merge.ts (merge-blocked + land-blocked)", () => {
     const runSrc = fs.readFileSync(new URL("../src/conduct/run.ts", import.meta.url), "utf8");
     const mergeSrc = fs.readFileSync(new URL("../src/conduct/merge.ts", import.meta.url), "utf8");
     expect((runSrc.match(/makeOnRequestWritten\(/g) ?? []).length).toBe(2);
-    expect((mergeSrc.match(/makeOnRequestWritten\(/g) ?? []).length).toBe(1);
+    // merge.ts now carries TWO park sites through the shared seam: parkMergeDecision (merge-blocked,
+    // per-unit) and parkLandDecision (land-blocked, run-scoped, the opt-in --land step).
+    expect((mergeSrc.match(/makeOnRequestWritten\(/g) ?? []).length).toBe(2);
     // No site still wires the OLD raw onDecisionRequest directly into onRequestWritten (bypassing the seam).
     expect(runSrc).not.toMatch(/onRequestWritten:\s*deps\.onDecisionRequest\b/);
     expect(mergeSrc).not.toMatch(/onRequestWritten:\s*deps\.onDecisionRequest\b/);

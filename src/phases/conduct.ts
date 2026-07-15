@@ -23,8 +23,9 @@ import type { ConductRunState, UnitStateEntry } from "../conduct/types.ts";
  * existing isolated role-run machinery (`conductors/core`). Two brain modes: `hybrid` (deterministic
  * loop + an LLM conductor consulted at the five judgment points) and `llm` (the brain drives
  * turn-by-turn); a decision engine surfaces important decisions to a human (park / park-timeout /
- * auto) via file + TTY channels, answerable from another terminal with `conduct --decide`. Nothing
- * lands on the user's branch — units generate on their own worktrees.
+ * auto) via file + TTY channels, answerable from another terminal with `conduct --decide`. By default
+ * nothing lands on the user's branch — units generate on their own worktrees — unless the opt-in
+ * `--commit`/`--merge`/`--land` flags are used (see `src/conduct/merge.ts`).
  */
 
 const DEFAULT_MAX_UNITS = 4;
@@ -67,8 +68,10 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
     return { ok: false, error: brain };
   }
 
-  // `--merge` implies `--commit` (merge integrates the branches it first commits).
-  const merge = flags["merge"] === true;
+  // `--land` implies `--merge` implies `--commit` (land fast-forwards the default branch to the run
+  // branch that `--merge` first builds by committing+integrating each accepted unit).
+  const land = flags["land"] === true;
+  const merge = land || flags["merge"] === true;
   const commit = merge || flags["commit"] === true;
 
   const opts: ConductOptions = {
@@ -84,6 +87,7 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
   if (flags["auto"] === true) opts.surface = "auto";
   if (commit) opts.commit = true;
   if (merge) opts.merge = true;
+  if (land) opts.land = true;
   return { ok: true, opts };
 }
 
@@ -128,6 +132,22 @@ function parseOptionalBudget(v: Flags[string] | undefined): number | undefined |
     return `conduct: --budget must be a non-negative number (got "${v}"); 0 = unlimited`;
   }
   return n;
+}
+
+/** `--land`'s SECOND gate (the CLI flag is the first): true iff `conduct.landToDefault: true` is
+ *  configured. A validated `--land` request is refused with {@link LAND_CONFIG_GATE_ERROR} otherwise —
+ *  never silently downgraded to a run-branch-only `--merge`. */
+function landAllowedByConfig(ctx: Ctx): boolean {
+  return ctx.config.conduct.landToDefault === true;
+}
+
+/** The hard, actionable `--land`-without-config error — names the missing knob. `verb` distinguishes
+ *  the fresh-run vs. `--resume` invocation in the message prefix. */
+function landConfigGateError(verb: "conduct" | "conduct --resume"): string {
+  return (
+    `${verb}: --land requires conduct.landToDefault: true in .sparra/config.yaml (an opt-in double ` +
+    "gate) — refusing to land to the default branch. Set it, or drop --land to stop at the run branch."
+  );
 }
 
 /** Injectable seams for `cmdConduct` (tests inject fakes so validation is exercised with no spend). */
@@ -176,6 +196,15 @@ export async function cmdConduct(
     return undefined;
   }
 
+  // `--land`'s SECOND gate: even a validated `--land` is refused (hard error, zero side effects — no
+  // probe, no run dir) unless `conduct.landToDefault: true` is ALSO configured. Never a silent
+  // downgrade to a run-branch-only `--merge`.
+  if (parsed.opts.land && !landAllowedByConfig(ctx)) {
+    err(landConfigGateError("conduct"));
+    process.exitCode = 1;
+    return undefined;
+  }
+
   // Probe permissions only AFTER validation succeeds (mirrors `role run` — a rejected request spends
   // zero model tokens; the probe is a live SDK query).
   await (deps.autoProbe ?? autoProbeCtx)(ctx);
@@ -193,7 +222,7 @@ export async function cmdConduct(
     `prompt="${parsed.opts.prompt.slice(0, 80)}${parsed.opts.prompt.length > 80 ? "…" : ""}" ` +
       `max-units=${parsed.opts.maxUnits} concurrency=${parsed.opts.concurrency} ` +
       `brain=${parsed.opts.brain} decisions=${parsed.opts.surface}` +
-      (parsed.opts.merge ? " merge" : parsed.opts.commit ? " commit" : "") +
+      (parsed.opts.land ? " land" : parsed.opts.merge ? " merge" : parsed.opts.commit ? " commit" : "") +
       (parsed.opts.dryRun ? " (dry-run)" : ""),
   );
   const result = await runConductFn(ctx, parsed.opts, conductDeps);
@@ -241,11 +270,22 @@ export async function cmdConductResume(
     return { status: "unknown-run", runId, runDir };
   }
 
-  const merge = flags["merge"] === true;
+  const land = flags["land"] === true;
+  const merge = land || flags["merge"] === true;
   const commit = merge || flags["commit"] === true;
+
+  // `--land`'s SECOND gate, same as the fresh-run path: refused (zero side effects — no probe, no
+  // state mutation) unless `conduct.landToDefault: true` is ALSO configured.
+  if (land && !landAllowedByConfig(ctx)) {
+    err(landConfigGateError("conduct --resume"));
+    process.exitCode = 1;
+    return undefined;
+  }
+
   const resumeOpts: ResumeConductOptions = {
     ...(commit ? { commit: true } : {}),
     ...(merge ? { merge: true } : {}),
+    ...(land ? { land: true } : {}),
     ...(flags["auto"] === true ? { surface: "auto" } : {}),
   };
 
@@ -495,6 +535,7 @@ export async function cmdConductStatus(
       `created=${state.createdAt} updated=${state.updatedAt}`,
   );
   detail(`prompt: ${promptOneLine(state.prompt)}`);
+  if (state.landedInto) detail(`landed: ${state.landedInto}`);
   const units = Array.isArray(state.units) ? state.units : [];
   detail(`units (${units.length}):`);
   for (const u of units) {

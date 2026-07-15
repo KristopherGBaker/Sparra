@@ -16,9 +16,9 @@ config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` 
 
 ```bash
 sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] \
-                          [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--dry-run]
+                          [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--land] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
-sparra conduct --resume <runId> [--commit] [--merge] [--auto]   # continue a crashed/interrupted run in place
+sparra conduct --resume <runId> [--commit] [--merge] [--land] [--auto]   # continue a crashed/interrupted run in place
 sparra conduct --status <runId> [--json]                        # read-only projection of one run (zero spend)
 sparra conduct --list [--json]                                  # read-only list of all runs (zero spend)
 ```
@@ -38,7 +38,8 @@ sparra conduct --list [--json]                                  # read-only list
 | `--brain <hybrid\|llm>` | `hybrid` | Conductor-brain mode (see below). `hybrid` = deterministic loop + LLM at judgment points; `llm` = the brain drives turn-by-turn. Invalid values are rejected before any spend. |
 | `--auto` | off | Never park a decision — the brain decides everything (`surface: "auto"` for the run). |
 | `--commit` | off | After a unit is **accepted**, commit its worktree WIP onto its own `sparra/<name>` branch — the `committer` role (when `git.agentCommits: "agent"`) or a deterministic template message (`"template"`), mirroring `src/build`'s `commitItem` (incl. holdout exclusion). The message carries the unit's **score** and the conduct **`runId`**. `run.json` records `committedSha`. Worktree + branch are kept. |
-| `--merge` | off | **Implies `--commit`.** Integrate each accepted unit's branch into a **safe target** — a run branch `sparra/<runId>` when conduct started from the default branch, or the current **non-default** branch otherwise; **never** the default branch. Prefers **rebase + fast-forward**, falling back to a **merge commit**. A merge conflict or a dirty target **parks** a `merge-blocked` decision (`skip-unit` / `abort-merge`) through the same decision engine. On a **successful** merge the unit worktree is **torn down** (existing rm-worktree machinery); `run.json` records `mergedInto`. Merges are **serialized** across concurrently-completing units. |
+| `--merge` | off | **Implies `--commit`.** Integrate each accepted unit's branch into a **safe target** — a run branch `sparra/<runId>` when conduct started from the default branch, or the current **non-default** branch otherwise; **never** the default branch (unless `--land` below is also used). Prefers **rebase + fast-forward**, falling back to a **merge commit**. A merge conflict or a dirty target **parks** a `merge-blocked` decision (`skip-unit` / `abort-merge`) through the same decision engine. On a **successful** merge the unit worktree is **torn down** (existing rm-worktree machinery); `run.json` records `mergedInto`. Merges are **serialized** across concurrently-completing units. |
+| `--land` | off | **Implies `--merge`.** ALSO requires `conduct.landToDefault: true` in config — a **double gate**; `--land` without it is a hard, actionable error naming the missing knob and NOTHING lands (never a silent downgrade to `--merge`). When both are set, fast-forwards the **default branch itself** to the run branch's tip, but ONLY on a run that **started on the default branch**, is **fully clean** (every unit terminal `accepted`, no unresolved parked decision, no unit's merge-to-run-branch parked), and where the run branch is a **true fast-forward** of the (re-resolved) default tip. Any miss **parks** a `land-blocked` decision and leaves the default branch untouched — never a merge commit, never `--force`, never a push. See [Landing to the default branch (`--land`)](#landing-to-the-default-branch---land) below. |
 | `--dry-run` | off | Decompose + write briefs only — **no role spend beyond the decomposer**. |
 
 ## Conductor-brain modes
@@ -114,10 +115,17 @@ A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--conc
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the
 offending flag and creates no run directory.
 
-## Commit & merge landing (`--commit` / `--merge`)
+## Commit, merge & land landing (`--commit` / `--merge` / `--land`)
 
 By default `conduct` is **report-only**: it leaves every accepted unit on its own `sparra/<name>`
-worktree and touches no history. The opt-in landing flags change that **after** a unit is accepted:
+worktree and touches no history. Three STRICTLY OPT-IN tiers, each implying the one before it, widen
+what happens **after** a unit is accepted:
+
+| Tier | Flag | Touches | Gate |
+| --- | --- | --- | --- |
+| Commit | `--commit` | The unit's own `sparra/<name>` branch. | none beyond the flag |
+| Merge | `--merge` (implies `--commit`) | A run/feature branch (`sparra/<runId>` or your current non-default branch) — **never the default branch**. | none beyond the flag |
+| Land | `--land` (implies `--merge`) | The repo's **DEFAULT branch itself**, fast-forwarded to the run branch's tip. | the flag **AND** `conduct.landToDefault: true` in config (double gate) |
 
 - **`--commit`** commits the unit's worktree WIP onto its `sparra/<name>` branch (mirroring the build
   loop's `commitItem`: `committer`-role plan when `git.agentCommits: "agent"`, else a deterministic
@@ -128,7 +136,9 @@ worktree and touches no history. The opt-in landing flags change that **after** 
   - started **on the default branch** → a new/reused **run branch `sparra/<runId>`** in a sibling
     worktree (cut from the default tip; the default branch is never modified);
   - started **on a non-default branch** → **that branch**, in place.
-  - It **never** merges into the default branch — that final land stays yours.
+  - It **never** merges into the default branch itself — that final land stays yours, UNLESS you also
+    opt into `--land` (below), which fast-forwards the default branch to this run branch's tip once
+    everything landed cleanly.
   - It prefers **rebase + fast-forward** (linear history); if the rebase can't apply it falls back to
     a **merge commit**.
   - A **merge conflict** or a **dirty merge target** is surfaced as a **`merge-blocked`** parked
@@ -141,8 +151,46 @@ worktree and touches no history. The opt-in landing flags change that **after** 
   - Merges into the shared target are **serialized** across concurrently-completing units — no lost
     update, no duplicate.
 
-Without either flag, behavior is **byte-identical to today** (no commit, no merge, no teardown, and
-`run.json` unit entries carry neither `committedSha` nor `mergedInto`).
+Without any of the three flags, behavior is **byte-identical to today** (no commit, no merge, no land,
+no teardown, and `run.json` unit entries carry neither `committedSha` nor `mergedInto`).
+
+### Landing to the default branch (`--land`)
+
+`--land` (implies `--merge`, which implies `--commit`) is the third, strictly opt-in tier: once every
+accepted unit has landed cleanly on the run branch above, it fast-forwards the repo's **DEFAULT
+branch itself** to that run branch's tip. It is gated **twice** and runs only on a **fully-clean,
+fast-forwardable** run:
+
+- **Double gate.** `--land` on the CLI is not enough by itself: `conduct.landToDefault: true` must
+  ALSO be set in `.sparra/config.yaml` (see [configuration.md](configuration.md)). `--land` without it
+  is a **hard, actionable error** — nonzero exit, names the missing `conduct.landToDefault` knob — and
+  **nothing** lands; it is never silently downgraded to a run-branch-only `--merge`.
+- **Default-branch-started runs only.** A run that did NOT start on the default branch (its target is
+  a feature branch, in place) performs **no** land — a descriptive no-op note is logged and the
+  default branch is never even read.
+- **Fully-clean precondition.** The land proceeds ONLY when: every decomposed unit reached a terminal
+  **`accepted`** outcome (any other outcome — failed, error, pending, running, abandoned, or anything
+  else — fails this; it's never an allowlist of named non-accepted states), **zero** unresolved parked
+  decisions exist anywhere in the run, and every accepted unit actually merged onto the run branch
+  (i.e. its own merge never parked). Any miss records a `land-blocked` decision naming the FIRST
+  failing condition and the default branch stays untouched.
+- **Fast-forward-only.** The default branch's tip is **re-resolved** at land time (never trusted from
+  earlier in the run) and the land proceeds only when the run branch is a TRUE descendant of it. If
+  the default branch advanced in the meantime so the run branch no longer fast-forwards, the land
+  **aborts and parks** a `land-blocked` decision naming the advanced default tip — the default branch
+  is left **exactly as found**. Never a merge commit, never `--force`.
+- **Worktree-safe.** When the default branch is NOT the branch currently checked out in your main
+  working tree, its ref is advanced directly (no checkout, no worktree ever dirtied); a checked-out
+  fast-forward-only merge is used ONLY when the default branch IS your live checkout.
+- **Non-fatal landing-write failures.** If the landing write itself fails (distinct from the non-ff
+  precheck above — e.g. a transient git error), it's the same story: park, never throw, `landedInto`
+  stays unset, and every already-completed unit's work on the run branch is left intact.
+- **`land-blocked`** decisions (options: `skip-land`, default `skip-land`) surface through the SAME
+  decision engine as `merge-blocked` — `--auto`/a brain resolves it without parking a file.
+- **On success**, `run.json` records `landedInto` as `"<defaultBranch>@<sha>"`. The run branch is
+  **never deleted** and existing unit-worktree teardown is unchanged.
+- **Never pushes.** `--land` fast-forwards your LOCAL default branch only; pushing it anywhere
+  (a remote, a PR) is a separate, later opt-in — not implemented by `--land`.
 
 ## Resuming a crashed / interrupted run (`--resume`)
 
@@ -159,17 +207,21 @@ sparra conduct --resume conduct-2026-07-13T03-12-36   # any trailing prompt argu
 - **Appends to the SAME `run.json`.** A per-resume `resumedAt` timestamp is recorded and the decision
   `seq` continues **monotonically** from the persisted maximum (a resumed decision never re-uses a
   prior seq).
-- **Composes with `--commit`/`--merge` and the decision engine unchanged.** A decision that was still
-  **parked** (unresolved) when the process died is **recovered on resume**: it is re-surfaced under a
-  **fresh `seq` above the persisted maximum** and resolved through the same decision engine, so it
-  stays answerable by the real `sparra conduct --decide <runId> <seq> <answer>` path (or the bridge).
-  Under `park` this **blocks** the resume until answered; under `--auto`/`park-timeout` it
-  auto-resolves. The stale pending record is retired in place (carrying the same answer + a recovery
-  note). The recovered **answer is applied to control flow**: a recovered `abandon` **stops** the unit
-  (marked `abandoned`, not re-run), and a recovered `accept`/`accept-anyway` **finalizes** it as
-  `accepted` without re-running generation — it is never resolved-and-then-ignored. Landing
-  (`--commit`/`--merge`) touches **only the units continued this resume** — units already
-  accepted/landed in the earlier process are left as they were.
+- **Composes with `--commit`/`--merge`/`--land` and the decision engine unchanged.** A decision that
+  was still **parked** (unresolved) when the process died is **recovered on resume**: it is
+  re-surfaced under a **fresh `seq` above the persisted maximum** and resolved through the same
+  decision engine, so it stays answerable by the real `sparra conduct --decide <runId> <seq> <answer>`
+  path (or the bridge). Under `park` this **blocks** the resume until answered; under
+  `--auto`/`park-timeout` it auto-resolves. The stale pending record is retired in place (carrying the
+  same answer + a recovery note). The recovered **answer is applied to control flow**: a recovered
+  `abandon` **stops** the unit (marked `abandoned`, not re-run), and a recovered `accept`/`accept-
+  anyway` **finalizes** it as `accepted` without re-running generation — it is never
+  resolved-and-then-ignored. Commit/merge landing (`--commit`/`--merge`) touches **only the units
+  continued this resume** — units already accepted/landed in the earlier process are left as they
+  were. `--land`, however, ALWAYS re-evaluates its fully-clean precondition over the run's **FULL,
+  final persisted state** (every unit, not just the ones this resume re-ran) — so a resume with
+  `--land` lands only when the ENTIRE run ends up clean, same double gate (`conduct.landToDefault`) as
+  a fresh run.
 
 ### Unit re-entry state matrix
 
@@ -222,9 +274,10 @@ sparra conduct --list [--json]
 ```
 
 - **`--status <runId>`** prints a header (`runId`, `status`, `brain`, decision surface, `createdAt`/
-  `updatedAt`, and the run's `prompt` truncated to **one line**), then one line **per unit** (id, title,
-  outcome, `score`, `cost`, `branch`, a **short** `committedSha`, and `mergedInto` when the unit landed),
-  and finally any **still-parked decisions** (each with its `seq`, question, and a
+  `updatedAt`, the run's `prompt` truncated to **one line**, and a `landedInto` line when the run
+  landed with `--land`), then one line **per unit** (id, title, outcome, `score`, `cost`, `branch`, a
+  **short** `committedSha`, and `mergedInto` when the unit landed), and finally any **still-parked
+  decisions** (each with its `seq`, question, and a
   `conduct --decide <runId> <seq> <answer>` hint). `--json` emits the `run.json` fields plus a
   `pendingDecisions` array (the shared allowlist projection) instead. An **unknown** or **unsafe**
   `runId` exits **1** naming it, with **no** side effects.
@@ -245,6 +298,7 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
 .sparra/conduct/<runId>/
   run.json                 # units, per-unit outcome/score/cost/branch/worktree/verdictPaths, status
                            #   + committedSha/mergedInto when landed with --commit/--merge
+                           #   + landedInto ("<defaultBranch>@<sha>") when landed with --land
                            #   + resumedAt[] (one stamp per --resume)
   <unit-id>/
     brief.md               # the unit's brief (written from the decomposition)
@@ -270,13 +324,15 @@ timestamp per resume.
   The conduct process never reads or inlines holdout content; conductor-visible state (`run.json`,
   the in-memory state) carries only holdout-safe `ParentSummary`-derived fields. Generator, contract,
   and decomposer specs never receive a holdout path.
-- **Git safety.** `conduct` **never** touches the repo's **default branch** — that land is always
-  yours. By default (no `--commit`/`--merge`) it also never commits or merges anything: each unit
-  generates on its **own persistent** `sparra/<name>` unit worktree and `run.json` reports each
-  accepted unit's branch + worktree, left for you. The opt-in `--commit`/`--merge` flags (below)
-  commit accepted WIP onto its own `sparra/<name>` branch and integrate accepted branches into a
-  **safe target that is never the default branch** — a run branch `sparra/<runId>` when conduct
-  started from the default branch, or your current (non-default) branch otherwise.
+- **Git safety.** By default (no `--commit`/`--merge`/`--land`) `conduct` never commits, merges, or
+  touches the repo's **default branch**: each unit generates on its **own persistent** `sparra/<name>`
+  unit worktree and `run.json` reports each accepted unit's branch + worktree, left for you. The
+  opt-in `--commit`/`--merge` flags commit accepted WIP onto its own `sparra/<name>` branch and
+  integrate accepted branches into a **safe target that is never the default branch** — a run branch
+  `sparra/<runId>` when conduct started from the default branch, or your current (non-default) branch
+  otherwise. The default branch itself is reachable ONLY through the further opt-in, double-gated
+  `--land` (see [Landing to the default branch](#landing-to-the-default-branch---land)) — and even
+  then only a **local, fast-forward-only** advance; `--land` never pushes anywhere.
 
 ## Script hooks fire points
 
@@ -289,7 +345,7 @@ the seven events at these boundaries:
 | `onRunComplete` | On **every** terminal return of the run — the no-units-decomposed error, `--dry-run`, and the normal completed path. | Best-effort. Carries the run's final `status` (`"error"` / `"dry-run"` / `"completed"`). |
 | `onUnitStart` | Before a unit's build work begins. Deterministic path (no `--brain`): fired for **every** unit in a sequential loop **up front**, before the concurrent batch starts. Brain path (`--brain hybrid\|llm`): fired at the top of **each unit's own** (bounded-concurrent) iteration. | **Gate.** A `required: true` failure marks that unit `"error"`, sets the run `status` to `"error"`, persists it, fires `onRunComplete` (`status:"error"`) exactly once, and returns immediately — the unit batch never runs (deterministic path) or the run never lands/completes (brain path). A gated run can never report `"completed"`. |
 | `onUnitComplete` | After a unit's outcome is finalized (accepted / error / abandoned / exhausted / …). | Best-effort. Carries `status: <the unit's terminal outcome>`. |
-| `onDecisionParked` | Every time the decision engine **parks** a judgment point (writes `<seq>.request.json` and waits) — on the build-loop decision paths, a `--resume` recovery re-surface, and a `--merge` landing block. | Best-effort **after-event** — fired on **every** park with **no config gate**; a hook failure/timeout only warns and never blocks the parked decision from being answered. Receives `decisionSeq` (`SPARRA_HOOK_DECISION_SEQ`), `decisionKind` (`SPARRA_HOOK_DECISION_KIND`), and the decision `question` — the latter **only** on stdin JSON, never in an env var. Alongside it, a stable `conduct: decision-parked <runId> <seq>` line is printed to stdout (runId + seq **only**, never the question) for the HTTP bridge to parse into a `decision_parked` event. |
+| `onDecisionParked` | Every time the decision engine **parks** a judgment point (writes `<seq>.request.json` and waits) — on the build-loop decision paths, a `--resume` recovery re-surface, a `--merge` landing block, and a `--land` landing block. | Best-effort **after-event** — fired on **every** park with **no config gate**; a hook failure/timeout only warns and never blocks the parked decision from being answered. Receives `decisionSeq` (`SPARRA_HOOK_DECISION_SEQ`), `decisionKind` (`SPARRA_HOOK_DECISION_KIND`), and the decision `question` — the latter **only** on stdin JSON, never in an env var. Alongside it, a stable `conduct: decision-parked <runId> <seq>` line is printed to stdout (runId + seq **only**, never the question) for the HTTP bridge to parse into a `decision_parked` event. |
 
 `--resume` re-entry only gets the **per-unit** hooks (it reuses the same brain-path machinery
 "by construction") — `onRunStart`/`onRunComplete` are scoped to a fresh `runConduct` invocation and do

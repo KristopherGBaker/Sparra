@@ -55,8 +55,10 @@ import { runScriptHooks } from "../scriptHooks.ts";
  * (`runUnit` via `runUnitsConcurrently`, over an injected `RoleRunner`). Filesystem is the source
  * of truth: `.sparra/conduct/<runId>/run.json` + per-unit briefs/contracts are written incrementally
  * and atomically, so a crashed run is both inspectable AND resumable in place (`resumeConduct` /
- * `sparra conduct --resume <runId>`). Nothing lands on the user's branch — every
- * unit generates on its own persistent `sparra/<name>` unit worktree.
+ * `sparra conduct --resume <runId>`). By default nothing lands anywhere — every unit generates on its
+ * own persistent `sparra/<name>` unit worktree, and even the opt-in `--commit`/`--merge` landing flags
+ * (`src/conduct/merge.ts`) stop at a run/feature branch, never the repo's default branch, UNLESS the
+ * further opt-in `--land` (plus `conduct.landToDefault: true`) fast-forwards it there.
  */
 
 export interface ConductOptions {
@@ -81,8 +83,16 @@ export interface ConductOptions {
   /** Opt-in: after a unit is ACCEPTED, commit its worktree WIP onto its `sparra/<name>` branch. */
   commit?: boolean;
   /** Opt-in (implies `commit`): integrate accepted branches into a safe target (never the default
-   *  branch). Rebase+ff preferred, merge-commit fallback, conflicts/dirty target parked. */
+   *  branch, UNLESS `land` below is also set). Rebase+ff preferred, merge-commit fallback,
+   *  conflicts/dirty target parked. */
   merge?: boolean;
+  /** Opt-in (implies `merge`, which implies `commit`; ALSO requires `conduct.landToDefault: true` in
+   *  config — a double gate enforced by the CLI before this reaches here): once the run's accepted
+   *  units all landed cleanly on the run branch, fast-forward the DEFAULT branch to it. Only on a
+   *  default-branch-started, fully-clean, true fast-forward run; a non-ff or unclean run PARKS a
+   *  `land-blocked` decision instead. Never a merge commit, never `--force`, never a push. See
+   *  `src/conduct/merge.ts`. */
+  land?: boolean;
 }
 
 export interface ConductDeps {
@@ -441,6 +451,9 @@ const RESUMABLE_OUTCOMES: ReadonlySet<UnitOutcome> = new Set(["pending", "runnin
 export interface ResumeConductOptions {
   commit?: boolean;
   merge?: boolean;
+  /** Opt-in (implies `merge`/`commit`; ALSO requires `conduct.landToDefault: true`). See
+   *  {@link ConductOptions.land}. */
+  land?: boolean;
   surface?: "park" | "park-timeout" | "auto";
   timeoutSec?: number;
 }
@@ -506,8 +519,9 @@ export async function resumeConduct(
     brain: state.brain ?? "hybrid",
     surface: opts.surface ?? state.decisionSurface ?? ctx.config.conduct.decisions.surface,
     timeoutSec: opts.timeoutSec ?? ctx.config.conduct.decisions.timeoutSec,
-    ...(opts.commit || opts.merge ? { commit: true } : {}),
-    ...(opts.merge ? { merge: true } : {}),
+    ...(opts.commit || opts.merge || opts.land ? { commit: true } : {}),
+    ...(opts.merge || opts.land ? { merge: true } : {}),
+    ...(opts.land ? { land: true } : {}),
   };
 
   // Decision seq continues MONOTONICALLY from the persisted max (every prior decision, all units).
@@ -651,10 +665,12 @@ export async function resumeConduct(
   return { status: "resumed", runId, runDir, state };
 }
 
-/** Opt-in commit/merge landing, shared by the fresh run and the resume path. No flags → no-op
- *  (byte-identical to a report-only run). `--merge` implies `--commit`; accepted units are serialized.
- *  `restrictTo`, when present (resume), lands ONLY the units re-run this invocation — prior-run
- *  accepted units are left as they were. */
+/** Opt-in commit/merge/land landing, shared by the fresh run and the resume path. No flags → no-op
+ *  (byte-identical to a report-only run). `--land` implies `--merge` implies `--commit` — re-applied
+ *  HERE (not just at the CLI) so any programmatic caller gets the same implication chain. Accepted
+ *  units are serialized; `restrictTo`, when present (resume), lands ONLY the units re-run this
+ *  invocation — prior-run accepted units are left as they were (the `--land` gate itself, however,
+ *  always evaluates the FULL persisted state — see `computeLandReadiness` in `merge.ts`). */
 async function runLanding(
   ctx: Ctx,
   opts: ConductOptions,
@@ -669,13 +685,16 @@ async function runLanding(
     restrictTo?: Set<string>;
   },
 ): Promise<void> {
-  if (!opts.commit && !opts.merge) return;
+  const merge = opts.merge === true || opts.land === true;
+  const commit = merge || opts.commit === true;
+  if (!commit) return;
   const surface = opts.surface ?? ctx.config.conduct.decisions.surface;
   const timeoutSec = opts.timeoutSec ?? ctx.config.conduct.decisions.timeoutSec;
   const nowMs = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const landingDeps: LandingDeps = {
-    mode: opts.merge ? "merge" : "commit",
+    mode: merge ? "merge" : "commit",
+    ...(opts.land ? { land: true } : {}),
     runId: p.runId,
     runDir: p.runDir,
     writer: p.writer,

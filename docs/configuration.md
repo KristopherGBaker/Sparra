@@ -35,10 +35,24 @@ conduct:                      # `sparra conduct` (headless conductor) intelligen
   decisions:
     surface: park-timeout     # park (wait for a human) | park-timeout (auto-resolve after timeoutSec) | auto (never park; --auto)
     timeoutSec: 1800          # seconds a parked decision waits before the brain/deterministic policy decides
+  landToDefault: false        # opt-in DOUBLE GATE for `conduct --land`: even with --land on the CLI,
+                               #   landing to the repo's DEFAULT branch is refused (a hard, actionable
+                               #   error naming this knob) unless this is ALSO true. --land (implies
+                               #   --merge, which implies --commit) fast-forwards the default branch to
+                               #   the accepted run branch's tip, but ONLY on a run that started on the
+                               #   default branch, is fully clean (every unit terminal accepted, no
+                               #   unresolved parked decision, no unit's merge-to-run-branch parked),
+                               #   and where the run branch is a TRUE fast-forward of the (re-resolved)
+                               #   default tip — any miss parks a land-blocked decision instead of ever
+                               #   touching the default branch. Never a merge commit, never --force,
+                               #   never a push (pushing is a separate, later opt-in). Default false —
+                               #   today's behavior (--merge stops at the run/feature branch) is
+                               #   unchanged unless you opt in HERE **and** pass --land.
 # The conductor brain uses `roles.conductor` (default claude/sonnet/medium) and sees ONLY holdout-safe
 # ParentSummary-derived material. Answer a parked decision from the file, an inline TTY prompt,
 # `sparra conduct --decide <runId> <seq> <answer> [--note "…"]` in another terminal, OR the HTTP bridge
-# (`POST /jobs/:id/decision`) — see docs/http-bridge.md.
+# (`POST /jobs/:id/decision`) — see docs/http-bridge.md. See docs/conduct.md → "Landing to the default
+# branch (--land)" for the full clean-run precondition + ff-only/worktree-safe/park semantics.
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions

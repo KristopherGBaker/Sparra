@@ -565,6 +565,19 @@ export interface SparraConfig {
       /** Seconds a parked decision waits before auto-resolving under `park-timeout`. Default 1800. */
       timeoutSec: number;
     };
+    /**
+     * Opt-in DOUBLE GATE for `sparra conduct --land`: even with `--land` on the CLI, landing to the
+     * repo's DEFAULT branch is refused (a hard, actionable error naming this knob) unless it is also
+     * `true` here. `--land` (implies `--merge`, which implies `--commit`) fast-forwards the default
+     * branch to the accepted run branch's tip, but ONLY when the run started on the default branch,
+     * the run is FULLY clean (every unit terminal ACCEPTED, no unresolved parked decision, no unit's
+     * merge-to-run-branch parked), and the run branch is a TRUE fast-forward of the (re-resolved)
+     * default tip — any miss parks a `land-blocked` decision instead of ever touching the default
+     * branch. Never a merge commit, never `--force`. Never pushes (pushing is a separate, later
+     * opt-in). Default `false` — today's behavior (`--merge` stops at the run/feature branch) is
+     * unchanged unless you opt in HERE **and** pass `--land`.
+     */
+    landToDefault: boolean;
   };
   /**
    * Subfolder (relative to the project root) for the human-facing docs Sparra
@@ -690,6 +703,7 @@ export function defaultConfig(): SparraConfig {
     conduct: {
       brain: "hybrid",
       decisions: { surface: "park-timeout", timeoutSec: 1800 },
+      landToDefault: false,
     },
     docsDir: "",
     scriptHooks: {},
