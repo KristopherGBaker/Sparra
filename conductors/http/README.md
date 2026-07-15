@@ -133,7 +133,8 @@ A header segmented switch (`conduct` | `full cycle`) picks the operating mode; t
 across reloads (`localStorage`). **conduct** (the default) puts a full-width **Conduct Deck** above the
 columns — a target selector synced with the rail, a hero mono prompt (autofocused), the `decompose ▸
 contract ▸ generate ▸ evaluate ▸ decide` pipeline strip, the conduct controls (brain `hybrid`|`llm`,
-max units, `auto`/`commit`/`merge` toggles with `merge`⇒`commit`, budget, maxTurns), a `conduct` launch
+max units, `auto`/`commit`/`merge`/`land`/`push` toggles forming a landing-tier chain where each deeper
+toggle implies every shallower one (`push`⇒`land`⇒`merge`⇒`commit`), budget, maxTurns), a `conduct` launch
 button (disabled-with-reason on an empty prompt), and a `resume run` affordance; each target keeps its
 own prompt draft. Rail cards slim to identity + status and act as deck selectors. **full cycle** hides
 the deck and restores the expert per-card action surface (build/reflect/resume/init/freeze triggers,
@@ -158,7 +159,7 @@ via `GET /jobs/:id`, and only while that job is running.
 | `POST /build` | `{ root, fresh?, only?, step?, budget?, maxTurns? }` | `202 { jobId }` |
 | `POST /reflect` | `{ root, apply? }` | `202 { jobId }` |
 | `POST /resume` | `{ root }` | `202 { jobId }` |
-| `POST /conduct` | fresh: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge? }` · resume: `{ root, resume, auto?, commit?, merge? }` (EXACTLY ONE of `prompt`\|`resume`) | `202 { jobId }` |
+| `POST /conduct` | fresh: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge?, land?, push? }` · resume: `{ root, resume, auto?, commit?, merge?, land?, push? }` (EXACTLY ONE of `prompt`\|`resume`) | `202 { jobId }` |
 | `POST /role` | `{ root\|workspace, kind, ... }` | `200 ParentSummary` |
 | `POST /unit` | `{ root\|workspace, ... }` | `200 UnitProjection` |
 | `GET /jobs/:id` | — | `200 Job` (conduct jobs carry `pendingDecisions`) or `404` |
@@ -246,7 +247,12 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 ```
 
 `POST /conduct` — drive the headless conductor from one prompt (decompose → per-unit
-contract/generate/evaluate/decide); poll the job, then answer any parked decision it surfaces:
+contract/generate/evaluate/decide); poll the job, then answer any parked decision it surfaces. The
+`commit`/`merge`/`land`/`push` landing flags are forwarded to the CLI VERBATIM — the bridge never
+synthesizes one from another, and the CLI itself owns the `--push`⇒`--land`⇒`--merge`⇒`--commit`
+implication AND the `conduct.landToDefault`/`conduct.push` config gate (a `land`/`push` request against
+a target whose config doesn't enable it fails through the normal job-failure path; the bridge does no
+extra gating of its own):
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

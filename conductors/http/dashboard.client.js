@@ -305,25 +305,33 @@ export async function triggerPhase(deps, phase, params) {
 /**
  * Build the `POST /conduct` body from ONLY the schema's fields — `root` is always sent; EXACTLY ONE of
  * `prompt` (fresh run) or `resume` (`<runId>`, continue a persisted run) is included per the card's
- * mode. `commit`/`merge` are opt-in booleans, sent only when ON (omitted when off). `merge` IMPLIES
- * `commit` (the server couples them the same way): whenever `merge` is ON the body carries `commit:true`
- * even if the operator's own commit toggle is off — but the coupling is one-directional and never
- * sticky, so turning `merge` back off (with commit still off) drops BOTH keys again; commit reverts to
- * the operator's own toggle, never left forced on. Run-shaping fields (`mode`/`maxUnits`/`concurrency`/
- * `budget`/`maxTurns`) are fresh-run only — the caller omits them on a resume (the server 400s them
- * alongside `resume`). An unknown/extra `params` key is never forwarded.
+ * mode. `commit`/`merge`/`land`/`push` are opt-in booleans, sent only when ON (omitted when off), and
+ * form a one-directional landing-tier CHAIN — each shallower flag is implied by every deeper one
+ * (`push` ⇒ `land` ⇒ `merge` ⇒ `commit`), the same chain the CLI itself owns: `push` is sent only when
+ * ON; `land` is sent when `land` OR `push` is ON; `merge` is sent when `merge` OR `land` OR `push` is
+ * ON; `commit` is sent when `commit` OR `merge` OR `land` OR `push` is ON. The coupling lives in ONE
+ * place and is never sticky — turning a deeper toggle back off drops it (and anything it alone was
+ * implying) from the body again; a shallower flag reverts to the operator's own toggle once nothing
+ * deeper is on. Run-shaping fields (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) are fresh-run
+ * only — the caller omits them on a resume (the server 400s them alongside `resume`). An unknown/extra
+ * `params` key is never forwarded.
  */
 function buildConductBody(p) {
-  // `merge` implies `commit`: derive commit from the operator's toggle OR the merge toggle, so the
-  // coupling lives in ONE place and reverts cleanly when merge turns off (never a sticky forced commit).
-  const commit = !!(p.commit || p.merge);
+  // The landing-tier chain: derive each flag from its own toggle OR any DEEPER toggle, so the coupling
+  // lives in ONE place and reverts cleanly when a deeper toggle turns off (never a sticky forced flag).
+  const push = !!p.push;
+  const land = !!(p.land || push);
+  const merge = !!(p.merge || land);
+  const commit = !!(p.commit || merge);
   return {
     root: p.root,
     ...(p.prompt ? { prompt: p.prompt } : {}),
     ...(p.resume ? { resume: p.resume } : {}),
     ...(p.auto !== undefined ? { auto: p.auto } : {}),
     ...(commit ? { commit: true } : {}),
-    ...(p.merge ? { merge: true } : {}),
+    ...(merge ? { merge: true } : {}),
+    ...(land ? { land: true } : {}),
+    ...(push ? { push: true } : {}),
     ...(p.mode !== undefined ? { mode: p.mode } : {}),
     ...(p.maxUnits !== undefined ? { maxUnits: p.maxUnits } : {}),
     ...(p.concurrency !== undefined ? { concurrency: p.concurrency } : {}),

@@ -59,52 +59,63 @@ bridge() {
               _bridge_post /plan "$(jq -cn --arg r "$1" --arg c "$2" '{root:$r,content:$c}')" ;;
     # conductor endpoints (sync -> summary): pass a full JSON body
     role|unit) _bridge_post "/$cmd" "$1" ;;
-    # conduct: bridge conduct <root> <prompt> [--commit] [--merge] [extra-json] -> {jobId}.
+    # conduct: bridge conduct <root> <prompt> [--commit] [--merge] [--land] [--push] [extra-json] -> {jobId}.
     # Merges {root,prompt} with the optional self-landing flags (forwarded verbatim; the CLI owns
-    # --merge => --commit) and any extra-json. The extra-json arg is OPTIONAL (defaults to {});
-    # jq/body-construction failures are propagated (return 1) rather than sending a bodyless POST.
+    # --push => --land => --merge => --commit) and any extra-json. The extra-json arg is OPTIONAL
+    # (defaults to {}); jq/body-construction failures are propagated (return 1) rather than sending a
+    # bodyless POST.
     conduct)  _bridge_need || return 1
               local croot="$1" cprompt="$2"; shift 2 2>/dev/null || true
-              local ccommit=false cmerge=false cextra='{}' arg
+              local ccommit=false cmerge=false cland=false cpush=false cextra='{}' arg
               for arg in "$@"; do
                 case "$arg" in
                   --commit) ccommit=true ;;
                   --merge)  cmerge=true ;;
+                  --land)   cland=true ;;
+                  --push)   cpush=true ;;
                   *)        cextra="$arg" ;;
                 esac
               done
               [ -n "$cextra" ] || cextra='{}'
               local cbody
               cbody=$(jq -cn --arg r "$croot" --arg p "$cprompt" \
-                        --argjson commit "$ccommit" --argjson merge "$cmerge" --argjson x "$cextra" \
+                        --argjson commit "$ccommit" --argjson merge "$cmerge" \
+                        --argjson land "$cland" --argjson push "$cpush" --argjson x "$cextra" \
                         '{root:$r,prompt:$p}
                          + (if $commit then {commit:true} else {} end)
                          + (if $merge then {merge:true} else {} end)
+                         + (if $land then {land:true} else {} end)
+                         + (if $push then {push:true} else {} end)
                          + $x') || {
                 echo "bridge conduct: invalid extra-json (must be a JSON object, e.g. '{\"budget\":5}')" >&2; return 1; }
               _bridge_post /conduct "$cbody" ;;
-    # resume: bridge resume <root> <runId> [--commit] [--merge] [--auto] -> {jobId}.
+    # resume: bridge resume <root> <runId> [--commit] [--merge] [--land] [--push] [--auto] -> {jobId}.
     # Rides the SAME POST /conduct endpoint with a `resume` runId (continue a crashed/parked run in
     # place). ONLY resume-compatible flags are accepted (the server 400s a run-shaping field alongside
     # `resume`); an unknown arg is rejected before any request.
     resume)   _bridge_need || return 1
               local rroot="$1" rid="$2"; shift 2 2>/dev/null || true
-              local rcommit=false rmerge=false rauto=false arg
+              local rcommit=false rmerge=false rland=false rpush=false rauto=false arg
               for arg in "$@"; do
                 case "$arg" in
                   --commit) rcommit=true ;;
                   --merge)  rmerge=true ;;
+                  --land)   rland=true ;;
+                  --push)   rpush=true ;;
                   --auto)   rauto=true ;;
-                  *) echo "bridge resume: unknown arg '$arg' (expected --commit|--merge|--auto)" >&2; return 1 ;;
+                  *) echo "bridge resume: unknown arg '$arg' (expected --commit|--merge|--land|--push|--auto)" >&2; return 1 ;;
                 esac
               done
               local rbody
               rbody=$(jq -cn --arg r "$rroot" --arg id "$rid" \
-                        --argjson commit "$rcommit" --argjson merge "$rmerge" --argjson auto "$rauto" \
+                        --argjson commit "$rcommit" --argjson merge "$rmerge" \
+                        --argjson land "$rland" --argjson push "$rpush" --argjson auto "$rauto" \
                         '{root:$r,resume:$id}
                          + (if $auto then {auto:true} else {} end)
                          + (if $commit then {commit:true} else {} end)
-                         + (if $merge then {merge:true} else {} end)') || return 1
+                         + (if $merge then {merge:true} else {} end)
+                         + (if $land then {land:true} else {} end)
+                         + (if $push then {push:true} else {} end)') || return 1
               _bridge_post /conduct "$rbody" ;;
     # decide: bridge decide <jobId> <seq> <answer> [note] -> answer a parked conduct decision.
     decide)   _bridge_need || return 1
@@ -140,8 +151,8 @@ bridge <command>
   projects                       GET /projects
   build|reflect|init|freeze <root> [extra-json]   POST phase -> {jobId}
   plan <root> <plan-md-text>     POST /plan (needs allowRemotePlan)
-  conduct <root> <prompt> [--commit] [--merge] [extra-json]   POST /conduct -> {jobId}
-  resume <root> <runId> [--commit] [--merge] [--auto]         POST /conduct (continue a parked run) -> {jobId}
+  conduct <root> <prompt> [--commit] [--merge] [--land] [--push] [extra-json]   POST /conduct -> {jobId}
+  resume <root> <runId> [--commit] [--merge] [--land] [--push] [--auto]         POST /conduct (continue a parked run) -> {jobId}
   decide <jobId> <seq> <answer> [note]   POST /jobs/:id/decision (answer a parked decision)
   role <json>                    POST /role  -> ParentSummary
   unit <json>                    POST /unit  -> UnitProjection

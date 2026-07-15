@@ -135,6 +135,23 @@ describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
     expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", prompt: "go", commit: true, budget: 5 });
   });
 
+  it("`bridge conduct <root> <prompt> --land --push` forwards land+push verbatim (no synthesized commit/merge)", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge conduct /tmp/root "go" --land --push >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", prompt: "go", land: true, push: true });
+  });
+
+  it("`bridge conduct <root> <prompt> --commit --merge --land --push` forwards all four flags verbatim", () => {
+    if (!hasJq()) return;
+    const r = runBridgeCapture(`bridge conduct /tmp/root "go" --commit --merge --land --push >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", prompt: "go", commit: true, merge: true, land: true, push: true });
+  });
+
   it("`bridge resume <root> <runId> --auto --commit` posts a {resume,…} body to /conduct", () => {
     if (!hasJq()) return;
     const runId = "conduct-2026-07-13T06-44-18";
@@ -153,6 +170,26 @@ describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
     expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", resume: "run-42" });
   });
 
+  it("`bridge resume <root> <runId> --land` posts {resume,land:true} verbatim (its own fixture)", () => {
+    if (!hasJq()) return;
+    const runId = "conduct-2026-07-13T06-44-18";
+    const r = runBridgeCapture(`bridge resume /tmp/root ${runId} --land >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", resume: runId, land: true });
+  });
+
+  it("`bridge resume <root> <runId> --push` posts {resume,push:true} verbatim (its own fixture, not synthesized from --land)", () => {
+    if (!hasJq()) return;
+    const runId = "conduct-2026-07-13T06-44-18";
+    const r = runBridgeCapture(`bridge resume /tmp/root ${runId} --push >/dev/null`);
+    if (r === null) return;
+    expect(r.status).toBe(0);
+    expect(r.called).toBe(true);
+    expect(JSON.parse(r.body)).toEqual({ root: "/tmp/root", resume: runId, push: true });
+  });
+
   it("`bridge resume` with an unknown arg is rejected before any curl call", () => {
     if (!hasJq()) return;
     const r = runBridgeCapture(`bridge resume /tmp/root run-42 --max-units 3 >/dev/null 2>&1`);
@@ -166,8 +203,8 @@ describe("bridge.sh — conduct/decide body construction (round-2 #13)", () => {
     const r = runBridgeCapture(`bridge help`);
     if (r === null) return;
     expect(r.called).toBe(false);
-    expect(r.stderr).toContain("conduct <root> <prompt> [--commit] [--merge] [extra-json]");
-    expect(r.stderr).toContain("resume <root> <runId> [--commit] [--merge] [--auto]");
+    expect(r.stderr).toContain("conduct <root> <prompt> [--commit] [--merge] [--land] [--push] [extra-json]");
+    expect(r.stderr).toContain("resume <root> <runId> [--commit] [--merge] [--land] [--push] [--auto]");
   });
 
   it("`bridge jobs` issues a Bearer-authenticated GET /jobs (path + auth header)", () => {

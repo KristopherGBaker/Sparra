@@ -9,7 +9,7 @@
  * `pendingDecisions` (see `conductors/http/decisions.ts` + `server.ts`). The one endpoint serves both a
  * FRESH run (`prompt`, optionally self-landing via `commit`/`merge`) and a RESUME of a crashed/parked
  * run (`resume: "<runId>"`); EXACTLY ONE of `prompt` | `resume` is required, and a resume body may
- * carry only `root, resume, commit, merge, auto`. A resumed run re-announces, so `pendingDecisions` +
+ * carry only `root, resume, commit, merge, land, push, auto`. A resumed run re-announces, so `pendingDecisions` +
  * `POST /jobs/:id/decision` work identically on it.
  *
  * `POST /jobs/:id/decision` answers a parked decision IN-PROCESS via U2's engine
@@ -76,10 +76,12 @@ const conductSchema = z
     prompt: z.string().min(1).optional(),
     resume: z.string().min(1).optional(),
     auto: z.boolean().optional(),
-    // Landing flags forwarded verbatim to the CLI (which owns `--merge` ⇒ `--commit`); valid on both
-    // fresh and resume runs.
+    // Landing flags forwarded verbatim to the CLI (which owns `--push` ⇒ `--land` ⇒ `--merge` ⇒
+    // `--commit`); valid on both fresh and resume runs.
     commit: z.boolean().optional(),
     merge: z.boolean().optional(),
+    land: z.boolean().optional(),
+    push: z.boolean().optional(),
     mode: z.enum(["hybrid", "llm"]).optional(),
     maxUnits: positiveInt.optional(),
     concurrency: positiveInt.optional(),
@@ -95,8 +97,9 @@ const conductSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "exactly one of `prompt` or `resume` is required" });
       return;
     }
-    // A resume body may carry ONLY `root, resume, commit, merge, auto` — any run-shaping field
-    // alongside `resume` is a 400 (the CLI's `--resume` accepts only `--commit|--merge|--auto`).
+    // A resume body may carry ONLY `root, resume, commit, merge, land, push, auto` — any run-shaping
+    // field alongside `resume` is a 400 (the CLI's `--resume` accepts only
+    // `--commit|--merge|--land|--push|--auto`).
     if (hasResume) {
       for (const field of RESUME_INCOMPATIBLE_FIELDS) {
         if (b[field] !== undefined) {
@@ -120,15 +123,18 @@ function invalidBody(): RouteResult {
 }
 
 /** Build the `sparra conduct` argv from a validated body — ONLY server-mapped flags, never client
- *  text beyond the prompt/runId positional and enum/numeric values. `--commit`/`--merge` are forwarded
- *  verbatim (the CLI owns `--merge` ⇒ `--commit`; the bridge never synthesizes one from the other). A
- *  `resume` body maps to `["conduct","--resume",<runId>, …resume-compatible flags]`. */
+ *  text beyond the prompt/runId positional and enum/numeric values. `--commit`/`--merge`/`--land`/
+ *  `--push` are forwarded verbatim (the CLI owns `--push` ⇒ `--land` ⇒ `--merge` ⇒ `--commit`; the
+ *  bridge never synthesizes one from the other). A `resume` body maps to
+ *  `["conduct","--resume",<runId>, …resume-compatible flags]`. */
 function buildConductArgv(b: z.infer<typeof conductSchema>): string[] {
   if (b.resume !== undefined) {
     const argv = ["conduct", "--resume", b.resume];
     if (b.auto) argv.push("--auto");
     if (b.commit) argv.push("--commit");
     if (b.merge) argv.push("--merge");
+    if (b.land) argv.push("--land");
+    if (b.push) argv.push("--push");
     return argv;
   }
   const argv = ["conduct", b.prompt!];
@@ -140,6 +146,8 @@ function buildConductArgv(b: z.infer<typeof conductSchema>): string[] {
   if (b.maxTurns !== undefined) argv.push("--max-turns", String(b.maxTurns));
   if (b.commit) argv.push("--commit");
   if (b.merge) argv.push("--merge");
+  if (b.land) argv.push("--land");
+  if (b.push) argv.push("--push");
   return argv;
 }
 

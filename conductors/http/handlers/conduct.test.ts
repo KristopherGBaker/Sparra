@@ -241,6 +241,13 @@ describe("POST /conduct — commit/merge/resume parity (unit-001)", () => {
     ["commit only", { commit: true }, ["conduct", "p", "--commit"]],
     ["merge only (no synthesized --commit)", { merge: true }, ["conduct", "p", "--merge"]],
     ["commit + merge", { commit: true, merge: true }, ["conduct", "p", "--commit", "--merge"]],
+    ["land only (no synthesized --merge/--commit)", { land: true }, ["conduct", "p", "--land"]],
+    ["push only (no synthesized --land/--merge/--commit)", { push: true }, ["conduct", "p", "--push"]],
+    [
+      "commit + merge + land + push (verbatim order)",
+      { commit: true, merge: true, land: true, push: true },
+      ["conduct", "p", "--commit", "--merge", "--land", "--push"],
+    ],
   ];
   for (const [label, extra, expected] of freshMatrix) {
     it(`fresh ${label} → argv deep-equals ${JSON.stringify(expected)}`, async () => {
@@ -268,6 +275,15 @@ describe("POST /conduct — commit/merge/resume parity (unit-001)", () => {
       "conduct", "--resume", SAFE_RUN_ID, "--auto", "--commit", "--merge",
     ]);
     expect(calls[0]!.options.cwd).toBe(root);
+  });
+
+  it("resume with land+push → argv deep-equals ['conduct','--resume',<id>,'--land','--push'] (verbatim, not synthesized)", async () => {
+    const root = tmpRoot();
+    const { spawn, calls } = fakeSpawner();
+    const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+    const res = await dispatch(listener, { url: "/conduct", body: { root, resume: SAFE_RUN_ID, land: true, push: true } });
+    expect(res.status).toBe(202);
+    expect(calls[0]!.args.slice(1)).toEqual(["conduct", "--resume", SAFE_RUN_ID, "--land", "--push"]);
   });
 
   it("bare resume → argv deep-equals ['conduct','--resume',<id>]", async () => {
@@ -298,6 +314,25 @@ describe("POST /conduct — commit/merge/resume parity (unit-001)", () => {
       const res = await dispatch(listener, { url: "/conduct", body: { root, ...body } });
       expect(res.status, label).toBe(400);
       expect(calls, label).toHaveLength(0);
+    });
+  }
+
+  // Contrast: `resume + mode` (a run-shaping field) still 400s above, but `resume + land`/`resume +
+  // push` are RESUME-COMPATIBLE (the CLI's `--resume` accepts `--land`/`--push` and re-evaluates their
+  // gates over the persisted state) → 202, spawned, forwarded verbatim.
+  const resumeCompatible: Array<[string, Record<string, unknown>, string[]]> = [
+    ["resume + land", { land: true }, ["conduct", "--resume", SAFE_RUN_ID, "--land"]],
+    ["resume + push", { push: true }, ["conduct", "--resume", SAFE_RUN_ID, "--push"]],
+  ];
+  for (const [label, extra, expected] of resumeCompatible) {
+    it(`${label} → 202 (NOT 400, contrast with resume + mode), argv deep-equals ${JSON.stringify(expected)}`, async () => {
+      const root = tmpRoot();
+      const { spawn, calls } = fakeSpawner();
+      const { listener } = makeHarness(baseConfig([root]), { lock: new TargetLock(), spawn });
+      const res = await dispatch(listener, { url: "/conduct", body: { root, resume: SAFE_RUN_ID, ...extra } });
+      expect(res.status, label).toBe(202);
+      expect(calls, label).toHaveLength(1);
+      expect(calls[0]!.args.slice(1), label).toEqual(expected);
     });
   }
 

@@ -82,10 +82,15 @@ curl -s -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" \
 curl -s -X POST -H "Authorization: Bearer $SPARRA_BRIDGE_TOKEN" -H "Content-Type: application/json" \
   -d '{"root":"/Users/me/proj","budget":5,"maxTurns":80}' "$SPARRA_BRIDGE_URL/build"   # 202 {jobId}
 # /reflect {root,apply?}  /resume {root}  /init {root,mode?,docs?}  /freeze {root}  likewise
-# /conduct fresh {root,prompt,auto?,commit?,merge?,mode?,maxUnits?,concurrency?,budget?,maxTurns?} -> {jobId}
-#   OR resume {root,resume,auto?,commit?,merge?} (EXACTLY ONE of prompt|resume). commit/merge self-land;
-#   a resumed run re-announces. A parked decision surfaces as pendingDecisions on GET /jobs/:id —
-#   answer via POST /jobs/:id/decision {seq,answer,note?}
+# /conduct fresh {root,prompt,auto?,commit?,merge?,land?,push?,mode?,maxUnits?,concurrency?,budget?,maxTurns?} -> {jobId}
+#   OR resume {root,resume,auto?,commit?,merge?,land?,push?} (EXACTLY ONE of prompt|resume). The four
+#   landing flags form a chain the CLI owns (push=>land=>merge=>commit, forwarded verbatim, never
+#   synthesized by the bridge): commit/merge self-land onto the unit/run branch; land fast-forwards the
+#   target's default branch to the run branch's tip; push then pushes that landed default branch to its
+#   upstream remote. land/push additionally require conduct.landToDefault/conduct.push=true in the
+#   TARGET's own config — the CLI hard-errors otherwise, surfaced through the normal job-failure path
+#   (the bridge does no gating of its own). A resumed run re-announces. A parked decision surfaces as
+#   pendingDecisions on GET /jobs/:id — answer via POST /jobs/:id/decision {seq,answer,note?}
 ```
 
 **Run one role / a full unit (sync → summary; holdout-safe)**:

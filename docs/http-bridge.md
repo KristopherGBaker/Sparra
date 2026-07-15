@@ -41,7 +41,9 @@ posture; the choice persists across reloads (`localStorage`). The default is **c
   target selector (chips synced with the rail selection), a large mono multi-line prompt (the hero of
   the page, autofocused on entry), a subtle pipeline strip — `decompose ▸ contract ▸ generate ▸
   evaluate ▸ decide` — that names what one line drives, the conduct controls (brain `hybrid`|`llm`, max
-  units, the `auto`/`commit`/`merge` toggles where `merge` implies `commit`, budget, max turns), the
+  units, the `auto`/`commit`/`merge`/`land`/`push` toggles forming a landing-tier chain where each
+  deeper toggle implies every shallower one (`push` implies `land` implies `merge` implies `commit`),
+  budget, max turns), the
   primary `conduct` launch button (disabled with a reason until a target is selected and the prompt is
   non-blank), and a secondary runId + `resume run` affordance. Each target keeps its own prompt draft
   across selection switches.
@@ -81,7 +83,7 @@ offset).
 | `POST /build` | `{ root, fresh?, only?, step?, budget?, maxTurns? }` | `202 { jobId }` |
 | `POST /reflect` | `{ root, apply? }` | `202 { jobId }` |
 | `POST /resume` | `{ root }` | `202 { jobId }` |
-| `POST /conduct` | fresh: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge? }` · resume: `{ root, resume, auto?, commit?, merge? }` (EXACTLY ONE of `prompt`\|`resume`) | `202 { jobId }` |
+| `POST /conduct` | fresh: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge?, land?, push? }` · resume: `{ root, resume, auto?, commit?, merge?, land?, push? }` (EXACTLY ONE of `prompt`\|`resume`) | `202 { jobId }` |
 | `POST /jobs/:id/decision` | `{ seq, answer, note? }` | `200 { ok, seq, chosen }` or `404`/`409`/`400` |
 | `POST /role` | `{ root\|workspace, kind, brief?, briefPath?, contractPath?, holdoutPath?, backend?, model?, effort?, worktree?, unitWorktree?, budget?, maxTurns? }` | `200 ParentSummary` (verbatim, holdout-redacted) |
 | `POST /unit` | `{ root\|workspace, brief?, briefPath?, contractPath?, holdoutPath?, backend?, generatorModel?, evaluatorModel?, effort?, worktree?, unitWorktree?, budget?, maxTurns?, maxRounds?, contractRounds?, proceedIfNotAgreed? }` | `200 UnitProjection` (`{ outcome, contract: { agreed, rounds }, cycle? }`) |
@@ -101,28 +103,37 @@ acquire the per-target mutation lock (see below) — a second writer for a targe
 
 `POST /conduct` triggers `sparra conduct "<prompt>"` as an async job exactly like the other phase
 triggers: the argv is built server-side from the validated body only (`conduct <prompt> [--auto]
-[--brain <mode>] [--max-units N] [--concurrency N] [--budget N] [--max-turns N] [--commit] [--merge]`),
-the child runs with `cwd` = the guarded root, and it holds the per-target lock while it runs. Numeric
-fields are validated to CLI-meaningful values (positive integers for `maxUnits`/`concurrency`/`maxTurns`,
-a non-negative number for `budget`), and `mode` ∈ `hybrid|llm` — an out-of-range value is a `400`, not a
-spawn.
+[--brain <mode>] [--max-units N] [--concurrency N] [--budget N] [--max-turns N]
+[--commit] [--merge] [--land] [--push]`), the child runs with `cwd` = the guarded root, and it holds the per-target lock
+while it runs. Numeric fields are validated to CLI-meaningful values (positive integers for
+`maxUnits`/`concurrency`/`maxTurns`, a non-negative number for `budget`), and `mode` ∈ `hybrid|llm` — an
+out-of-range value is a `400`, not a spawn.
 
-**Self-landing (`commit`/`merge`).** The optional booleans `commit`/`merge` are forwarded verbatim as
-`--commit`/`--merge` (the CLI owns `--merge` ⇒ `--commit`; the bridge synthesizes neither), so a
-remote/dashboard-triggered run can self-land its accepted units onto their `sparra/<name>` branch (and,
-with `merge`, integrate onto the run branch) instead of being report-only.
+**Landing tiers (`commit`/`merge`/`land`/`push`).** The optional booleans `commit`/`merge`/`land`/`push`
+are forwarded verbatim as `--commit`/`--merge`/`--land`/`--push` (the CLI owns the full
+`--push`⇒`--land`⇒`--merge`⇒`--commit` implication; the bridge synthesizes none of them), so a
+remote/dashboard-triggered run can self-land its accepted units onto their `sparra/<name>` branch
+(`commit`), integrate onto the run branch (`merge`), fast-forward the target's default branch to the run
+branch's tip (`land`), and push that landed default branch to its upstream remote (`push`) — instead of
+being report-only. `land`/`push` additionally require `conduct.landToDefault`/`conduct.push` to be `true`
+in the TARGET project's own `sparra.config`/`bridge.yaml`-adjacent config; the CLI enforces this with a
+hard error, which surfaces through the normal job-failure path (`GET /jobs/:id` → `failed` with the
+CLI's stderr) — the bridge does **not** read or re-implement that gate itself.
 
 **Resume (`resume: "<runId>"`).** The SAME endpoint resumes a crashed/interrupted run: send
-`{ root, resume: "<runId>" }` (plus any of `auto`/`commit`/`merge`) and the argv becomes
-`conduct --resume <runId> [--auto] [--commit] [--merge]`. EXACTLY ONE of `prompt`|`resume` must be
-present — both or neither is a `400`. A resume body may carry ONLY `root, resume, commit, merge, auto`;
-any run-shaping field (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) alongside `resume` is a
-fail-closed `400` (the CLI's `--resume` accepts only `--commit|--merge|--auto`). The `runId` is validated
-as a safe single-segment id (`isSafeRunId`) BEFORE any lock or spawn — an unsafe id (`..`, a separator,
-a leading `-`) is a `400` with zero side effects. A resumed run re-announces its run-START line, so
+`{ root, resume: "<runId>" }` (plus any of `auto`/`commit`/`merge`/`land`/`push`) and the argv becomes
+`conduct --resume <runId> [--auto] [--commit] [--merge] [--land] [--push]`. EXACTLY ONE of
+`prompt`|`resume` must be present — both or neither is a `400`. A resume body may carry ONLY
+`root, resume, commit, merge, land, push, auto`; any run-shaping field
+(`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) alongside `resume` is a fail-closed `400` (the
+CLI's `--resume` accepts only `--commit|--merge|--land|--push|--auto` — and re-evaluates the
+`land`/`push` config gates over the persisted run state). The `runId` is validated as a safe
+single-segment id (`isSafeRunId`) BEFORE any lock or spawn — an unsafe id (`..`, a separator, a leading
+`-`) is a `400` with zero side effects. A resumed run re-announces its run-START line, so
 `pendingDecisions` on `GET /jobs/:id` and `POST /jobs/:id/decision` work identically to a fresh run. The
-`bridge.sh` client exposes both: `bridge conduct <root> <prompt> [--commit] [--merge] [extra-json]` and
-`bridge resume <root> <runId> [--commit] [--merge] [--auto]`.
+`bridge.sh` client exposes both:
+`bridge conduct <root> <prompt> [--commit] [--merge] [--land] [--push] [extra-json]` and
+`bridge resume <root> <runId> [--commit] [--merge] [--land] [--push] [--auto]`.
 
 A conduct run parks its important decisions (U2's decision engine) under
 `.sparra/conduct/<runId>/decisions/`. The bridge learns the run's `runId`/`runDir` by parsing a stable

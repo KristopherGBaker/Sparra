@@ -65,17 +65,23 @@ Body: `{ root, apply? }` — `apply` (bool) actually applies proposed prompt edi
 Body: `{ root }`. `202 {jobId}`. Recovery-friendly: Sparra resumes wherever it left off.
 
 ## POST /conduct — headless conductor from one prompt, OR resume a run (async)
-Fresh run body: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge? }`
-Resume body: `{ root, resume, auto?, commit?, merge? }`
+Fresh run body: `{ root, prompt, auto?, mode?, maxUnits?, concurrency?, budget?, maxTurns?, commit?, merge?, land?, push? }`
+Resume body: `{ root, resume, auto?, commit?, merge?, land?, push? }`
 **EXACTLY ONE of `prompt` | `resume` must be present** (both or neither → `400`).
 - `prompt` (string) — the one-line goal; decompose → per-unit contract → generate → evaluate → decide.
 - `resume` (string) — a `<runId>` to continue a crashed/parked run IN PLACE (`conduct --resume <runId>`).
   Validated as a safe single-segment id BEFORE any lock/spawn — an unsafe id (`..`, separator, leading
-  `-`) → `400`, zero side effects. A resume body may carry ONLY `root, resume, commit, merge, auto`; any
-  run-shaping field (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) alongside `resume` → `400`.
+  `-`) → `400`, zero side effects. A resume body may carry ONLY `root, resume, commit, merge, land, push,
+  auto`; any run-shaping field (`mode`/`maxUnits`/`concurrency`/`budget`/`maxTurns`) alongside `resume`
+  → `400`.
 - `auto` (bool) — never park a decision (the brain decides everything).
-- `commit`/`merge` (bool) — forwarded verbatim as `--commit`/`--merge` (self-land accepted units; the CLI
-  owns `--merge` ⇒ `--commit`, the bridge synthesizes neither). Valid on both fresh and resume runs.
+- `commit`/`merge`/`land`/`push` (bool) — forwarded verbatim as `--commit`/`--merge`/`--land`/`--push`
+  (self-land accepted units, integrate onto the run branch, fast-forward the target's default branch to
+  the run branch's tip, and push that landed default branch to its upstream remote, respectively; the
+  CLI owns the full `--push` ⇒ `--land` ⇒ `--merge` ⇒ `--commit` implication, the bridge synthesizes
+  none of them). Valid on both fresh and resume runs. `land`/`push` additionally require
+  `conduct.landToDefault`/`conduct.push` to be `true` in the TARGET's own config — the CLI hard-errors
+  otherwise, which surfaces through the normal job-failure path; the bridge does no gating of its own.
 - `mode` ∈ `hybrid | llm` — conductor-brain mode (`--brain`); fresh-run only.
 - `maxUnits`/`concurrency`/`maxTurns` — positive integers; `budget` — non-negative number (`0` =
   unlimited); all fresh-run only.
@@ -86,6 +92,7 @@ re-announces) surfaces `pendingDecisions` (see below).
 curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","budget":5}' "$SPARRA_BRIDGE_URL/conduct"
 curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","commit":true}' "$SPARRA_BRIDGE_URL/conduct"
 curl -s -X POST $H $J -d '{"root":"/abs/proj","resume":"conduct-2026-07-13T06-44-18","merge":true}' "$SPARRA_BRIDGE_URL/conduct"
+curl -s -X POST $H $J -d '{"root":"/abs/proj","prompt":"add a health endpoint","land":true,"push":true}' "$SPARRA_BRIDGE_URL/conduct"
 ```
 
 ## POST /jobs/:id/decision — answer a parked conduct decision (sync, holdout-safe)

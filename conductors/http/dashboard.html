@@ -919,6 +919,8 @@ const state = {
   conductAuto: false,    // conduct: --auto (never park a decision)
   conductCommit: false,  // conduct: --commit (self-land accepted units onto their branch)
   conductMerge: false,   // conduct: --merge (implies --commit; integrate onto the run branch)
+  conductLand: false,    // conduct: --land (implies --merge; fast-forward the default branch)
+  conductPush: false,    // conduct: --push (implies --land; push the landed default branch to upstream)
   conductResumeId: '',   // conduct: --resume <runId> (continue a crashed/parked run remotely)
   decisionNote: '',      // decision card: optional note for POST /jobs/:id/decision
   pollTimer: null,
@@ -1210,10 +1212,14 @@ function renderDeck() {
   const targetChips = state.targets.length
     ? state.targets.map((t) => `<button type="button" class="deck-chip ${t.root===root?'sel':''}" data-action="select-target" data-root="${escapeHtml(t.root)}">${escapeHtml(targetName(t.root))}</button>`).join('')
     : '<span class="deck-reason">no allowlisted targets — refresh /projects</span>';
-  // merge implies commit: show the commit toggle as ON whenever merge is ON (the controller couples
-  // the body the same way), but keep the stored toggles independent so turning merge off reverts
-  // commit to the operator's own choice.
-  const commitOn = state.conductCommit || state.conductMerge;
+  // The landing-tier chain (push implies land implies merge implies commit): show each shallower toggle
+  // as ON whenever a deeper one is ON (the controller couples the body the same way), but keep the
+  // stored toggles independent so turning a deeper one off reverts the shallower ones to the operator's
+  // own choice.
+  const pushOn = state.conductPush;
+  const landOn = state.conductLand || pushOn;
+  const mergeOn = state.conductMerge || landOn;
+  const commitOn = state.conductCommit || mergeOn;
   const canLaunch = root !== undefined && !isBlankPrompt(draft);
   const reason = root === undefined ? 'select a target, type a prompt' : (isBlankPrompt(draft) ? 'type a prompt to launch' : `ready — conduct on ${escapeHtml(targetName(root))}`);
   el.innerHTML = `
@@ -1245,8 +1251,14 @@ function renderDeck() {
           <div class="toggle-fresh ${commitOn?'on':''}" data-action="toggle-conduct-commit" tabindex="0" role="switch" aria-checked="${commitOn?'true':'false'}">
             <span class="switch"></span> commit — self-land accepted units
           </div>
-          <div class="toggle-fresh ${state.conductMerge?'on':''}" data-action="toggle-conduct-merge" tabindex="0" role="switch" aria-checked="${state.conductMerge?'true':'false'}">
+          <div class="toggle-fresh ${mergeOn?'on':''}" data-action="toggle-conduct-merge" tabindex="0" role="switch" aria-checked="${mergeOn?'true':'false'}">
             <span class="switch"></span> merge — integrate onto the run branch (implies commit)
+          </div>
+          <div class="toggle-fresh ${landOn?'on':''}" data-action="toggle-conduct-land" tabindex="0" role="switch" aria-checked="${landOn?'true':'false'}">
+            <span class="switch"></span> land — fast-forward the default branch (implies merge; needs conduct.landToDefault)
+          </div>
+          <div class="toggle-fresh ${pushOn?'on':''}" data-action="toggle-conduct-push" tabindex="0" role="switch" aria-checked="${pushOn?'true':'false'}">
+            <span class="switch"></span> push — push the landed default branch to upstream (implies land; needs conduct.push)
           </div>
         </div>
         <div class="ctrl">
@@ -1300,9 +1312,10 @@ function runUnit(root){
 }
 
 /** `POST /conduct` from the deck — decompose the prompt into units and drive each through the loop.
- *  The prompt is the SELECTED target's own draft (each target keeps its own); `merge` implies `commit`
- *  in the body (coupled once in the controller's `buildConductBody`). `launchConduct` guards the empty
- *  prompt: a blank/whitespace prompt fires NOTHING and surfaces a visible reason. */
+ *  The prompt is the SELECTED target's own draft (each target keeps its own); the landing-tier chain
+ *  (`push` implies `land` implies `merge` implies `commit`) is coupled once in the controller's
+ *  `buildConductBody`. `launchConduct` guards the empty prompt: a blank/whitespace prompt fires NOTHING
+ *  and surfaces a visible reason. */
 function runConduct(el){
   const root = (el && el.dataset.root) || state.selectedRoot;
   const prompt = getPromptDraft(state, root);
@@ -1315,12 +1328,14 @@ function runConduct(el){
     budget: state.budget,
     commit: state.conductCommit,
     merge: state.conductMerge,
+    land: state.conductLand,
+    push: state.conductPush,
   });
 }
 
 /** `POST /conduct` RESUME from the deck — continue a persisted `<runId>` in place. ONLY resume-compatible
- *  fields ride along (auto + the coupled commit/merge toggles), so the server never 400s a run-shaping
- *  field alongside `resume`. An empty runId is a local no-op toast. */
+ *  fields ride along (auto + the coupled commit/merge/land/push toggles), so the server never 400s a
+ *  run-shaping field alongside `resume`. An empty runId is a local no-op toast. */
 function runConductResume(el){
   const root = (el && el.dataset.root) || state.selectedRoot;
   const resume = state.conductResumeId.trim();
@@ -1331,6 +1346,8 @@ function runConductResume(el){
     auto: state.conductAuto,
     commit: state.conductCommit,
     merge: state.conductMerge,
+    land: state.conductLand,
+    push: state.conductPush,
   });
 }
 
@@ -1845,6 +1862,8 @@ wireDelegatedClicks(document.getElementById('deck'), {
   'toggle-conduct-auto': () => { state.conductAuto = !state.conductAuto; renderDeck(); },
   'toggle-conduct-commit': () => { state.conductCommit = !state.conductCommit; renderDeck(); },
   'toggle-conduct-merge': () => { state.conductMerge = !state.conductMerge; renderDeck(); },
+  'toggle-conduct-land': () => { state.conductLand = !state.conductLand; renderDeck(); },
+  'toggle-conduct-push': () => { state.conductPush = !state.conductPush; renderDeck(); },
 });
 document.getElementById('deck').addEventListener('input', (event) => {
   if (event.target.matches('[data-action="set-conduct-prompt"]')) onDeckPromptInput(event.target);

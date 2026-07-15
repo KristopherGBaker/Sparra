@@ -620,8 +620,26 @@ describe("POST /conduct body — full-control + minimal deep-equal fixtures (A3,
     expect(await bodyFor({ root: "/tmp/proj-a", prompt: "fix login" })).toEqual({ root: "/tmp/proj-a", prompt: "fix login" });
   });
 
-  it("resume path → only {root, resume, auto?, commit?, merge?} — no prompt, no run-shaping fields (A4)", async () => {
+  it("resume path → only {root, resume, auto?, commit?, merge?, land?, push?} — no prompt, no run-shaping fields (A4)", async () => {
     expect(await bodyFor({ root: "/tmp/proj-a", resume: "run-42", auto: false })).toEqual({ root: "/tmp/proj-a", resume: "run-42", auto: false });
+  });
+
+  it("full-control WITH land+push → body deep-equals the fixture including land:true, push:true", async () => {
+    expect(
+      await bodyFor({ root: "/tmp/proj-a", prompt: "add dark mode", mode: "llm", maxUnits: 3, auto: true, commit: true, merge: true, land: true, push: true, budget: 2.5, maxTurns: 40 }),
+    ).toEqual({ root: "/tmp/proj-a", prompt: "add dark mode", mode: "llm", maxUnits: 3, auto: true, commit: true, merge: true, land: true, push: true, budget: 2.5, maxTurns: 40 });
+  });
+
+  it("resume WITH push → body deep-equals {root, resume, auto, commit:true, merge:true, land:true, push:true} (chain implied)", async () => {
+    expect(await bodyFor({ root: "/tmp/proj-a", resume: "run-42", auto: false, push: true })).toEqual({
+      root: "/tmp/proj-a",
+      resume: "run-42",
+      auto: false,
+      commit: true,
+      merge: true,
+      land: true,
+      push: true,
+    });
   });
 });
 
@@ -646,6 +664,52 @@ describe("merge ⇒ commit coupling with a defined, non-sticky reverse transitio
 
   it("contrast: commit ON + merge OFF → commit:true, no merge key", async () => {
     expect(await bodyFor({ root: "/a", prompt: "p", commit: true, merge: false })).toEqual({ root: "/a", prompt: "p", commit: true });
+  });
+});
+
+describe("full landing-tier chain coupling (push ⇒ land ⇒ merge ⇒ commit), non-sticky reverse (assertion 3)", () => {
+  async function bodyFor(params: Record<string, unknown>) {
+    let sent: unknown;
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(init.body as string);
+      return jsonResponse(202, { jobId: "c" });
+    });
+    await triggerConduct({ fetchImpl, storage: fakeStorage(TOKEN), view: fakeView() }, params);
+    return sent;
+  }
+
+  it("push ON alone → body carries commit:true, merge:true, land:true, push:true (all four implied)", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", push: true })).toEqual({
+      root: "/a", prompt: "p", commit: true, merge: true, land: true, push: true,
+    });
+  });
+
+  it("land ON alone → body carries commit:true, merge:true, land:true, NO push key", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", land: true })).toEqual({
+      root: "/a", prompt: "p", commit: true, merge: true, land: true,
+    });
+  });
+
+  it("push ON then cleared (land still ON) → push key drops; land/merge/commit remain", async () => {
+    // Simulates the toggle sequence: first push is ON, then the operator turns push OFF but leaves land ON.
+    expect(await bodyFor({ root: "/a", prompt: "p", land: true, push: true })).toEqual({
+      root: "/a", prompt: "p", commit: true, merge: true, land: true, push: true,
+    });
+    expect(await bodyFor({ root: "/a", prompt: "p", land: true, push: false })).toEqual({
+      root: "/a", prompt: "p", commit: true, merge: true, land: true,
+    });
+  });
+
+  it("all landing toggles cleared → NONE of commit/merge/land/push ride along (never sticky)", async () => {
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: false, merge: false, land: false, push: false })).toEqual({
+      root: "/a", prompt: "p",
+    });
+  });
+
+  it("a PREVIOUSLY-tracked deeper toggle absent from the new call does not leak — clearing push+land in a fresh call with only commit ON yields commit:true only", async () => {
+    // Probe: a call that carries only `commit` (land/push simply absent, not explicitly false) must not
+    // resurrect them — absence behaves the same as false, never sticky from a prior invocation.
+    expect(await bodyFor({ root: "/a", prompt: "p", commit: true })).toEqual({ root: "/a", prompt: "p", commit: true });
   });
 });
 
@@ -1084,10 +1148,15 @@ describe("the real served page (real dashboard.html + dashboard.client.js, real 
     expect(body).not.toMatch(/\son(?:click|change)\s*=/i); // still no inline handlers
   });
 
-  it("exposes the conduct commit/merge toggles + a resume affordance in the trigger card", () => {
+  it("exposes the conduct commit/merge/land/push toggles + a resume affordance in the trigger card", () => {
     const body = servedBody();
     expect(body).toMatch(/data-action=["']toggle-conduct-commit["']/);
     expect(body).toMatch(/data-action=["']toggle-conduct-merge["']/);
+    expect(body).toMatch(/data-action=["']toggle-conduct-land["']/);
+    expect(body).toMatch(/data-action=["']toggle-conduct-push["']/);
+    // Both new toggles carry the same role/aria-checked wiring as the existing ones.
+    expect(body).toMatch(/data-action="toggle-conduct-land"[^>]*role="switch"[^>]*aria-checked=/);
+    expect(body).toMatch(/data-action="toggle-conduct-push"[^>]*role="switch"[^>]*aria-checked=/);
     // resume affordance: a runId input + a run-conduct-resume action, both wired to the real controller.
     expect(body).toMatch(/data-action=["']run-conduct-resume["']/);
     expect(body).toContain("conduct-resume-id");
@@ -1923,7 +1992,7 @@ describe("served boot path in node:vm — rehydration, deep-link, poll (assertio
   const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
   const EPILOGUE =
-    "\n;globalThis.__vm = { state, view, storage, boot, submitAuth, selectJob, restoreHashSelection, rehydrateJobs, ensurePolling, controllerDeps };";
+    "\n;globalThis.__vm = { state, view, storage, boot, submitAuth, selectJob, restoreHashSelection, rehydrateJobs, ensurePolling, controllerDeps, renderDeck, runConduct, runConductResume };";
 
   async function boot(opts: VMOpts) {
     const env = makeEnv(opts);
@@ -2181,6 +2250,93 @@ describe("served boot path in node:vm — rehydration, deep-link, poll (assertio
     // Persisted operating mode is unchanged by any hash operation.
     expect(env.localData.get("sparra-bridge-mode")).toBe(modeBefore);
     expect(env.localData.get("sparra-bridge-mode")).toBe("full cycle");
+  });
+
+  describe("conduct deck land/push toggles: flip state, drive the coupling display, ride payloads", () => {
+    it("toggling land/push flips state.conductLand/conductPush and re-renders the deck", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      expect(api.state.conductLand).toBe(false);
+      expect(api.state.conductPush).toBe(false);
+      const before = env.writes.count;
+      api.state.conductLand = !api.state.conductLand;
+      api.renderDeck();
+      expect(api.state.conductLand).toBe(true);
+      expect(env.writes.count).toBeGreaterThan(before);
+
+      api.state.conductPush = !api.state.conductPush;
+      api.renderDeck();
+      expect(api.state.conductPush).toBe(true);
+    });
+
+    it("push ON lights land/merge/commit toggles as 'on' in the rendered deck (derived display chain)", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      api.state.conductPush = true;
+      api.renderDeck();
+      const html = env.getEl("deck").innerHTML as string;
+      const on = (action: string) => new RegExp(`data-action="toggle-conduct-${action}"[^>]*aria-checked="true"`).test(html);
+      expect(on("push")).toBe(true);
+      expect(on("land")).toBe(true);
+      expect(on("merge")).toBe(true);
+      expect(on("commit")).toBe(true);
+    });
+
+    it("land ON (push off) lights land/merge/commit but leaves push OFF", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      api.state.conductLand = true;
+      api.renderDeck();
+      const html = env.getEl("deck").innerHTML as string;
+      const checked = (action: string) => new RegExp(`data-action="toggle-conduct-${action}"[^>]*aria-checked="(true|false)"`).exec(html)?.[1];
+      expect(checked("land")).toBe("true");
+      expect(checked("merge")).toBe("true");
+      expect(checked("commit")).toBe("true");
+      expect(checked("push")).toBe("false");
+    });
+
+    it("all toggles OFF → none of commit/merge/land/push render as 'on'", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      api.renderDeck();
+      const html = env.getEl("deck").innerHTML as string;
+      const checked = (action: string) => new RegExp(`data-action="toggle-conduct-${action}"[^>]*aria-checked="(true|false)"`).exec(html)?.[1];
+      for (const action of ["commit", "merge", "land", "push"]) expect(checked(action)).toBe("false");
+    });
+
+    it("runConduct (fresh) includes land/push in the launched payload", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      api.state.selectedRoot = "/r";
+      api.state.promptDrafts.set("/r", "do a thing");
+      api.state.conductLand = true;
+      api.state.conductPush = true;
+      const sentBodies: string[] = [];
+      const origFetch = env.globals.fetch;
+      env.globals.fetch = async (url: string, init: any) => {
+        if (url === "/conduct" && init && init.body) sentBodies.push(init.body);
+        return origFetch(url, init);
+      };
+      api.runConduct({ dataset: { root: "/r" } });
+      await flush();
+      expect(sentBodies).toHaveLength(1);
+      const body = JSON.parse(sentBodies[0]!);
+      expect(body).toMatchObject({ root: "/r", prompt: "do a thing", land: true, push: true, merge: true, commit: true });
+    });
+
+    it("runConductResume includes land/push in the resume payload body", async () => {
+      const { env, api } = await boot({ token: TOKEN, respond: RUNNING_FEED });
+      api.state.selectedRoot = "/r";
+      api.state.conductResumeId = "run-77";
+      api.state.conductLand = true;
+      api.state.conductPush = true;
+      const sentBodies: string[] = [];
+      const origFetch = env.globals.fetch;
+      env.globals.fetch = async (url: string, init: any) => {
+        if (url === "/conduct" && init && init.body) sentBodies.push(init.body);
+        return origFetch(url, init);
+      };
+      api.runConductResume({ dataset: { root: "/r" } });
+      await flush();
+      expect(sentBodies).toHaveLength(1);
+      const body = JSON.parse(sentBodies[0]!);
+      expect(body).toMatchObject({ root: "/r", resume: "run-77", land: true, push: true, merge: true, commit: true });
+    });
   });
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
