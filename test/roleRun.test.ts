@@ -2262,6 +2262,45 @@ describe("runRole — cap-death report re-ask (U4)", () => {
     expect(r.emptyCompletion).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  // Model-aware re-ask budget floor (jsonReask.ts reaskBudgetUsd): three policy shapes.
+  it("(budget floor) constrained run cap ($1) → resumed maxBudgetUsd clamped in (0, 1]", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([BUDGET_DEATH, { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-budget" }]);
+    const r = await runRole({
+      ctx, roleKind: "generator", brief: "Build the widget.", maxBudgetUsd: 1,
+      runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(0);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(1);
+    expect(r.resultText).toContain(SENTINEL);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) unlimited run cap (0) → resumed maxBudgetUsd covers an expensive opus turn ($1.5775)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([BUDGET_DEATH, { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-budget" }]);
+    const r = await runRole({
+      ctx, roleKind: "generator", brief: "Build the widget.", maxBudgetUsd: 0,
+      runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(r.resultText).toContain(SENTINEL);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) roomy run cap ($25) → resumed maxBudgetUsd covers the expensive turn AND stays tighter than the run", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([BUDGET_DEATH, { ok: true, subtype: "success", resultText: SENTINEL_REPORT, sessionId: "sess-budget" }]);
+    const r = await runRole({
+      ctx, roleKind: "generator", brief: "Build the widget.", maxBudgetUsd: 25,
+      runSessionFn: rec.fn, changedFilesFn: scripted([[], [FILE]]),
+    });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(25);
+    expect(r.resultText).toContain(SENTINEL);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 // ── U-D: one-shot report re-ask on a writer TURN-CAP death (build.jsonReask) ──
@@ -2424,7 +2463,10 @@ describe("runRole — cap-death verdict re-ask (evaluator)", () => {
     expect(rec.calls[1]!.prompt).not.toContain("grade"); // never replays the grading task
     // tightCap text-only turn: 1 turn, tighter budget, tool-stripping + read-only (NOT plan mode).
     expect(rec.calls[1]!.maxTurns).toBe(1);
-    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(0.5);
+    // The cap is derived (build/jsonReask.ts reaskBudgetUsd), not a blind $0.5 literal: it must
+    // clear a single expensive (opus) turn's real cost ($1.5775, trace 2026-07-13T07-52-03) while
+    // staying materially tighter than the original $5 per-item run cap.
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
     expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(5);
     expect(rec.calls[1]!.tools).toEqual([]);
     expect(rec.calls[1]!.permissionMode).toBe("default"); // NOT plan
@@ -2513,6 +2555,36 @@ describe("runRole — cap-death verdict re-ask (evaluator)", () => {
     const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: rec.fn });
     expect(rec.calls).toHaveLength(1); // clean run → the cap requirement gates the re-ask out
     expect(r.verdict?.notes).toBe("no verdict parsed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Model-aware re-ask budget floor (jsonReask.ts reaskBudgetUsd): three policy shapes.
+  it("(budget floor) constrained run cap ($1) → resumed maxBudgetUsd clamped in (0, 1]", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("mid-grade prose"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 1, runSessionFn: rec.fn });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(0);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(1);
+    expect(r.verdict?.verdict).toBe("pass");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) unlimited run cap (0) → resumed maxBudgetUsd covers an expensive opus turn ($1.5775)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("mid-grade prose"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 0, runSessionFn: rec.fn });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(r.verdict?.verdict).toBe("pass");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) roomy run cap ($25) → resumed maxBudgetUsd covers the expensive turn AND stays tighter than the run", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = seqSession([turnCap("mid-grade prose"), RECOVERED]);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", maxBudgetUsd: 25, runSessionFn: rec.fn });
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(25);
+    expect(r.verdict?.verdict).toBe("pass");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

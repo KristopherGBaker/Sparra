@@ -15,7 +15,7 @@ import { readHoldout, assertNoHoldoutLeak, makeHoldoutReadDecider } from "./hold
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { deviationPolicy, selfVerifyGuidance } from "./modeText.ts";
 import { selectMapContext } from "./mapContext.ts";
-import { reportReaskOverrides, REPORT_REASK_MAX_BUDGET_USD } from "./jsonReask.ts";
+import { reportReaskOverrides, reaskBudgetUsd } from "./jsonReask.ts";
 import { changedFiles } from "../util/git.ts";
 import type { WorkItem } from "./types.ts";
 import type { RoleConfig } from "../config.ts";
@@ -176,7 +176,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
   const doReask = !parsed && (res.hitMaxTurns ? turnCapNoReport : noJson);
   if (doReask && !res.limitHit && ctx.config.build.jsonReask && !budgetExceeded(itemBudget, costUsd)) {
     warn(`Generator for ${item.id} returned no parseable report JSON — re-asking once for the JSON block.`);
-    const reaskBudget = itemBudget > 0 ? Math.min(itemBudget, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
+    const reaskBudget = reaskBudgetUsd(costUsd, itemBudget);
     const retry = await run({
       ...baseReq,
       ...reportReaskOverrides({

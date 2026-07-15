@@ -399,6 +399,50 @@ describe("generateItem — turn-cap report recovery (U-D)", () => {
     expect(out.limitHit).toBeDefined();
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  // Model-aware re-ask budget floor (jsonReask.ts reaskBudgetUsd): the derived cap must clear a
+  // single expensive (opus) turn's real observed cost ($1.5775, trace 2026-07-13T07-52-03) yet stay
+  // materially tighter than a real per-item run cap — three policy shapes per the contract.
+  it("(budget floor) constrained run cap ($1) → resumed maxBudgetUsd clamped in (0, 1]", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP("prose, no report"), { resultText: REPORT_JSON, sessionId: "cap-sess" }]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      maxBudgetUsd: 1, runSessionFn: rec.fn, changedFilesFn: () => ["/ws/a.ts"],
+    });
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(0);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(1);
+    expect(out.report).toBe("recovered");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) unlimited run cap (0) → resumed maxBudgetUsd covers an expensive opus turn ($1.5775)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP("prose, no report"), { resultText: REPORT_JSON, sessionId: "cap-sess" }]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      maxBudgetUsd: 0, runSessionFn: rec.fn, changedFilesFn: () => ["/ws/a.ts"],
+    });
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(out.report).toBe("recovered");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) roomy run cap ($25) → resumed maxBudgetUsd covers the expensive turn AND stays tighter than the run", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([TURN_CAP("prose, no report"), { resultText: REPORT_JSON, sessionId: "cap-sess" }]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1,
+      maxBudgetUsd: 25, runSessionFn: rec.fn, changedFilesFn: () => ["/ws/a.ts"],
+    });
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(25);
+    expect(out.report).toBe("recovered");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("generateItem — build read scope (extraReadDirs)", () => {

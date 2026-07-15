@@ -31,7 +31,7 @@ import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseScratchEnabled } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
-import { REPORT_REASK_MAX_BUDGET_USD, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
+import { reaskBudgetUsd, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
@@ -1642,7 +1642,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const turnCapNoReport =
     result.hitMaxTurns === true && isWriter && (filesChanged ?? 0) > 0 && !hasCompletionReport(res.resultText);
   if ((result.emptyCompletion || turnCapNoReport) && !res.limitHit && ctx.config.build.jsonReask) {
-    const reaskBudget = effectiveUsdCap > 0 ? Math.min(effectiveUsdCap, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
+    const reaskBudget = reaskBudgetUsd(costUsd, effectiveUsdCap);
     const retry = await run({
       ...commonReq,
       backend: ranRole.backend,
@@ -1692,7 +1692,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const evaluatorCapNoVerdict =
     evaluator && (res.hitBudget === true || res.hitMaxTurns === true) && !res.limitHit && !hasVerdictShape(res.resultText);
   if (evaluatorCapNoVerdict && ctx.config.build.jsonReask) {
-    const reaskBudget = effectiveUsdCap > 0 ? Math.min(effectiveUsdCap, REPORT_REASK_MAX_BUDGET_USD) : REPORT_REASK_MAX_BUDGET_USD;
+    const reaskBudget = reaskBudgetUsd(costUsd, effectiveUsdCap);
     const retry = await run({
       ...commonReq,
       backend: ranRole.backend,

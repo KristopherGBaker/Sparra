@@ -680,6 +680,95 @@ describe("evaluateItem — JSON re-ask on no-parseable-verdict (Q7d)", () => {
   });
 });
 
+// ── Unit B: the evaluate.ts verdict re-ask is routed through the shared tightCap (one turn,
+// text-only) and its maxBudgetUsd is derived via jsonReask.ts's reaskBudgetUsd, not a blind literal.
+
+describe("evaluateItem — re-ask is tightCap/text-only + model-aware budget floor (Unit B)", () => {
+  /** Fake session returning texts[i] on the i-th call (last one repeats); observed cost per call. */
+  function seqRecorder(texts: string[], costUsd = 0) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const i = calls.length;
+      calls.push(p);
+      return {
+        ok: true, subtype: "success", resultText: texts[Math.min(i, texts.length - 1)]!, sessionId: `s${i}`,
+        costUsd, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    return { calls, fn };
+  }
+
+  async function runSeq(ctx: Ctx, dir: string, rec: ReturnType<typeof seqRecorder>, maxBudgetUsd?: number) {
+    return evaluateItem({
+      ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
+      traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps,
+      ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
+    });
+  }
+
+  it("resumed re-ask request is one turn, text-only, and read-only via the shared reportReaskOverrides tightCap", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const rec = seqRecorder(["no verdict json here", PASS_JSON]);
+    await runSeq(ctx, dir, rec);
+    expect(rec.calls).toHaveLength(2);
+    const retryReq = rec.calls[1]!;
+    expect(retryReq.maxTurns).toBe(1);
+    expect(retryReq.tools).toEqual([]);
+    expect(retryReq.permissionMode).toBe("default");
+    expect(retryReq.readOnly).toBe(true);
+    expect(retryReq.mcpServers).toBeUndefined();
+    expect(retryReq.allowedTools).toBeUndefined();
+    expect(retryReq.hooks).toBeUndefined();
+    // verdict-targeted prompt preserved (no-JSON generic branch)
+    expect(retryReq.prompt).toContain("Re-emit ONLY the JSON block");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("wrong-shape re-ask keeps the field-targeted verdictReaskPrompt under the same tightCap", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const wrongShape = '```json\n{"verdict":"fail","blocking":["broken"],"notes":"n"}\n```'; // has verdict, no scores
+    const rec = seqRecorder([wrongShape, PASS_JSON]);
+    await runSeq(ctx, dir, rec);
+    const retryReq = rec.calls[1]!;
+    expect(retryReq.maxTurns).toBe(1);
+    expect(retryReq.tools).toEqual([]);
+    expect(retryReq.prompt).toContain("Re-emit ONLY the JSON verdict block");
+    expect(retryReq.prompt).toContain("scores");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) constrained run cap ($1) → resumed maxBudgetUsd clamped in (0, 1]", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const rec = seqRecorder(["no verdict json here", PASS_JSON]);
+    await runSeq(ctx, dir, rec, 1);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(0);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThanOrEqual(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) unlimited run cap (0) → resumed maxBudgetUsd covers an expensive opus turn ($1.5775)", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const rec = seqRecorder(["no verdict json here", PASS_JSON]);
+    await runSeq(ctx, dir, rec, 0);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(budget floor) roomy run cap ($25) → resumed maxBudgetUsd covers the expensive turn AND stays tighter than the run", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.config.exercise.requireObservedRun = false;
+    const rec = seqRecorder(["no verdict json here", PASS_JSON]);
+    await runSeq(ctx, dir, rec, 25);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeGreaterThan(1.5775);
+    expect(rec.calls[1]!.maxBudgetUsd).toBeLessThan(25);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("evaluateItem — TARGETED re-ask on a WRONG-SHAPE verdict (U-C #7)", () => {
   /** Fake session returning texts[i] on the i-th call (last repeats); optionally sets limitHit. */
   function seqRecorder(texts: string[], opts: { costUsd?: number; limitHit?: boolean } = {}) {
