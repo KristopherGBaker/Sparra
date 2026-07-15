@@ -296,7 +296,13 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // fail-fast, no MAIN-checkout `cd`/abs path), evaluator (FLAKY documented-env-denial EXCEPTION +
     // PROCESS step-1 "unless rule 1's documented-env-denial exception applies" rewording). Three
     // existing prompts edited; no new prompt.
-    expect(h.digest("hex")).toBe("544c5bbecff5555eeba65dc1b06dd0cac3bee2591eccece30aa6958d310a3799");
+    // Regenerated 2026-07-15 (worker-RPC-timeout carve-out): the EVALUATOR FLAKY rule now distinguishes
+    // a genuine load-only artifact defect from the test RUNNER's OWN worker/reporter-RPC timeout (vitest
+    // `Timeout calling "onTaskUpdate"`/`onCollected`, zero failing assertions) — the latter is runner CPU
+    // saturation (a concurrent probe OR a constrained/few-core eval worktree), NOT an artifact defect, and
+    // is confirmed by re-running the aborted file(s) in isolation rather than failing the artifact. One
+    // existing prompt edited; no new prompt.
+    expect(h.digest("hex")).toBe("a4ac1c970fc5c67677e563b878d28d221cd6497dc8be0c207e9f1d96772f8e2c");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
