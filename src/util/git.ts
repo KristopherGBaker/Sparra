@@ -193,6 +193,46 @@ export function pullUpstream(root: string): { ok: boolean; updated: boolean; not
   };
 }
 
+/**
+ * PLAIN, non-force push of `branch` to its configured remote (`git push <remote> <branch>:<branch>`) —
+ * the git-helper counterpart used by the conduct `--push` step, run ONLY after a successful `--land`,
+ * to advance `branch`'s upstream to match the just-landed local tip. NEVER throws.
+ *
+ * Git's `push` subcommand has NO `--ff-only` flag (passing one errors); a push WITHOUT `--force`/`-f`
+ * is inherently fast-forward-only because git rejects a non-fast-forward update by default — so
+ * NEITHER flag is ever passed here. The remote is resolved from `branch`'s configured upstream
+ * (`<branch>@{u}`, the same precondition style `pullUpstream` uses for the current branch) rather than
+ * assumed — mirroring the remote actually configured for `branch`, whether or not it's the live
+ * checkout.
+ *
+ * Skips (a descriptive, non-fatal note; no push attempted) when `dir` isn't a git repo, or `branch` has
+ * no configured upstream/remote. A rejected/failed push (offline, a divergent/non-ff remote, no such
+ * local branch) is reported as a non-fatal `ok: false` note — the remote ref is left EXACTLY as found;
+ * git itself refuses the non-fast-forward update, so no `--force` is ever needed to guarantee that.
+ */
+export function pushCurrentFfOnly(dir: string, branch: string): { ok: boolean; pushed: boolean; note: string } {
+  if (!isGitRepo(dir)) return { ok: false, pushed: false, note: "not a git repo — skipping push" };
+  const upstream = git(dir, ["rev-parse", "--abbrev-ref", `${branch}@{u}`]);
+  const upstreamRef = upstream.out.trim();
+  if (!upstream.ok || !upstreamRef) {
+    return { ok: false, pushed: false, note: `no upstream configured for ${branch} — skipping push` };
+  }
+  // The remote name is the FIRST slash-separated segment of the upstream ref (e.g. `origin/main` →
+  // `origin`, `origin/feature/x` → `origin`) — correct regardless of slashes in the remote branch name.
+  const remote = upstreamRef.split("/")[0]!;
+  const push = git(dir, ["push", remote, `${branch}:${branch}`]);
+  if (!push.ok) {
+    return {
+      ok: false,
+      pushed: false,
+      note:
+        `push rejected (offline, a divergent/non-ff remote, or no such local branch) — remote left ` +
+        `unchanged: ${push.out.trim().slice(0, 300)}`,
+    };
+  }
+  return { ok: true, pushed: true, note: `pushed ${branch} to ${remote} (fast-forward — non-force push)` };
+}
+
 // ── Cycle-finish seam (land + teardown). Real implementations behind `FinishDeps`. ──
 
 /** True if the working tree at `dir` has uncommitted changes (tracked or untracked). */

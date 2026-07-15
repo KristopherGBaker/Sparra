@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { mergeFfOnly, defaultBranch, isLinkedWorktree, revParse, diffNames, pullUpstream } from "../src/util/git.ts";
+import { mergeFfOnly, defaultBranch, isLinkedWorktree, revParse, diffNames, pullUpstream, pushCurrentFfOnly } from "../src/util/git.ts";
 
 /** A fake git runner that records the argv of every invocation and answers from a map. */
 function fakeRunner(answers: (args: string[]) => { ok: boolean; out: string }) {
@@ -297,5 +297,145 @@ describe("pullUpstream (git.pullBeforeWork helper, offline / local-path remotes 
     } finally {
       fs.rmSync(parent, { recursive: true, force: true });
     }
+  });
+});
+
+describe("pushCurrentFfOnly (conduct.push helper, offline / local-path remotes only)", () => {
+  function g(dir: string, args: string[]): string {
+    return execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  }
+  function initRepo(dir: string, branch = "main"): void {
+    g(dir, ["init", "-b", branch]);
+    g(dir, ["config", "user.email", "t@t"]);
+    g(dir, ["config", "user.name", "t"]);
+  }
+  function commit(dir: string, file: string, content: string, msg: string): void {
+    fs.writeFileSync(path.join(dir, file), content);
+    g(dir, ["add", "-A"]);
+    g(dir, ["commit", "-m", msg]);
+  }
+  function tmp(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  it("never throws: non-repo dir", () => {
+    const dir = tmp("sparra-push-norepo-");
+    try {
+      let r: ReturnType<typeof pushCurrentFfOnly> | undefined;
+      expect(() => {
+        r = pushCurrentFfOnly(dir, "main");
+      }).not.toThrow();
+      expect(r!.ok).toBe(false);
+      expect(r!.pushed).toBe(false);
+      expect(r!.note).toMatch(/not a git repo/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skip (no throw): branch has no configured upstream/remote — no push attempted", () => {
+    const dir = tmp("sparra-push-noupstream-");
+    try {
+      initRepo(dir);
+      commit(dir, "a.txt", "one\n", "base");
+      let r: ReturnType<typeof pushCurrentFfOnly> | undefined;
+      expect(() => {
+        r = pushCurrentFfOnly(dir, "main");
+      }).not.toThrow();
+      expect(r!.ok).toBe(false);
+      expect(r!.pushed).toBe(false);
+      expect(r!.note).toMatch(/no upstream/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never throws: an unknown local branch name (no such ref) with no upstream configured", () => {
+    const dir = tmp("sparra-push-noref-");
+    try {
+      initRepo(dir);
+      commit(dir, "a.txt", "one\n", "base");
+      expect(() => pushCurrentFfOnly(dir, "no-such-branch")).not.toThrow();
+      const r = pushCurrentFfOnly(dir, "no-such-branch");
+      expect(r.ok).toBe(false);
+      expect(r.pushed).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("positive fast-forward: pushes the local branch to its local-path remote; remote tip advances; no --force/-f/--ff-only in the call", () => {
+    const parent = tmp("sparra-push-ff-");
+    const remote = path.join(parent, "remote.git");
+    const repo = path.join(parent, "repo");
+    try {
+      // A bare remote: `push` (non-force) to an EMPTY bare repo's unborn branch is itself a
+      // fast-forward (there's nothing to diverge from) — this exercises the plain success path.
+      fs.mkdirSync(remote);
+      g(remote, ["init", "--bare", "-b", "main"]);
+      fs.mkdirSync(repo);
+      initRepo(repo);
+      commit(repo, "a.txt", "one\n", "base");
+      g(repo, ["remote", "add", "origin", remote]);
+      g(repo, ["push", "-u", "origin", "main"]); // establishes the upstream (@{u}) pushCurrentFfOnly reads
+      commit(repo, "a.txt", "two\n", "advance"); // local advances; remote is now BEHIND (a true ff)
+      const localHead = g(repo, ["rev-parse", "HEAD"]).trim();
+      expect(g(remote, ["rev-parse", "main"]).trim()).not.toBe(localHead);
+
+      const r = pushCurrentFfOnly(repo, "main");
+      expect(r.ok).toBe(true);
+      expect(r.pushed).toBe(true);
+      expect(g(remote, ["rev-parse", "main"]).trim()).toBe(localHead);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("divergent/non-ff remote: REJECTED — remote tip UNCHANGED, ok:false, never throws, no --force ever used to override it", () => {
+    const parent = tmp("sparra-push-nonff-");
+    const remote = path.join(parent, "remote.git");
+    const repo = path.join(parent, "repo");
+    try {
+      fs.mkdirSync(remote);
+      g(remote, ["init", "--bare", "-b", "main"]);
+      fs.mkdirSync(repo);
+      initRepo(repo);
+      commit(repo, "a.txt", "one\n", "base");
+      g(repo, ["remote", "add", "origin", remote]);
+      g(repo, ["push", "-u", "origin", "main"]);
+      const sharedTip = g(repo, ["rev-parse", "HEAD"]).trim();
+
+      // Diverge: a SECOND clone pushes a different commit to the remote (advancing it independently),
+      // while `repo` ALSO commits locally — neither is a fast-forward of the other.
+      const other = path.join(parent, "other");
+      execFileSync("git", ["clone", remote, other], { encoding: "utf8" });
+      g(other, ["config", "user.email", "t@t"]);
+      g(other, ["config", "user.name", "t"]);
+      commit(other, "b.txt", "elsewhere\n", "remote-advance");
+      g(other, ["push", "origin", "main"]);
+      const remoteTipAfterDiverge = g(remote, ["rev-parse", "main"]).trim();
+      expect(remoteTipAfterDiverge).not.toBe(sharedTip);
+
+      commit(repo, "a.txt", "two\n", "local-advance"); // repo's own, DIFFERENT advance
+
+      let r: ReturnType<typeof pushCurrentFfOnly> | undefined;
+      expect(() => {
+        r = pushCurrentFfOnly(repo, "main");
+      }).not.toThrow();
+      expect(r!.ok).toBe(false);
+      expect(r!.pushed).toBe(false);
+      // The remote ref is left EXACTLY as the divergent push left it — never force-updated.
+      expect(g(remote, ["rev-parse", "main"]).trim()).toBe(remoteTipAfterDiverge);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("no --force/-f/--ff-only is ever passed (grep the implementation)", () => {
+    const src = fs.readFileSync(new URL("../src/util/git.ts", import.meta.url), "utf8");
+    const start = src.indexOf("export function pushCurrentFfOnly");
+    const end = src.indexOf("\n}", start);
+    const body = src.slice(start, end);
+    expect(body).not.toMatch(/--force|--ff-only|["'`]-f["'`]/);
   });
 });

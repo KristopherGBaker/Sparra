@@ -15,6 +15,7 @@ import {
   isDirty,
   listWorktrees,
   mergeCheckedOut,
+  pushCurrentFfOnly,
   rebaseBranch,
   revParse,
 } from "../util/git.ts";
@@ -51,9 +52,18 @@ import type { ConductRunState, UnitStateEntry } from "./types.ts";
  * default branch AND the run is FULLY clean (every unit terminal ACCEPTED, no unresolved parked
  * decision, no unit skipped the run-branch merge) does it re-resolve the default branch's tip and, if
  * the run branch is a true fast-forward of it, advance the default branch to the run branch's tip —
- * never a merge commit, never `--force`, never a push. A non-default start is a documented no-op; a
- * non-ff run, or a failure of the landing write itself, PARKS a `land-blocked` decision through the
- * same decision engine and leaves the default branch untouched.
+ * never a merge commit, never `--force`, never a push (`--land` itself never touches the remote). A
+ * non-default start is a documented no-op; a non-ff run, or a failure of the landing write itself,
+ * PARKS a `land-blocked` decision through the same decision engine and leaves the default branch
+ * untouched.
+ *
+ * `--push` (opt-in, implies `--land`, gated a SECOND time on `conduct.push: true`) runs immediately
+ * after `--land` resolves — success, park, or no-op — and is the ONLY place `git push` is ever
+ * reachable from this module. Only on a SUCCESSFUL land does it attempt a plain, non-force
+ * fast-forward-only push ({@link pushCurrentFfOnly}) of the just-landed default branch to its
+ * configured upstream; a push failure is always non-fatal (the completed land is never rolled back)
+ * and, like `--land`'s own outcome, is recorded DURABLY in `run.json` (`state.pushed`) rather than left
+ * transient-log-only — for every requested-push path, including "no land happened this run".
  */
 
 /** The run branch a default-branch-started conduct run merges accepted units into. `runId` already
@@ -85,6 +95,11 @@ export interface LandingGit {
   /** `--land` only: advance a NAMED branch (the default branch) to `sourceRef`'s tip without checking
    *  it out — the worktree-safe path used when the default branch is NOT the live checkout. */
   fastForwardBranchRef: typeof fastForwardBranchRef;
+  /** `--push` only: plain, non-force fast-forward-only push of a branch to its configured upstream.
+   *  Reached ONLY from the land-success seam below, and ONLY when `--push` + `conduct.push` are both
+   *  set (the CLI/run.ts double gate is enforced BEFORE this seam is ever reached — mirrors `--land`'s
+   *  own trust of its double gate). */
+  pushCurrentFfOnly: typeof pushCurrentFfOnly;
 }
 
 export const realLandingGit: LandingGit = {
@@ -101,6 +116,7 @@ export const realLandingGit: LandingGit = {
   abortMerge,
   isBranchMerged,
   fastForwardBranchRef,
+  pushCurrentFfOnly,
 };
 
 /** Everything the landing phase needs beyond the per-unit entries. All I/O/clock/TTY injected. */
@@ -112,6 +128,13 @@ export interface LandingDeps {
    *  fast-forward the DEFAULT branch to it (default-branch-started, fully-clean, true-ff runs only).
    *  See {@link attemptLandToDefault}. */
   land?: boolean;
+  /** Opt-in `--push` (implies `land`; the CLI/run.ts double gate — `--push` on the CLI AND
+   *  `conduct.push: true` in config — is enforced BEFORE this deps object is built, same trust model
+   *  as `land`). Runs immediately after the `land` attempt above resolves (whichever way): on a
+   *  SUCCESSFUL land, attempts a plain, non-force fast-forward-only push of the default branch to its
+   *  upstream; otherwise records a durable "no land happened" outcome. Never invoked when `land` is
+   *  absent/false. See {@link attemptPushAfterLand}. */
+  push?: boolean;
   runId: string;
   runDir: string;
   writer: RunStateWriter;
@@ -238,15 +261,39 @@ export async function landAcceptedUnits(ctx: Ctx, deps: LandingDeps): Promise<vo
   // fast-forward the DEFAULT branch to it. The CLI/resume flag+config double gate is enforced before
   // `deps.land` is ever set true — this seam trusts it and applies only the run-safety gates below.
   if (deps.land) {
+    let landOutcome: LandOutcome;
     if (mergeMode && target) {
-      await attemptLandToDefault(ctx, deps, gi, target);
+      landOutcome = await attemptLandToDefault(ctx, deps, gi, target);
     } else {
       // The merge target itself could not be resolved this invocation (see the --merge warning above,
       // if any) — there is nothing safe to fast-forward the default branch to.
-      await parkLandDecision(ctx, deps, "the merge target could not be resolved — nothing to land");
+      const reason = "the merge target could not be resolved — nothing to land";
+      await parkLandDecision(ctx, deps, reason);
+      landOutcome = { landed: false, reason };
     }
+    // `--push`: reached ONLY from here, right after `--land` resolves (whichever way), and ONLY when
+    // `deps.push` is set — same double-gate trust model as `deps.land` above.
+    if (deps.push) {
+      await attemptPushAfterLand(ctx, deps, gi, landOutcome);
+    }
+  } else if (deps.push) {
+    // Defensive: `--push` implies `--land` at the CLI/run.ts layer (this seam trusts that chain,
+    // mirroring `--land`'s own trust of the CLI double gate), so this is unreachable through the real
+    // CLI — but a direct/synthetic caller passing `push: true, land: false` still gets a safe, durable
+    // no-op rather than a silent skip or a `git push` invoked with no land behind it.
+    await recordPushOutcome(deps, {
+      ok: false,
+      note: "no land was requested this run (--push requires --land) — nothing to push",
+    });
   }
 }
+
+/** The outcome of THIS invocation's `--land` attempt — `landed: true` names the branch that was
+ *  fast-forwarded; `landed: false` carries the reason (a non-default start, a failed readiness/ff
+ *  precheck, or a landing-write failure). Distinct from reading `state.landedInto` after the fact,
+ *  which could reflect an EARLIER invocation's land and so wouldn't correctly report THIS invocation's
+ *  outcome on a resume that re-attempts (and fails) `--land` after an already-landed prior run. */
+type LandOutcome = { landed: true; branch: string } | { landed: false; reason: string };
 
 /** Commit one accepted unit's WIP; returns the branch tip sha or undefined. */
 async function commitAcceptedUnit(
@@ -461,42 +508,45 @@ function computeLandReadiness(state: ConductRunState, target: MergeTarget): { re
  * landing write itself (distinct from the non-ff precheck above) is likewise non-fatal: it PARKS
  * (never throws), never sets `landedInto`, and never leaves the default branch half-updated — either
  * the write fully lands or it doesn't happen at all. On success, `state.landedInto` records
- * `"<default>@<sha>"`; the run branch is NEVER deleted and no existing teardown changes.
+ * `"<default>@<sha>"`; the run branch is NEVER deleted and no existing teardown changes. Returns a
+ * {@link LandOutcome} so the `--push` step immediately after can act on THIS invocation's result
+ * without re-deriving it from `state.landedInto` (which could be stale from an earlier invocation).
  */
-async function attemptLandToDefault(ctx: Ctx, deps: LandingDeps, gi: LandingGit, target: MergeTarget): Promise<void> {
+async function attemptLandToDefault(ctx: Ctx, deps: LandingDeps, gi: LandingGit, target: MergeTarget): Promise<LandOutcome> {
   if (!target.startedOnDefault) {
-    detail(`conduct: --land — started on ${target.branch}, not the default branch; nothing to land.`);
-    return;
+    const reason = `started on ${target.branch}, not the default branch; nothing to land`;
+    detail(`conduct: --land — ${reason}.`);
+    return { landed: false, reason };
   }
 
   const readiness = computeLandReadiness(deps.state, target);
   if (!readiness.ready) {
     await parkLandDecision(ctx, deps, readiness.reason);
-    return;
+    return { landed: false, reason: readiness.reason };
   }
 
   const def = gi.defaultBranch(ctx.root);
   if (!def) {
-    await parkLandDecision(ctx, deps, "could not resolve the default branch (refusing to guess a safe target)");
-    return;
+    const reason = "could not resolve the default branch (refusing to guess a safe target)";
+    await parkLandDecision(ctx, deps, reason);
+    return { landed: false, reason };
   }
   const srcTip = gi.revParse(ctx.root, target.branch);
   if (!srcTip) {
-    await parkLandDecision(ctx, deps, `could not resolve the run branch ${target.branch}'s tip`);
-    return;
+    const reason = `could not resolve the run branch ${target.branch}'s tip`;
+    await parkLandDecision(ctx, deps, reason);
+    return { landed: false, reason };
   }
 
   // Re-resolve the default tip HERE (never trust an earlier resolution) and require a TRUE
   // fast-forward: the (re-resolved) default tip must be an ancestor of the run branch's tip.
   const defTipBefore = gi.revParse(ctx.root, def);
   if (!defTipBefore || !gi.isBranchMerged(ctx.root, def, target.branch)) {
-    await parkLandDecision(
-      ctx,
-      deps,
+    const reason =
       `default branch ${def} advanced to ${defTipBefore ?? "an unresolved tip"} since the run branch was cut; ` +
-        `${target.branch} no longer fast-forwards`,
-    );
-    return;
+      `${target.branch} no longer fast-forwards`;
+    await parkLandDecision(ctx, deps, reason);
+    return { landed: false, reason };
   }
 
   // Worktree-safe: advance the ref directly UNLESS the default branch is the live checkout at
@@ -507,14 +557,53 @@ async function attemptLandToDefault(ctx: Ctx, deps: LandingDeps, gi: LandingGit,
   if (!result.ok) {
     // The landing WRITE itself failed (distinct from the non-ff precheck above) — non-fatal: park,
     // never throw, never set landedInto, default branch left exactly as found.
-    await parkLandDecision(ctx, deps, `the landing write failed: ${result.out.trim().slice(0, 300)}`);
-    return;
+    const reason = `the landing write failed: ${result.out.trim().slice(0, 300)}`;
+    await parkLandDecision(ctx, deps, reason);
+    return { landed: false, reason };
   }
 
   const landedTip = gi.revParse(ctx.root, def) ?? srcTip;
   deps.state.landedInto = `${def}@${landedTip}`;
   await deps.writer.write(deps.state);
   info(`conduct: --land — fast-forwarded ${def} to ${landedTip.slice(0, 8)} (from run branch ${target.branch}).`);
+  return { landed: true, branch: def };
+}
+
+/** Persist the durable `--push` outcome (`state.pushed`) — a success, a non-fatal failure, or "no land
+ *  happened" — for EVERY requested-push path, so nothing is left transient-log-only. Never mutates
+ *  `landedInto`. */
+async function recordPushOutcome(deps: LandingDeps, outcome: { ok: boolean; branch?: string; note: string }): Promise<void> {
+  deps.state.pushed = outcome;
+  await deps.writer.write(deps.state);
+}
+
+/**
+ * Opt-in `--push`: invoked ONLY from the `--land` seam above, immediately after `--land` resolves for
+ * THIS invocation. On a SUCCESSFUL land, attempts a plain, non-force, fast-forward-only push
+ * ({@link pushCurrentFfOnly}) of the just-landed default branch to its configured upstream — NEVER
+ * `--force`, and no `--ff-only` (not a valid `git push` flag; a non-force push is inherently ff-only
+ * because git rejects a non-fast-forward remote update by default). Otherwise (no land this
+ * invocation — a non-default start, a failed readiness/ff precheck, or a landing-write failure) records
+ * a durable "no land happened" outcome and NEVER invokes git. A push failure (offline, a divergent/
+ * non-ff remote, no upstream configured) is ALWAYS non-fatal: the completed land stands, `landedInto`
+ * is untouched, nothing throws, and the concrete failure reason is persisted via
+ * {@link recordPushOutcome} — never left transient-log-only.
+ */
+async function attemptPushAfterLand(ctx: Ctx, deps: LandingDeps, gi: LandingGit, landOutcome: LandOutcome): Promise<void> {
+  if (!landOutcome.landed) {
+    await recordPushOutcome(deps, {
+      ok: false,
+      note: `no land happened this run — nothing to push (${landOutcome.reason})`,
+    });
+    return;
+  }
+  const res = gi.pushCurrentFfOnly(ctx.root, landOutcome.branch);
+  await recordPushOutcome(deps, { ok: res.ok, branch: landOutcome.branch, note: res.note });
+  if (res.ok) {
+    info(`conduct: --push — pushed ${landOutcome.branch} to its upstream.`);
+  } else {
+    warn(`conduct: --push — push failed (non-fatal; the completed land stands): ${res.note}`);
+  }
 }
 
 /** Surface a run-scoped `land-blocked` PARKED decision through the same decision engine + audit-trail

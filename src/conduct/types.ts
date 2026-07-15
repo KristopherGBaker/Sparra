@@ -102,4 +102,12 @@ export interface ConductRunState {
    *  non-fast-forward default branch, or a failure of the landing write itself. Mirrors each unit's
    *  `decisions` array but lives at the run level since `--land` targets the whole run, not one unit. */
   landDecisions?: DecisionRecord[];
+  /** Opt-in `--push` (implies `--land`; requires `conduct.push: true`): the DURABLE outcome of the
+   *  push step attempted immediately after `--land` resolves (success, failure, or park) this run —
+   *  recorded for EVERY requested-push path, never left transient-log-only. `ok: true` on a successful
+   *  push (`branch` names what was pushed); `ok: false` on a non-fatal push failure (offline, a
+   *  divergent/non-ff remote, no upstream) OR when no land happened this run — `note` always carries
+   *  the concrete reason. Absent when `--push` was off, or `--push`/`conduct.push` were not BOTH set.
+   *  Never mutated by anything other than the push step itself; never affects `landedInto`. */
+  pushed?: { ok: boolean; branch?: string; note: string };
 }

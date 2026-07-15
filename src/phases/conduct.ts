@@ -25,7 +25,8 @@ import type { ConductRunState, UnitStateEntry } from "../conduct/types.ts";
  * turn-by-turn); a decision engine surfaces important decisions to a human (park / park-timeout /
  * auto) via file + TTY channels, answerable from another terminal with `conduct --decide`. By default
  * nothing lands on the user's branch — units generate on their own worktrees — unless the opt-in
- * `--commit`/`--merge`/`--land` flags are used (see `src/conduct/merge.ts`).
+ * `--commit`/`--merge`/`--land` flags are used (see `src/conduct/merge.ts`); the default branch is
+ * never PUSHED to its remote unless the further opt-in `--push` is used.
  */
 
 const DEFAULT_MAX_UNITS = 4;
@@ -68,9 +69,11 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
     return { ok: false, error: brain };
   }
 
-  // `--land` implies `--merge` implies `--commit` (land fast-forwards the default branch to the run
-  // branch that `--merge` first builds by committing+integrating each accepted unit).
-  const land = flags["land"] === true;
+  // `--push` implies `--land` implies `--merge` implies `--commit` (push sends the just-landed default
+  // branch to its remote; land fast-forwards the default branch to the run branch that `--merge` first
+  // builds by committing+integrating each accepted unit).
+  const push = flags["push"] === true;
+  const land = push || flags["land"] === true;
   const merge = land || flags["merge"] === true;
   const commit = merge || flags["commit"] === true;
 
@@ -88,6 +91,7 @@ export function parseConductFlags(prompt: string, flags: Flags): ParseConductRes
   if (commit) opts.commit = true;
   if (merge) opts.merge = true;
   if (land) opts.land = true;
+  if (push) opts.push = true;
   return { ok: true, opts };
 }
 
@@ -150,6 +154,23 @@ function landConfigGateError(verb: "conduct" | "conduct --resume"): string {
   );
 }
 
+/** `--push`'s SECOND gate (the CLI flag is the first, and is distinct from `--land`'s own gate above):
+ *  true iff `conduct.push: true` is configured. A validated `--push` request (which already implies
+ *  `--land`) is refused with {@link pushConfigGateError} otherwise — never silently downgraded to a
+ *  push-less `--land`. */
+function pushAllowedByConfig(ctx: Ctx): boolean {
+  return ctx.config.conduct.push === true;
+}
+
+/** The hard, actionable `--push`-without-config error — names the missing knob. `verb` distinguishes
+ *  the fresh-run vs. `--resume` invocation in the message prefix. */
+function pushConfigGateError(verb: "conduct" | "conduct --resume"): string {
+  return (
+    `${verb}: --push requires conduct.push: true in .sparra/config.yaml (an opt-in double gate) — ` +
+    "refusing to push to the remote. Set it, or drop --push to stop at a local --land."
+  );
+}
+
 /** Injectable seams for `cmdConduct` (tests inject fakes so validation is exercised with no spend). */
 export interface CmdConductDeps extends ConductDeps {
   runConductFn?: (ctx: Ctx, opts: ConductOptions, deps: ConductDeps) => Promise<ConductResult>;
@@ -205,6 +226,15 @@ export async function cmdConduct(
     return undefined;
   }
 
+  // `--push`'s SECOND gate: even a validated `--push` (which already implies `--land`, checked above)
+  // is refused (hard error, zero side effects — no probe, no run dir) unless `conduct.push: true` is
+  // ALSO configured. Never a silent downgrade to a push-less `--land`.
+  if (parsed.opts.push && !pushAllowedByConfig(ctx)) {
+    err(pushConfigGateError("conduct"));
+    process.exitCode = 1;
+    return undefined;
+  }
+
   // Probe permissions only AFTER validation succeeds (mirrors `role run` — a rejected request spends
   // zero model tokens; the probe is a live SDK query).
   await (deps.autoProbe ?? autoProbeCtx)(ctx);
@@ -222,7 +252,7 @@ export async function cmdConduct(
     `prompt="${parsed.opts.prompt.slice(0, 80)}${parsed.opts.prompt.length > 80 ? "…" : ""}" ` +
       `max-units=${parsed.opts.maxUnits} concurrency=${parsed.opts.concurrency} ` +
       `brain=${parsed.opts.brain} decisions=${parsed.opts.surface}` +
-      (parsed.opts.land ? " land" : parsed.opts.merge ? " merge" : parsed.opts.commit ? " commit" : "") +
+      (parsed.opts.push ? " push" : parsed.opts.land ? " land" : parsed.opts.merge ? " merge" : parsed.opts.commit ? " commit" : "") +
       (parsed.opts.dryRun ? " (dry-run)" : ""),
   );
   const result = await runConductFn(ctx, parsed.opts, conductDeps);
@@ -270,7 +300,8 @@ export async function cmdConductResume(
     return { status: "unknown-run", runId, runDir };
   }
 
-  const land = flags["land"] === true;
+  const push = flags["push"] === true;
+  const land = push || flags["land"] === true;
   const merge = land || flags["merge"] === true;
   const commit = merge || flags["commit"] === true;
 
@@ -282,10 +313,19 @@ export async function cmdConductResume(
     return undefined;
   }
 
+  // `--push`'s SECOND gate, same as the fresh-run path: refused (zero side effects) unless
+  // `conduct.push: true` is ALSO configured. Distinct from `--land`'s own gate above.
+  if (push && !pushAllowedByConfig(ctx)) {
+    err(pushConfigGateError("conduct --resume"));
+    process.exitCode = 1;
+    return undefined;
+  }
+
   const resumeOpts: ResumeConductOptions = {
     ...(commit ? { commit: true } : {}),
     ...(merge ? { merge: true } : {}),
     ...(land ? { land: true } : {}),
+    ...(push ? { push: true } : {}),
     ...(flags["auto"] === true ? { surface: "auto" } : {}),
   };
 
@@ -536,6 +576,7 @@ export async function cmdConductStatus(
   );
   detail(`prompt: ${promptOneLine(state.prompt)}`);
   if (state.landedInto) detail(`landed: ${state.landedInto}`);
+  if (state.pushed) detail(`pushed: ${state.pushed.ok ? "ok" : "failed"} — ${state.pushed.note}`);
   const units = Array.isArray(state.units) ? state.units : [];
   detail(`units (${units.length}):`);
   for (const u of units) {

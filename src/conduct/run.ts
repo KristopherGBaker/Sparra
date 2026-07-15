@@ -58,7 +58,9 @@ import { runScriptHooks } from "../scriptHooks.ts";
  * `sparra conduct --resume <runId>`). By default nothing lands anywhere — every unit generates on its
  * own persistent `sparra/<name>` unit worktree, and even the opt-in `--commit`/`--merge` landing flags
  * (`src/conduct/merge.ts`) stop at a run/feature branch, never the repo's default branch, UNLESS the
- * further opt-in `--land` (plus `conduct.landToDefault: true`) fast-forwards it there.
+ * further opt-in `--land` (plus `conduct.landToDefault: true`) fast-forwards it there — and even THEN
+ * conduct never touches the remote unless the further opt-in `--push` (plus `conduct.push: true`)
+ * pushes the landed default branch to its configured upstream.
  */
 
 export interface ConductOptions {
@@ -90,9 +92,18 @@ export interface ConductOptions {
    *  config — a double gate enforced by the CLI before this reaches here): once the run's accepted
    *  units all landed cleanly on the run branch, fast-forward the DEFAULT branch to it. Only on a
    *  default-branch-started, fully-clean, true fast-forward run; a non-ff or unclean run PARKS a
-   *  `land-blocked` decision instead. Never a merge commit, never `--force`, never a push. See
-   *  `src/conduct/merge.ts`. */
+   *  `land-blocked` decision instead. Never a merge commit, never `--force`. `--land` itself never
+   *  pushes anywhere — see `push` below for the separate opt-in that does. See `src/conduct/merge.ts`. */
   land?: boolean;
+  /** Opt-in (implies `land`, which implies `merge`/`commit`; ALSO requires `conduct.push: true` in
+   *  config — a SECOND double gate, enforced by the CLI before this reaches here, distinct from
+   *  `land`'s own): immediately after a SUCCESSFUL `land`, push the just-landed default branch to its
+   *  configured upstream — a plain, non-force `git push` (never `--force`, no `--ff-only`, which isn't
+   *  a valid `git push` flag; a non-force push is inherently fast-forward-only, since git rejects a
+   *  non-fast-forward remote update by default). A push failure (offline, a divergent/non-ff remote, no
+   *  upstream configured) is ALWAYS non-fatal — the completed land is never rolled back — and the
+   *  outcome is recorded durably in `run.json` (`pushed`) either way. See `src/conduct/merge.ts`. */
+  push?: boolean;
 }
 
 export interface ConductDeps {
@@ -454,6 +465,9 @@ export interface ResumeConductOptions {
   /** Opt-in (implies `merge`/`commit`; ALSO requires `conduct.landToDefault: true`). See
    *  {@link ConductOptions.land}. */
   land?: boolean;
+  /** Opt-in (implies `land`/`merge`/`commit`; ALSO requires `conduct.push: true`). See
+   *  {@link ConductOptions.push}. */
+  push?: boolean;
   surface?: "park" | "park-timeout" | "auto";
   timeoutSec?: number;
 }
@@ -519,9 +533,10 @@ export async function resumeConduct(
     brain: state.brain ?? "hybrid",
     surface: opts.surface ?? state.decisionSurface ?? ctx.config.conduct.decisions.surface,
     timeoutSec: opts.timeoutSec ?? ctx.config.conduct.decisions.timeoutSec,
-    ...(opts.commit || opts.merge || opts.land ? { commit: true } : {}),
-    ...(opts.merge || opts.land ? { merge: true } : {}),
-    ...(opts.land ? { land: true } : {}),
+    ...(opts.commit || opts.merge || opts.land || opts.push ? { commit: true } : {}),
+    ...(opts.merge || opts.land || opts.push ? { merge: true } : {}),
+    ...(opts.land || opts.push ? { land: true } : {}),
+    ...(opts.push ? { push: true } : {}),
   };
 
   // Decision seq continues MONOTONICALLY from the persisted max (every prior decision, all units).
@@ -665,9 +680,10 @@ export async function resumeConduct(
   return { status: "resumed", runId, runDir, state };
 }
 
-/** Opt-in commit/merge/land landing, shared by the fresh run and the resume path. No flags → no-op
- *  (byte-identical to a report-only run). `--land` implies `--merge` implies `--commit` — re-applied
- *  HERE (not just at the CLI) so any programmatic caller gets the same implication chain. Accepted
+/** Opt-in commit/merge/land/push landing, shared by the fresh run and the resume path. No flags →
+ *  no-op (byte-identical to a report-only run). `--push` implies `--land` implies `--merge` implies
+ *  `--commit` — re-applied HERE (not just at the CLI) so any programmatic caller gets the same
+ *  implication chain. Accepted
  *  units are serialized; `restrictTo`, when present (resume), lands ONLY the units re-run this
  *  invocation — prior-run accepted units are left as they were (the `--land` gate itself, however,
  *  always evaluates the FULL persisted state — see `computeLandReadiness` in `merge.ts`). */
@@ -685,7 +701,8 @@ async function runLanding(
     restrictTo?: Set<string>;
   },
 ): Promise<void> {
-  const merge = opts.merge === true || opts.land === true;
+  const land = opts.land === true || opts.push === true;
+  const merge = opts.merge === true || land;
   const commit = merge || opts.commit === true;
   if (!commit) return;
   const surface = opts.surface ?? ctx.config.conduct.decisions.surface;
@@ -694,7 +711,8 @@ async function runLanding(
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const landingDeps: LandingDeps = {
     mode: merge ? "merge" : "commit",
-    ...(opts.land ? { land: true } : {}),
+    ...(land ? { land: true } : {}),
+    ...(opts.push ? { push: true } : {}),
     runId: p.runId,
     runDir: p.runDir,
     writer: p.writer,

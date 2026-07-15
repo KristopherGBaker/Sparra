@@ -573,11 +573,24 @@ export interface SparraConfig {
      * the run is FULLY clean (every unit terminal ACCEPTED, no unresolved parked decision, no unit's
      * merge-to-run-branch parked), and the run branch is a TRUE fast-forward of the (re-resolved)
      * default tip — any miss parks a `land-blocked` decision instead of ever touching the default
-     * branch. Never a merge commit, never `--force`. Never pushes (pushing is a separate, later
-     * opt-in). Default `false` — today's behavior (`--merge` stops at the run/feature branch) is
-     * unchanged unless you opt in HERE **and** pass `--land`.
+     * branch. Never a merge commit, never `--force`. `--land` itself never pushes anywhere — pushing
+     * the now-landed default branch to its upstream is the separate opt-in below (`push`). Default
+     * `false` — today's behavior (`--merge` stops at the run/feature branch) is unchanged unless you
+     * opt in HERE **and** pass `--land`.
      */
     landToDefault: boolean;
+    /**
+     * Opt-in DOUBLE GATE for `sparra conduct --push`: even with `--push` on the CLI (which implies
+     * `--land`, which implies `--merge`/`--commit`), pushing the landed default branch to its
+     * configured upstream is refused (a hard, actionable error naming this knob) unless it is also
+     * `true` here. After a SUCCESSFUL `--land`, a plain, non-force `git push` (never `--force`, no
+     * `--ff-only` — git rejects a non-fast-forward update by default) advances the default branch's
+     * remote to the just-landed tip. A push failure (offline, a divergent/non-ff remote, no upstream
+     * configured) is always NON-FATAL — the completed land is never rolled back — and `run.json`
+     * records the outcome (`pushed`) durably either way. Default `false` — today's behavior (`--land`
+     * stops at a local fast-forward) is unchanged unless you opt in HERE **and** pass `--push`.
+     */
+    push: boolean;
   };
   /**
    * Subfolder (relative to the project root) for the human-facing docs Sparra
@@ -704,6 +717,7 @@ export function defaultConfig(): SparraConfig {
       brain: "hybrid",
       decisions: { surface: "park-timeout", timeoutSec: 1800 },
       landToDefault: false,
+      push: false,
     },
     docsDir: "",
     scriptHooks: {},

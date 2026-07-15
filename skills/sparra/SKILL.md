@@ -114,10 +114,18 @@ config — a hard error otherwise, never a silent downgrade): once every accepte
 the run branch, fast-forwards the **default branch itself** to that tip — but ONLY on a
 default-branch-started, fully-clean (every unit terminal `accepted`, no unresolved parked decision, no
 merge park), true-fast-forward run; any miss parks a `land-blocked` decision and leaves the default
-branch untouched. Never a merge commit, never `--force`, never a push. `run.json` records `landedInto`
-on success. Writes `.sparra/conduct/<runId>/` (`run.json` + per-unit `brief.md`/`contract.md`), generating
-each unit on its own `sparra/<name>` worktree — by default (no `--commit`/`--merge`/`--land`) nothing is
-committed, merged, or landed, and the default branch is never touched; `run.json` reports each accepted
+branch untouched. Never a merge commit, never `--force`; `--land` itself never pushes anywhere.
+`run.json` records `landedInto` on success. A yet further opt-in `--push` (implies `--land`; ALSO
+requires `conduct.push: true` in config — a SECOND, separate hard-gated double gate, never a silent
+downgrade) runs immediately after a SUCCESSFUL `--land`: a plain, non-force `git push` of the just-landed
+default branch to its configured upstream (no `--force`, no `--ff-only` — not a valid `git push` flag; a
+non-force push is inherently fast-forward-only since git rejects a non-fast-forward update by default).
+A push failure (offline, a divergent/non-ff remote, no upstream) is always non-fatal — the completed
+land is never rolled back — and `run.json` records the durable outcome (`pushed: {ok, branch?, note}`)
+for every requested-push path, including "no land happened this run". Writes `.sparra/conduct/<runId>/`
+(`run.json` + per-unit `brief.md`/`contract.md`), generating each unit on its own `sparra/<name>`
+worktree — by default (no `--commit`/`--merge`/`--land`/`--push`) nothing is committed, merged, landed,
+or pushed, and the default branch and its remote are never touched; `run.json` reports each accepted
 unit's branch/worktree. Two brain modes: `--brain hybrid` (default — deterministic loop + an LLM
 conductor consulted at the five judgment points) and `--brain llm` (the brain drives turn-by-turn); a
 decision engine surfaces important decisions (park / park-timeout / `--auto`), answerable from the file,
@@ -126,7 +134,7 @@ bridge (`POST /jobs/:id/decision`). The bridge's `POST /conduct` has full parity
 (`{root,prompt,…,commit?,merge?}`, self-landing forwarded verbatim) OR a resume (`{root,resume,commit?,
 merge?,auto?}`, EXACTLY ONE of `prompt`|`resume`), and a resumed run re-announces so its
 `pendingDecisions` stay answerable remotely. **Resume a crashed/interrupted run in place** with
-`sparra conduct --resume <runId> [--commit|--merge|--land] [--auto]` (any prompt arg is ignored): it skips
+`sparra conduct --resume <runId> [--commit|--merge|--land|--push] [--auto]` (any prompt arg is ignored): it skips
 already-accepted/dry-run units, re-enters pending/running/error units at the right stage (agreed/forced
 contract → straight to generate, no re-negotiation; else renegotiate from the persisted brief), reuses
 or recreates each unit worktree by stable name, and **appends to the same `run.json`** (monotonic

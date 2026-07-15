@@ -969,6 +969,123 @@ describe("conduct --land (real git)", () => {
   });
 });
 
+/** Add a local-path bare remote to `repo`, tracked as `origin`, with `branch`'s upstream established
+ *  (`git push -u`) at its current tip — the real-git precondition {@link pushCurrentFfOnly} needs. */
+function addLocalRemote(repo: string, branch = "main"): string {
+  const remote = `${repo}.remote.git`;
+  fs.mkdirSync(remote);
+  g(remote, ["init", "--bare", "-b", branch]);
+  g(repo, ["remote", "add", "origin", remote]);
+  g(repo, ["push", "-u", "origin", branch]);
+  return remote;
+}
+
+describe("conduct --push (real git)", () => {
+  it("a successful --land followed by a successful --push advances the remote's default branch to the landed tip; run.json records pushed:ok", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    let remote = "";
+    try {
+      remote = addLocalRemote(repo, "main");
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, push: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+      });
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      const mainTip = revParse(repo, "main");
+      expect(res.state.landedInto).toBe(`main@${mainTip}`);
+      expect(res.state.pushed).toEqual({ ok: true, branch: "main", note: expect.stringContaining("main") });
+      // The remote ACTUALLY advanced, to the same tip main landed at.
+      expect(g(remote, ["rev-parse", "main"]).trim()).toBe(mainTip);
+    } finally {
+      cleanup(repo, ...runWts);
+      if (remote) fs.rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("a push failure (remote gone — offline) is non-fatal: the completed land stands, run.json records pushed:false with a concrete reason, and nothing throws", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    try {
+      const remote = addLocalRemote(repo, "main");
+      // Simulate "offline": the configured remote path no longer resolves.
+      fs.rmSync(remote, { recursive: true, force: true });
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, push: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+      });
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      // The land itself STANDS — only the push failed.
+      const mainTip = revParse(repo, "main");
+      expect(res.state.landedInto).toBe(`main@${mainTip}`);
+      expect(res.state.pushed?.ok).toBe(false);
+      expect(res.state.pushed?.note ?? "").not.toBe("");
+    } finally {
+      cleanup(repo, ...runWts);
+    }
+  });
+
+  it("a divergent/non-ff remote REJECTS the push (non-fatal): remote tip UNCHANGED, land stands, pushed:false", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    let remote = "";
+    const other = `${repo}.other`;
+    try {
+      remote = addLocalRemote(repo, "main");
+      // Diverge the remote independently AFTER the upstream was established, via a second clone.
+      execFileSync("git", ["clone", remote, other], { encoding: "utf8" });
+      g(other, ["config", "user.email", "t@t"]);
+      g(other, ["config", "user.name", "t"]);
+      fs.writeFileSync(path.join(other, "elsewhere.txt"), "x\n");
+      g(other, ["add", "-A"]);
+      g(other, ["commit", "-m", "remote-advance"]);
+      g(other, ["push", "origin", "main"]);
+      const remoteTipBeforePush = g(remote, ["rev-parse", "main"]).trim();
+
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, push: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+        now: () => Date.now(),
+        sleep: (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
+      });
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      const mainTip = revParse(repo, "main");
+      expect(res.state.landedInto).toBe(`main@${mainTip}`); // LOCAL land still stands
+      expect(res.state.pushed?.ok).toBe(false);
+      // The remote is left EXACTLY where the divergent push left it — never force-updated.
+      expect(g(remote, ["rev-parse", "main"]).trim()).toBe(remoteTipBeforePush);
+      cleanup(other);
+    } finally {
+      cleanup(repo, ...runWts);
+      if (remote) fs.rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("--land without --push is unaffected: no run.json pushed field at all (both gate parts required)", GIT_IT, async () => {
+    const repo = makeRepo();
+    const runWts: string[] = [];
+    try {
+      const ctx = await makeCtx(repo);
+      const res = await runConduct(ctx, OPTS({ merge: true, land: true, concurrency: 1 }), {
+        runRole: fakeRunner((u, wt) => fs.writeFileSync(path.join(wt, `f-${u}.txt`), `${u}\n`), { score: 90 }),
+        runSessionFn: decomposerFn([{ id: "unit-001", title: "Unit one", summary: "one" }]),
+      });
+      runWts.push(path.join(path.dirname(repo), `${path.basename(repo)}-merge-${res.runId}`));
+      expect(res.state.landedInto).toBe(`main@${revParse(repo, "main")}`); // land itself unaffected
+      expect(res.state.pushed).toBeUndefined();
+    } finally {
+      cleanup(repo, ...runWts);
+    }
+  });
+});
+
 /**
  * `conduct --resume` composed with `--commit`/`--merge`, exercised against REAL git in a throwaway
  * repo. A crashed run is simulated by hand-writing `run.json` + the unit brief/contract, then

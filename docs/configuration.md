@@ -44,15 +44,31 @@ conduct:                      # `sparra conduct` (headless conductor) intelligen
                                #   unresolved parked decision, no unit's merge-to-run-branch parked),
                                #   and where the run branch is a TRUE fast-forward of the (re-resolved)
                                #   default tip — any miss parks a land-blocked decision instead of ever
-                               #   touching the default branch. Never a merge commit, never --force,
-                               #   never a push (pushing is a separate, later opt-in). Default false —
-                               #   today's behavior (--merge stops at the run/feature branch) is
-                               #   unchanged unless you opt in HERE **and** pass --land.
+                               #   touching the default branch. Never a merge commit, never --force.
+                               #   --land itself never pushes anywhere — see `push` below for the
+                               #   separate opt-in that does. Default false — today's behavior (--merge
+                               #   stops at the run/feature branch) is unchanged unless you opt in HERE
+                               #   **and** pass --land.
+  push: false                 # opt-in DOUBLE GATE for `conduct --push`: even with --push on the CLI
+                               #   (which implies --land, which implies --merge/--commit), pushing the
+                               #   landed default branch to its configured upstream is refused (a hard,
+                               #   actionable error naming this knob) unless this is ALSO true. After a
+                               #   SUCCESSFUL --land, a plain, non-force `git push` (never --force; no
+                               #   --ff-only — not a valid `git push` option; a non-force push is
+                               #   inherently fast-forward-only since git rejects a non-fast-forward
+                               #   update by default) advances the default branch's remote to the
+                               #   just-landed tip. A push failure (offline, a divergent/non-ff remote,
+                               #   no upstream configured) is ALWAYS non-fatal — the completed land is
+                               #   NEVER rolled back — and run.json records the outcome (`pushed`)
+                               #   durably either way. Default false — today's behavior (--land stops at
+                               #   a local fast-forward; conduct never touches the remote) is unchanged
+                               #   unless you opt in HERE **and** pass --push.
 # The conductor brain uses `roles.conductor` (default claude/sonnet/medium) and sees ONLY holdout-safe
 # ParentSummary-derived material. Answer a parked decision from the file, an inline TTY prompt,
 # `sparra conduct --decide <runId> <seq> <answer> [--note "…"]` in another terminal, OR the HTTP bridge
 # (`POST /jobs/:id/decision`) — see docs/http-bridge.md. See docs/conduct.md → "Landing to the default
-# branch (--land)" for the full clean-run precondition + ff-only/worktree-safe/park semantics.
+# branch (--land)" and "Pushing the landed default branch (--push)" for the full clean-run precondition
+# + ff-only/worktree-safe/park semantics and the push step's non-fatal semantics.
 
 permission:
   mode: auto                  # auto (default) | acceptEdits | plan ; never bypassPermissions

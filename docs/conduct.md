@@ -16,9 +16,9 @@ config-less, default-backed context via `loadCtxForRole` and creates `.sparra/` 
 
 ```bash
 sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--max-turns <n>] \
-                          [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--land] [--dry-run]
+                          [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--land] [--push] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
-sparra conduct --resume <runId> [--commit] [--merge] [--land] [--auto]   # continue a crashed/interrupted run in place
+sparra conduct --resume <runId> [--commit] [--merge] [--land] [--push] [--auto]   # continue a crashed/interrupted run in place
 sparra conduct --status <runId> [--json]                        # read-only projection of one run (zero spend)
 sparra conduct --list [--json]                                  # read-only list of all runs (zero spend)
 ```
@@ -39,7 +39,8 @@ sparra conduct --list [--json]                                  # read-only list
 | `--auto` | off | Never park a decision — the brain decides everything (`surface: "auto"` for the run). |
 | `--commit` | off | After a unit is **accepted**, commit its worktree WIP onto its own `sparra/<name>` branch — the `committer` role (when `git.agentCommits: "agent"`) or a deterministic template message (`"template"`), mirroring `src/build`'s `commitItem` (incl. holdout exclusion). The message carries the unit's **score** and the conduct **`runId`**. `run.json` records `committedSha`. Worktree + branch are kept. |
 | `--merge` | off | **Implies `--commit`.** Integrate each accepted unit's branch into a **safe target** — a run branch `sparra/<runId>` when conduct started from the default branch, or the current **non-default** branch otherwise; **never** the default branch (unless `--land` below is also used). Prefers **rebase + fast-forward**, falling back to a **merge commit**. A merge conflict or a dirty target **parks** a `merge-blocked` decision (`skip-unit` / `abort-merge`) through the same decision engine. On a **successful** merge the unit worktree is **torn down** (existing rm-worktree machinery); `run.json` records `mergedInto`. Merges are **serialized** across concurrently-completing units. |
-| `--land` | off | **Implies `--merge`.** ALSO requires `conduct.landToDefault: true` in config — a **double gate**; `--land` without it is a hard, actionable error naming the missing knob and NOTHING lands (never a silent downgrade to `--merge`). When both are set, fast-forwards the **default branch itself** to the run branch's tip, but ONLY on a run that **started on the default branch**, is **fully clean** (every unit terminal `accepted`, no unresolved parked decision, no unit's merge-to-run-branch parked), and where the run branch is a **true fast-forward** of the (re-resolved) default tip. Any miss **parks** a `land-blocked` decision and leaves the default branch untouched — never a merge commit, never `--force`, never a push. See [Landing to the default branch (`--land`)](#landing-to-the-default-branch---land) below. |
+| `--land` | off | **Implies `--merge`.** ALSO requires `conduct.landToDefault: true` in config — a **double gate**; `--land` without it is a hard, actionable error naming the missing knob and NOTHING lands (never a silent downgrade to `--merge`). When both are set, fast-forwards the **default branch itself** to the run branch's tip, but ONLY on a run that **started on the default branch**, is **fully clean** (every unit terminal `accepted`, no unresolved parked decision, no unit's merge-to-run-branch parked), and where the run branch is a **true fast-forward** of the (re-resolved) default tip. Any miss **parks** a `land-blocked` decision and leaves the default branch untouched — never a merge commit, never `--force`. `--land` itself **never pushes anywhere** — see `--push` below for the separate opt-in that does. See [Landing to the default branch (`--land`)](#landing-to-the-default-branch---land) below. |
+| `--push` | off | **Implies `--land`** (you can only push what you landed; transitively implies `--merge`/`--commit` too). ALSO requires `conduct.push: true` in config — a **second, separate double gate** from `--land`'s own; `--push` without it is a hard, actionable error naming the missing knob and NOTHING pushes (never a silent downgrade to a push-less `--land`). When both are set, runs immediately after a **SUCCESSFUL** `--land`: a plain, non-force `git push` of the just-landed default branch to its configured upstream — never `--force`, no `--ff-only` (not a valid `git push` option; a non-force push is inherently fast-forward-only, since git rejects a non-fast-forward remote update by default). A push failure (offline, a divergent/non-ff remote, no upstream configured) is **always non-fatal** — the completed land is **never rolled back** — and `run.json` records the outcome (`pushed`) durably either way. See [Pushing the landed default branch (`--push`)](#pushing-the-landed-default-branch---push) below. |
 | `--dry-run` | off | Decompose + write briefs only — **no role spend beyond the decomposer**. |
 
 ## Conductor-brain modes
@@ -115,17 +116,18 @@ A malformed flag (missing value, non-numeric, non-positive `--max-units`/`--conc
 or negative `--budget`) is rejected **before any model spend** — the command exits non-zero naming the
 offending flag and creates no run directory.
 
-## Commit, merge & land landing (`--commit` / `--merge` / `--land`)
+## Commit, merge, land & push landing (`--commit` / `--merge` / `--land` / `--push`)
 
 By default `conduct` is **report-only**: it leaves every accepted unit on its own `sparra/<name>`
-worktree and touches no history. Three STRICTLY OPT-IN tiers, each implying the one before it, widen
-what happens **after** a unit is accepted:
+worktree and touches no history, and it **never touches any remote**. Four STRICTLY OPT-IN tiers, each
+implying the one before it, widen what happens **after** a unit is accepted:
 
 | Tier | Flag | Touches | Gate |
 | --- | --- | --- | --- |
 | Commit | `--commit` | The unit's own `sparra/<name>` branch. | none beyond the flag |
 | Merge | `--merge` (implies `--commit`) | A run/feature branch (`sparra/<runId>` or your current non-default branch) — **never the default branch**. | none beyond the flag |
 | Land | `--land` (implies `--merge`) | The repo's **DEFAULT branch itself**, fast-forwarded to the run branch's tip. | the flag **AND** `conduct.landToDefault: true` in config (double gate) |
+| Push | `--push` (implies `--land`) | The default branch's **configured remote/upstream**, fast-forwarded (non-force `git push`) to the just-landed tip. | the flag **AND** `conduct.push: true` in config (a SECOND, separate double gate) |
 
 - **`--commit`** commits the unit's worktree WIP onto its `sparra/<name>` branch (mirroring the build
   loop's `commitItem`: `committer`-role plan when `git.agentCommits: "agent"`, else a deterministic
@@ -151,8 +153,8 @@ what happens **after** a unit is accepted:
   - Merges into the shared target are **serialized** across concurrently-completing units — no lost
     update, no duplicate.
 
-Without any of the three flags, behavior is **byte-identical to today** (no commit, no merge, no land,
-no teardown, and `run.json` unit entries carry neither `committedSha` nor `mergedInto`).
+Without any of the four flags, behavior is **byte-identical to today** (no commit, no merge, no land,
+no push, no teardown, and `run.json` unit entries carry neither `committedSha` nor `mergedInto`).
 
 ### Landing to the default branch (`--land`)
 
@@ -189,8 +191,40 @@ fast-forwardable** run:
   decision engine as `merge-blocked` — `--auto`/a brain resolves it without parking a file.
 - **On success**, `run.json` records `landedInto` as `"<defaultBranch>@<sha>"`. The run branch is
   **never deleted** and existing unit-worktree teardown is unchanged.
-- **Never pushes.** `--land` fast-forwards your LOCAL default branch only; pushing it anywhere
-  (a remote, a PR) is a separate, later opt-in — not implemented by `--land`.
+- **`--land` itself never pushes.** It fast-forwards your LOCAL default branch only; pushing it to its
+  remote is the separate opt-in described next.
+
+### Pushing the landed default branch (`--push`)
+
+`--push` (implies `--land`, which implies `--merge`/`--commit`) is the fourth, strictly opt-in tier:
+immediately after `--land` resolves for a run — successfully or not — it decides whether to push. It is
+gated **twice**, distinctly from `--land`'s own gate, and only ever runs after a **SUCCESSFUL** land:
+
+- **A second, separate double gate.** `--push` on the CLI is not enough by itself: `conduct.push: true`
+  must ALSO be set in `.sparra/config.yaml` (see [configuration.md](configuration.md)) — a hard,
+  actionable error naming the missing `conduct.push` knob otherwise, and **nothing** pushes (never a
+  silent downgrade to a push-less `--land`). Since `--push` implies `--land`, `--land`'s own
+  `conduct.landToDefault: true` gate is checked too — both must be satisfied.
+- **Only after a SUCCESSFUL land.** The push is invoked from the SAME land-success seam that sets
+  `landedInto` — never before, never independently. If `--land` didn't actually land this run (a
+  non-default start, an unclean run, a non-fast-forward, or a landing-write failure), the push step
+  is a **no-op**: no `git push` is ever invoked, and `run.json` records a `pushed:false` outcome naming
+  "no land happened this run" (plus the underlying land-blocked reason, when there is one).
+- **Plain, non-force, fast-forward-only.** `git push` has no `--ff-only` flag — a plain push WITHOUT
+  `--force`/`-f` is inherently fast-forward-only, because git itself rejects a non-fast-forward update
+  by default. `--push` NEVER passes `--force`/`-f`. A divergent/non-ff remote is REJECTED by git; the
+  remote ref is left **exactly as found**.
+- **Always non-fatal.** A push failure — offline, a divergent/non-ff remote, no upstream configured for
+  the default branch — never rolls back the completed land: `landedInto` stays set, nothing throws, and
+  the concrete failure reason is recorded.
+- **Durable outcome.** Whenever `--push` + `conduct.push` are both set, `run.json` records a `pushed`
+  field for EVERY requested-push path — never left transient-log-only:
+  - land succeeded + push succeeded → `pushed: { ok: true, branch, note }`;
+  - land succeeded + push failed → `pushed: { ok: false, note }` naming the concrete failure;
+  - no land happened this run → `pushed: { ok: false, note }` naming that no land occurred.
+- **No new capability for any role.** The push happens through the same conductor-orchestrated harness
+  code as `--land` — never through a role/agent tool call. The harness deny-lists (`git push` in
+  `permission.denyBashContains` and `src/sdk/scoping.ts`) are unchanged; no role gains push access.
 
 ## Resuming a crashed / interrupted run (`--resume`)
 
@@ -207,7 +241,7 @@ sparra conduct --resume conduct-2026-07-13T03-12-36   # any trailing prompt argu
 - **Appends to the SAME `run.json`.** A per-resume `resumedAt` timestamp is recorded and the decision
   `seq` continues **monotonically** from the persisted maximum (a resumed decision never re-uses a
   prior seq).
-- **Composes with `--commit`/`--merge`/`--land` and the decision engine unchanged.** A decision that
+- **Composes with `--commit`/`--merge`/`--land`/`--push` and the decision engine unchanged.** A decision that
   was still **parked** (unresolved) when the process died is **recovered on resume**: it is
   re-surfaced under a **fresh `seq` above the persisted maximum** and resolved through the same
   decision engine, so it stays answerable by the real `sparra conduct --decide <runId> <seq> <answer>`
@@ -274,8 +308,9 @@ sparra conduct --list [--json]
 ```
 
 - **`--status <runId>`** prints a header (`runId`, `status`, `brain`, decision surface, `createdAt`/
-  `updatedAt`, the run's `prompt` truncated to **one line**, and a `landedInto` line when the run
-  landed with `--land`), then one line **per unit** (id, title, outcome, `score`, `cost`, `branch`, a
+  `updatedAt`, the run's `prompt` truncated to **one line**, a `landedInto` line when the run landed
+  with `--land`, and a `pushed` line — ok/failed + note — when `--push` ran this run), then one line
+  **per unit** (id, title, outcome, `score`, `cost`, `branch`, a
   **short** `committedSha`, and `mergedInto` when the unit landed), and finally any **still-parked
   decisions** (each with its `seq`, question, and a
   `conduct --decide <runId> <seq> <answer>` hint). `--json` emits the `run.json` fields plus a
@@ -299,6 +334,8 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
   run.json                 # units, per-unit outcome/score/cost/branch/worktree/verdictPaths, status
                            #   + committedSha/mergedInto when landed with --commit/--merge
                            #   + landedInto ("<defaultBranch>@<sha>") when landed with --land
+                           #   + pushed ({ok, branch?, note}) when --push ran (success, failure, or
+                           #     "no land happened" — durable for EVERY requested-push path)
                            #   + resumedAt[] (one stamp per --resume)
   <unit-id>/
     brief.md               # the unit's brief (written from the decomposition)
@@ -324,15 +361,19 @@ timestamp per resume.
   The conduct process never reads or inlines holdout content; conductor-visible state (`run.json`,
   the in-memory state) carries only holdout-safe `ParentSummary`-derived fields. Generator, contract,
   and decomposer specs never receive a holdout path.
-- **Git safety.** By default (no `--commit`/`--merge`/`--land`) `conduct` never commits, merges, or
-  touches the repo's **default branch**: each unit generates on its **own persistent** `sparra/<name>`
-  unit worktree and `run.json` reports each accepted unit's branch + worktree, left for you. The
-  opt-in `--commit`/`--merge` flags commit accepted WIP onto its own `sparra/<name>` branch and
-  integrate accepted branches into a **safe target that is never the default branch** — a run branch
-  `sparra/<runId>` when conduct started from the default branch, or your current (non-default) branch
-  otherwise. The default branch itself is reachable ONLY through the further opt-in, double-gated
-  `--land` (see [Landing to the default branch](#landing-to-the-default-branch---land)) — and even
-  then only a **local, fast-forward-only** advance; `--land` never pushes anywhere.
+- **Git safety.** By default (no `--commit`/`--merge`/`--land`/`--push`) `conduct` never commits,
+  merges, lands, or pushes — it never touches the repo's **default branch or its remote**: each unit
+  generates on its **own persistent** `sparra/<name>` unit worktree and `run.json` reports each accepted
+  unit's branch + worktree, left for you. The opt-in `--commit`/`--merge` flags commit accepted WIP onto
+  its own `sparra/<name>` branch and integrate accepted branches into a **safe target that is never the
+  default branch** — a run branch `sparra/<runId>` when conduct started from the default branch, or your
+  current (non-default) branch otherwise. The default branch itself is reachable ONLY through the
+  further opt-in, double-gated `--land` (see
+  [Landing to the default branch](#landing-to-the-default-branch---land)) — and even then only a
+  **local, fast-forward-only** advance; `--land` itself never pushes anywhere. The remote is reachable
+  ONLY through the further opt-in, SEPARATELY double-gated `--push` (see
+  [Pushing the landed default branch](#pushing-the-landed-default-branch---push)) — a plain, non-force,
+  fast-forward-only `git push`, non-fatal on any failure, never invoked without a successful `--land`.
 
 ## Script hooks fire points
 
