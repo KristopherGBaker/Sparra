@@ -169,7 +169,10 @@ describe("pullUpstream (git.pullBeforeWork helper, offline / local-path remotes 
   function commit(dir: string, file: string, content: string, msg: string): void {
     fs.writeFileSync(path.join(dir, file), content);
     g(dir, ["add", "-A"]);
-    g(dir, ["commit", "-m", msg]);
+    // Identity inline (-c) so a commit works even in a repo with no local/global git identity — a
+    // `git clone` does NOT inherit the source's local user.name/email, and CI runners set none, so a
+    // bare `git commit` fails there with "empty ident name".
+    g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg]);
   }
   function tmp(prefix: string): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -312,7 +315,10 @@ describe("pushCurrentFfOnly (conduct.push helper, offline / local-path remotes o
   function commit(dir: string, file: string, content: string, msg: string): void {
     fs.writeFileSync(path.join(dir, file), content);
     g(dir, ["add", "-A"]);
-    g(dir, ["commit", "-m", msg]);
+    // Identity inline (-c) so a commit works even in a repo with no local/global git identity — a
+    // `git clone` does NOT inherit the source's local user.name/email, and CI runners set none, so a
+    // bare `git commit` fails there with "empty ident name".
+    g(dir, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", msg]);
   }
   function tmp(prefix: string): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
