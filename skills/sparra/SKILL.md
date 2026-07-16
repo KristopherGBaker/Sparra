@@ -451,6 +451,13 @@ with failed assertion evidence + UN-RUN/no-signal ids; anything deeper → the r
   per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
 - **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;
   Claude loads natively (settingSources stays []), Codex inlines the SKILL.md.
+- **When building Sparra itself, keep docs in sync in the same change.** Per the Sparra
+  repo's own `CLAUDE.md`, a change that adds or alters user-facing behavior updates all
+  four layers that apply: `README.md` (headline capability), `docs/` (the detail doc for
+  that knob/behavior/backend), `skills/sparra/` (`SKILL.md` + `subskills/diagnose.md`, plus
+  a plugin-version bump in `.claude-plugin/marketplace.json`), and **the repo map** —
+  `CLAUDE.md`'s own Architecture bullets and `docs/phases.md`'s phase overview — whenever
+  the change adds or renames a command, phase, module, or directory.
 - After a meaningful run, `sparra reflect` turns build traces or auto-discovered interactive
   `role-run-*` traces into proposed prompt edits (`--traces <glob-or-dir>` overrides selection), and routes any
   **harness-level** findings (about Sparra itself, not this project's prompts) into a shared user-level

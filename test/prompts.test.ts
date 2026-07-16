@@ -142,6 +142,94 @@ describe("docs + skill sync for UN-RUN / mixed verdict semantics", () => {
   });
 });
 
+describe("docs-sync gains a named repo-map layer (CLAUDE.md / prompts.ts / SKILL.md / marketplace)", () => {
+  it("CLAUDE.md's docs-sync section names a 4th layer: its own Architecture map + docs/phases.md's phase overview, triggered by add/rename of a command/phase/module/directory", () => {
+    const claudeMd = fs.readFileSync(path.join(process.cwd(), "CLAUDE.md"), "utf8");
+    const idx = claudeMd.indexOf("Keep docs in sync");
+    expect(idx).toBeGreaterThan(-1);
+    const section = claudeMd.slice(idx);
+    expect(section).toMatch(/four layers/i);
+    expect(section).toContain("docs/phases.md");
+    expect(section).toMatch(/adds? or renames?/i);
+    expect(section).toMatch(/command, phase, module, or directory/i);
+    // The now-stale "three layers" claim must be gone.
+    expect(section).not.toMatch(/three layers/i);
+  });
+
+  it("no stale 'three layers' claim survives across CLAUDE.md, README.md, docs/, or skills/", () => {
+    const docsDir = path.join(process.cwd(), "docs");
+    const files = [
+      path.join(process.cwd(), "CLAUDE.md"),
+      path.join(process.cwd(), "README.md"),
+      path.join(process.cwd(), "skills/sparra/SKILL.md"),
+      ...fs.readdirSync(docsDir).filter((f) => f.endsWith(".md")).map((f) => path.join(docsDir, f)),
+    ];
+    for (const f of files) {
+      expect(fs.readFileSync(f, "utf8").toLowerCase()).not.toContain("three layers");
+    }
+  });
+
+  it("skills/sparra/SKILL.md's docs-sync rule matches CLAUDE.md's list, incl. the repo-map layer + marketplace bump", () => {
+    const skill = fs.readFileSync(path.join(process.cwd(), "skills/sparra/SKILL.md"), "utf8");
+    expect(skill).toMatch(/keep docs in sync/i);
+    expect(skill).toContain("README.md");
+    expect(skill).toMatch(/docs\//);
+    expect(skill).toContain("skills/sparra/");
+    expect(skill).toContain("marketplace.json");
+    expect(skill).toContain("docs/phases.md");
+    expect(skill).toMatch(/adds? or renames?/i);
+  });
+
+  it("the plugin version exceeds this item's start value 2026.7.15.4 (floor compare, never an exact pin)", () => {
+    const marketplace = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".claude-plugin/marketplace.json"), "utf8"));
+    expect(cmpDottedVersion(marketplace.metadata.version, "2026.7.15.4")).toBeGreaterThan(0);
+  });
+
+  it("contract-generator's MANDATED SIDE-EFFECTS bullet generalizes: a doc enumerating modules/phases/commands is itself a doc layer, stale on add/rename — stated ONCE, no Sparra-specific names", () => {
+    const cg = DEFAULT_PROMPTS["contract-generator"]!;
+    // Semantic presence: the generalized principle, not a byte-exact sentence.
+    expect(cg).toMatch(/enumerat(es|ing)[^.]*modules,\s*phases,?\s*or\s*commands/i);
+    expect(cg).toMatch(/adds? or renames?/i);
+    // Appears exactly once — folded into the existing bullet, not restated elsewhere.
+    const hits = cg.match(/enumerat(es|ing)[^.]*modules,\s*phases,?\s*or\s*commands/gi) ?? [];
+    expect(hits.length).toBe(1);
+    // No new top-level section was added for this rule.
+    expect(cg).not.toMatch(/^ENUMERATING DOCS/m);
+  });
+
+  it("src/prompts.ts stays cross-project: zero Sparra-specific doc references (docs/phases.md, skills/sparra, 'Keep docs in sync')", () => {
+    const promptsSrc = fs.readFileSync(path.join(process.cwd(), "src/prompts.ts"), "utf8");
+    expect(promptsSrc).not.toContain("docs/phases.md");
+    expect(promptsSrc).not.toContain("skills/sparra");
+    expect(promptsSrc).not.toContain("Keep docs in sync");
+  });
+
+  it("boundary: the generalized enumerating-doc principle was folded into ONLY contract-generator, not restated in any other role's prompt", () => {
+    const pattern = /enumerat(es|ing)[^.]*modules,\s*phases,?\s*or\s*commands/i;
+    for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
+      if (role === "contract-generator") continue;
+      expect(text, `unexpected restatement in role "${role}"`).not.toMatch(pattern);
+    }
+  });
+
+  it("CLAUDE.md's docs-sync list keeps sequential 1-4 numbering with no stray 5th layer or renumbered gap", () => {
+    const claudeMd = fs.readFileSync(path.join(process.cwd(), "CLAUDE.md"), "utf8");
+    const idx = claudeMd.indexOf("Keep docs in sync");
+    const section = claudeMd.slice(idx, idx + 2000);
+    expect(section).toMatch(/^1\.\s/m);
+    expect(section).toMatch(/^2\.\s/m);
+    expect(section).toMatch(/^3\.\s/m);
+    expect(section).toMatch(/^4\.\s/m);
+    expect(section).not.toMatch(/^5\.\s/m);
+  });
+
+  it("skills/sparra/SKILL.md states the four-layer docs-sync rule exactly once (no duplicated restatement)", () => {
+    const skill = fs.readFileSync(path.join(process.cwd(), "skills/sparra/SKILL.md"), "utf8");
+    const hits = skill.match(/keep docs in sync/gi) ?? [];
+    expect(hits.length).toBe(1);
+  });
+});
+
 describe("contract-evaluator prompt — named-plan cross-check without cross-project contamination (E1)", () => {
   const ce = DEFAULT_PROMPTS["contract-evaluator"]!;
   it("PERMITS cross-checking a plan doc the item explicitly NAMES + existing shipped behavior", () => {

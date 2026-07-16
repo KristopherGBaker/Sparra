@@ -52,10 +52,11 @@ Do feature work on a `sparra/<topic>` branch, then fast-forward merge to `main` 
 
 ## ⚠️ Keep docs in sync with feature work
 
-**Any change that adds or alters user-facing behavior (a config knob, a phase, a role, a backend capability, a CLI flag) MUST update the docs in the same change.** This repo's "docs" are three layers — update all that apply:
+**Any change that adds or alters user-facing behavior (a config knob, a phase, a role, a backend capability, a CLI flag) MUST update the docs in the same change.** This repo's "docs" are four layers — update all that apply:
 
 1. **`README.md`** — the on-ramp: the loop diagram, the "How it works" bullets, requirements. Update when a headline capability changes.
 2. **`docs/`** — the detail: `configuration.md` (every knob + the `.sparra/` layout), `build-loop.md`, `backends.md`, `phases.md`, `ios.md`. A new config field belongs in `configuration.md`; new loop behavior in `build-loop.md`; backend changes in `backends.md`.
 3. **`skills/sparra/`** — the operational skill: `SKILL.md` (driving/configuring/diagnosing) and `subskills/diagnose.md` (the failure-signature table + artifact list). Update when behavior, knobs, or failure modes change, and bump the plugin version in `.claude-plugin/marketplace.json`. When `.codex-plugin` content changes, refresh `plugin.json`'s semver-plus-cachebuster version, run `make update-codex-plugin`, and start a fresh Codex thread; leave that version unchanged when no Codex plugin content changed.
+4. **The repo map** — this file's own **Architecture** module bullets (above) and `docs/phases.md`'s phase overview. Any change that **adds or renames** a command, phase, module, or directory MUST update both: they're the enumerations a reader trusts to be current, and a stale one is worse than none.
 
 A feature isn't done until typecheck + tests pass **and** these reflect it. When in doubt, grep the docs/skill for the old behavior and fix every hit.

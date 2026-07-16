@@ -308,7 +308,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // the "SATISFIABILITY:" bullet to REJECT such assertions during negotiation) — the committer +
     // merge run AFTER acceptance, so contracts must gate on worktree CONTENT only. Two existing
     // prompts edited; no new prompt.
-    expect(h.digest("hex")).toBe("2848dcc9071d2187a3f66ef02ed7b3193abc3c98b4d78ca9bf3f3d0e43256a97");
+    // Regenerated 2026-07-16 (docs-sync repo-map layer): the CONTRACT-GENERATOR prompt's MANDATED
+    // SIDE-EFFECTS bullet now generalizes that a doc enumerating the repo's modules/phases/commands
+    // (e.g. a repo-map/architecture overview) is itself a doc layer, made stale by an add/rename of
+    // what it enumerates. One existing prompt edited; no new prompt.
+    expect(h.digest("hex")).toBe("7a7e4684c76f523532833f642c18123127f182ec9b22db049436b08cb8ec66ce");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
