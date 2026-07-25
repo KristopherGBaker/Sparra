@@ -419,6 +419,10 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
 
     // run / revise / pivot / escalate / finalize → run ONE generate+evaluate round.
     const pivoting = action === "pivot";
+    // The llm brain's ACTUAL pivot call site — publish the decision learning here (a discarded
+    // change may still teach a later unit/run). The llm DRIVE_ACTIONS expose no generalize-spec
+    // action, so the hybrid/shared-seam call sites above are the complete generalize-spec set.
+    if (pivoting) deps.recordDecisionLearning?.({ decision: "pivot", round, ...(last ? { summary: last } : {}) });
     const feedback = action === "revise" && d?.feedback ? [d.feedback] : pivoting ? last?.blocking ?? [] : [];
     const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     await deps.runRole(deps.specs.generatorSpecFor(genRole, ctx));
