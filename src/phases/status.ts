@@ -30,6 +30,13 @@ export function cmdStatus(ctx: Ctx): void {
       const mark =
         it.status === "passed" ? color.green("✓") : it.status === "failed" ? color.red("✗") : it.status === "abandoned" ? color.gray("⊘") : color.yellow("•");
       detail(`${mark} ${id} — ${it.status} (round ${it.round}, pivots ${it.pivots}, score ${it.lastScore ?? "-"})`);
+      // Terminal non-pass item: name its structured stop report when one was written (older runs
+      // without a report render no marker — absence is never an error).
+      const nonPass = it.status === "failed" || it.status === "abandoned" || it.status === "budget_exceeded";
+      if (nonPass && s.build.runId) {
+        const reportPath = ctx.paths.stopReportFile(s.build.runId, id);
+        if (exists(reportPath)) detail(`    stop report: ${path.relative(ctx.root, reportPath)}`);
+      }
     }
     if (s.build.runId) detail(`run: ${s.build.runId}  traces: ${path.relative(ctx.root, ctx.paths.traceDir(s.build.runId))}`);
     if (s.build.branch) detail(`branch: ${s.build.branch}`);

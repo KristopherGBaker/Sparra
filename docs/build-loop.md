@@ -221,3 +221,7 @@ acceptance on the three core effects exactly as before.
 
 ## Calibration (matching your taste)
 Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparra/calibration/slop/` (avoid this). With `rubric.useCalibration` on, the evaluator reads them before scoring originality/craft.
+
+## Stop reports (terminal non-pass)
+
+Every terminal NON-PASS item writes a structured stop report under reports/<run>/<id>.stop.md (budget_exceeded, rounds-exhausted failed/inconclusive, human abandoned): the stop reason (tripped cap + value, or rounds exhausted), best score+round, rounds/pivots/spend, artifact location + committed/uncommitted state, the latest verdict redacted blocking + failed assertions + pointer, and a next action. Named in the terminal warn() and by sparra status. Best-effort + holdout-safe.

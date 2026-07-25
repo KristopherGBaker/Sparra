@@ -125,7 +125,14 @@ export function buildRunRolePayload(
         weightedTotal: r.verdict.weightedTotal,
         passThreshold,
         blocking: r.verdict.blocking,
-        failedAssertions: r.verdict.assertions.filter((a) => !a.pass),
+        // Genuine failures ONLY — an UN-RUN assertion (an environment/tooling no-signal) is neither a
+        // pass nor a behavioral failure, so it is excluded here exactly as `src/build/evaluate.ts`
+        // excludes it from the persisted verdict's "Failed assertions" section. Keeps a conductor's
+        // stop report and re-grade feedback from treating no-signal as a real bounce.
+        failedAssertions: (() => {
+          const unrun = new Set(r.verdict.unrunAssertionIds ?? []);
+          return r.verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
+        })(),
         // The auto-persisted redacted verdict (always written for the evaluator) — surfaced so the
         // conductor/reflect can find it. Distinct from the caller-chosen `outPath`. Holdout-safe:
         // a PATH under .sparra/verdicts/, never verdict/holdout contents.

@@ -48,6 +48,14 @@ export interface UnitStateEntry {
   score?: number;
   /** Summed `costUsd` across the unit's role runs. */
   cost?: number;
+  /** Summed `tokens` across the unit's role runs (`ParentSummary.tokens`). Additive; feeds the stop
+   *  report's exact spend line. Absent on older/pre-feature runs. */
+  tokens?: number;
+  /** Path to this unit's structured stop report (`<runDir>/<unitId>/stop.md`), set ONLY when a
+   *  terminal non-pass outcome (`exhausted`/`abandoned`/`error`) actually wrote one. Absent when the
+   *  unit passed, when reporting is not applicable, or when the best-effort write FAILED (so the field
+   *  never falsely claims the artifact exists). Older runs without this field render without markers. */
+  stopReport?: string;
   /** The unit worktree's branch (`generator.unitWorktree.branch`). */
   branch?: string;
   /** The unit worktree's name (`generator.unitWorktree.name`). */

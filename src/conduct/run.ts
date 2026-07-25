@@ -45,9 +45,10 @@ import type { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { conductRunDir, isSafeRunId, runStatePath, RunStateWriter } from "./runState.ts";
 import { deterministicStrategy, type JudgmentStrategy } from "./strategy.ts";
 import type { RecoveryCaps } from "./recovery.ts";
-import { runUnitHybrid, runUnitLlm, type ConductUnitDeps } from "./unitRunner.ts";
+import { runUnitHybrid, runUnitLlm, type ConductRoundRecord, type ConductUnitDeps, type ConductUnitResult } from "./unitRunner.ts";
 import type { ConductRunState, ConductUnit, UnitOutcome, UnitStateEntry } from "./types.ts";
 import { runScriptHooks } from "../scriptHooks.ts";
+import { writeStopReport, type StopReportInput } from "../stopReport.ts";
 
 /**
  * `src/conduct/run.ts` — the conductor core: decompose a prompt into units, then per
@@ -159,6 +160,10 @@ export interface ConductDeps {
    *  decision). Default: the real runner. Injected in tests so the wiring is asserted without a real
    *  spawn. */
   runScriptHooksFn?: typeof runScriptHooks;
+  /** Best-effort stop-report writer used at the shared unit-finalization choke point for terminal
+   *  non-pass units. Injectable so a test can force a write failure and assert the outcome is
+   *  unchanged and `stopReport` is NOT set (never falsely claims the artifact exists). */
+  writeStopReportFn?: typeof writeStopReport;
 }
 
 /** The result of a conduct run: the final run state + where it lives. */
@@ -186,6 +191,7 @@ function makeTrackedRunRole(
     if (entry) {
       if (entry.outcome === "pending") entry.outcome = "running";
       entry.cost = (entry.cost ?? 0) + (summary.costUsd ?? 0);
+      entry.tokens = (entry.tokens ?? 0) + (summary.tokens ?? 0);
       if (summary.weightedTotal !== undefined) entry.score = summary.weightedTotal;
       if (summary.unitWorktree) {
         entry.worktree = summary.unitWorktree.name;
@@ -207,6 +213,11 @@ function sumCost(summaries: ParentSummary[]): number {
   return summaries.reduce((acc, s) => acc + (s.costUsd ?? 0), 0);
 }
 
+/** Sum `tokens` over a list of summaries (tokens is a required `ParentSummary` field). */
+function sumTokens(summaries: ParentSummary[]): number {
+  return summaries.reduce((acc, s) => acc + (s.tokens ?? 0), 0);
+}
+
 /** Every role summary a unit produced (contract + build cycle), for cost/score/worktree derivation. */
 function unitSummaries(r: RunUnitResult): ParentSummary[] {
   const out: ParentSummary[] = [];
@@ -220,22 +231,192 @@ function unitSummaries(r: RunUnitResult): ParentSummary[] {
   return out;
 }
 
-/** Finalize a unit entry from its `RunUnitResult` — authoritative over the incremental snapshot. */
-function finalizeFromResult(entry: UnitStateEntry, r: RunUnitResult): void {
-  entry.outcome = r.outcome;
-  entry.contractAgreed = r.contract.agreed;
-  entry.contractForced = !r.contract.agreed;
+/**
+ * A brain-and-deterministic-path-agnostic normalization of a finished unit — the SINGLE shape the
+ * shared finalization choke point ({@link finalizeUnit}) consumes, so BOTH the deterministic
+ * `runUnitsConcurrently` branch and the brain (`runUnitHybrid`/`runUnitLlm`) branch route unit
+ * finalization + stop-report writing through ONE function (no path can bypass reporting).
+ */
+interface UnitFinalization {
+  outcome: UnitOutcome;
+  contractAgreed?: boolean;
+  contractForced?: boolean;
+  /** Authoritative summed cost/tokens (deterministic recompute). Undefined on the brain/error paths →
+   *  keep the incrementally-tracked `entry.cost`/`entry.tokens`. */
+  cost?: number;
+  tokens?: number;
+  worktree?: string;
+  branch?: string;
+  error?: string;
+  /** Entry score (final verdict / last evaluator), preserving each path's existing derivation. */
+  finalScore?: number;
+  /** Every evaluated build round (round + evaluator summary + pivot flag), in order. */
+  rounds: ConductRoundRecord[];
+}
+
+/** Deterministic path: normalize a core `RunUnitResult`. */
+function finalizationFromRunUnitResult(r: RunUnitResult): UnitFinalization {
   const summaries = unitSummaries(r);
-  entry.cost = sumCost(summaries);
+  const genWt = r.cycle?.rounds.map((rd) => rd.generator.unitWorktree).find((w) => w);
   const finalVerdict = r.cycle?.finalVerdict;
   const lastEval = r.cycle?.rounds.at(-1)?.evaluator;
-  const score = finalVerdict?.weightedTotal ?? lastEval?.weightedTotal;
-  if (score !== undefined) entry.score = score;
-  // Worktree/branch come from a build-cycle generator summary's unitWorktree (never hardcoded).
-  const genWt = r.cycle?.rounds.map((rd) => rd.generator.unitWorktree).find((w) => w);
-  if (genWt) {
-    entry.worktree = genWt.name;
-    entry.branch = genWt.branch;
+  return {
+    outcome: r.outcome,
+    contractAgreed: r.contract.agreed,
+    contractForced: !r.contract.agreed,
+    cost: sumCost(summaries),
+    tokens: sumTokens(summaries),
+    ...(genWt ? { worktree: genWt.name, branch: genWt.branch } : {}),
+    ...(finalVerdict?.weightedTotal ?? lastEval?.weightedTotal) !== undefined
+      ? { finalScore: finalVerdict?.weightedTotal ?? lastEval?.weightedTotal }
+      : {},
+    rounds: (r.cycle?.rounds ?? []).map((rd) => ({
+      round: rd.round,
+      evaluator: rd.evaluator,
+      pivoted: rd.decision === "pivot",
+    })),
+  };
+}
+
+/** Brain path: normalize a `ConductUnitResult` (cost/tokens stay on the tracked entry). */
+function finalizationFromConductResult(res: ConductUnitResult): UnitFinalization {
+  return {
+    outcome: res.outcome,
+    contractAgreed: res.contractAgreed,
+    contractForced: res.contractForced,
+    ...(res.finalVerdict?.weightedTotal !== undefined ? { finalScore: res.finalVerdict.weightedTotal } : {}),
+    rounds: res.rounds,
+  };
+}
+
+/** Best score/round, pivot count, and the MOST RECENT round's redacted unresolved items. */
+function factsFromConductRounds(rounds: ConductRoundRecord[]): {
+  bestScore?: number;
+  bestRound?: number;
+  pivots: number;
+  blocking: string[];
+  failedAssertions: { id: number; evidence: string }[];
+  verdictPath?: string;
+} {
+  let bestScore: number | undefined;
+  let bestRound: number | undefined;
+  let pivots = 0;
+  for (const r of rounds) {
+    if (r.pivoted) pivots += 1;
+    const s = r.evaluator.weightedTotal;
+    if (s !== undefined && (bestScore === undefined || s > bestScore)) {
+      bestScore = s;
+      bestRound = r.round;
+    }
+  }
+  const latest = rounds.at(-1)?.evaluator;
+  return {
+    ...(bestScore !== undefined ? { bestScore, bestRound } : {}),
+    pivots,
+    blocking: latest?.blocking ?? [],
+    failedAssertions: (latest?.failedAssertions ?? []).map((a) => ({ id: a.id, evidence: a.evidence })),
+    ...(latest?.verdictPath ? { verdictPath: latest.verdictPath } : {}),
+  };
+}
+
+const CONDUCT_STOP_OUTCOMES: ReadonlySet<UnitOutcome> = new Set(["exhausted", "abandoned", "error"]);
+
+function conductStopReason(f: UnitFinalization, maxRounds: number): string {
+  switch (f.outcome) {
+    case "exhausted":
+      return `rounds exhausted — reached the round cap build.maxRoundsPerItem ${maxRounds} without acceptance`;
+    case "abandoned":
+      return "the conductor/human abandoned the unit deliberately (no acceptance)";
+    case "error":
+      return `unit errored: ${f.error ?? "unknown error"}`;
+    default:
+      return String(f.outcome);
+  }
+}
+
+function conductNextAction(outcome: UnitOutcome, maxRounds: number): string {
+  switch (outcome) {
+    case "exhausted":
+      return `Raise build.maxRoundsPerItem (currently ${maxRounds}) or split the unit; pivot to a different approach.`;
+    case "abandoned":
+      return "Re-plan or split the unit before rebuilding; abandonment is a deliberate stop.";
+    case "error":
+      return "Investigate the error above, fix the environment/config, and re-run the unit.";
+    default:
+      return "Review the unit's artifacts and decide next steps.";
+  }
+}
+
+interface UnitFinalizeCtx {
+  runDir: string;
+  maxRounds: number;
+  writeStopReportFn: typeof writeStopReport;
+}
+
+/** Name every unit that actually wrote a stop report at run-END, so the diagnostic artifact is
+ *  discoverable straight from the completion output (not just per-unit at write time). */
+function reportWrittenStopReports(state: ConductRunState): void {
+  for (const u of state.units) {
+    if (u.stopReport) info(`conduct: ${u.id} (${u.outcome}) stop report: ${u.stopReport}`);
+  }
+}
+
+/**
+ * The SINGLE unit-finalization choke point. Applies the normalized result to the run.json entry, then
+ * — on a terminal NON-PASS outcome (`exhausted`/`abandoned`/`error`) — writes a best-effort structured
+ * stop report and records its concrete path on `entry.stopReport`. Both the deterministic and brain
+ * branches call this, so neither can silently skip reporting. Best-effort: a write failure warns and
+ * leaves `stopReport` unset (never falsely claims the artifact).
+ */
+async function finalizeUnit(entry: UnitStateEntry, f: UnitFinalization, rc: UnitFinalizeCtx): Promise<void> {
+  entry.outcome = f.outcome;
+  if (f.contractAgreed !== undefined) entry.contractAgreed = f.contractAgreed;
+  if (f.contractForced !== undefined) entry.contractForced = f.contractForced;
+  if (f.error !== undefined) entry.error = f.error;
+  if (f.cost !== undefined) entry.cost = f.cost;
+  if (f.tokens !== undefined) entry.tokens = f.tokens;
+  if (f.worktree) {
+    entry.worktree = f.worktree;
+    if (f.branch) entry.branch = f.branch;
+  }
+  if (f.finalScore !== undefined) entry.score = f.finalScore;
+
+  if (!CONDUCT_STOP_OUTCOMES.has(f.outcome)) return;
+
+  const facts = factsFromConductRounds(f.rounds);
+  const input: StopReportInput = {
+    scope: "conduct",
+    id: entry.id,
+    outcome: f.outcome,
+    reason: conductStopReason(f, rc.maxRounds),
+    bestScore: facts.bestScore ?? "unknown",
+    bestRound: facts.bestRound ?? "unknown",
+    rounds: f.rounds.length,
+    pivots: facts.pivots,
+    costUsd: entry.cost ?? "unknown",
+    tokensUsed: entry.tokens ?? "unknown",
+    artifact: {
+      ...(entry.worktree ? { worktree: entry.worktree } : {}),
+      ...(entry.branch ? { branch: entry.branch } : {}),
+      // `committed` is known from run.json (`committedSha` set only by opt-in --commit); whether the
+      // worktree still holds uncommitted WIP is `unknown` — finalization does not run `git status`, so
+      // we never claim a cleanliness we didn't verify (explicit unknown over a guess).
+      committed: !!entry.committedSha,
+      uncommitted: "unknown",
+    },
+    blocking: facts.blocking,
+    failedAssertions: facts.failedAssertions,
+    verdictPath: facts.verdictPath ?? false,
+    nextAction: conductNextAction(f.outcome, rc.maxRounds),
+  };
+  const res = await rc.writeStopReportFn({
+    filePath: path.join(rc.runDir, entry.id, "stop.md"),
+    input,
+    warn,
+  });
+  if (res.written && res.path) {
+    entry.stopReport = res.path;
+    info(`conduct: ${entry.id} ${f.outcome} — stop report → ${res.path}`);
   }
 }
 
@@ -416,15 +597,21 @@ export async function runConduct(
     const results = await runUnitsConcurrently({ runRole: trackedRunRole }, jobs, {
       concurrency: opts.concurrency,
     });
+    const finalizeCtx: UnitFinalizeCtx = {
+      runDir,
+      maxRounds: ctx.config.build.maxRoundsPerItem,
+      writeStopReportFn: deps.writeStopReportFn ?? writeStopReport,
+    };
     for (const res of results) {
       const entry = entryByUnit.get(res.id);
       if (!entry) continue;
-      if ("error" in res) {
-        entry.outcome = "error";
-        entry.error = res.error;
-      } else {
-        finalizeFromResult(entry, res.result);
-      }
+      // Route BOTH the scheduler-error and the completed result through the shared choke point so a
+      // terminal non-pass unit always gets a stop report (no direct deterministic caller can bypass it).
+      const finalization: UnitFinalization =
+        "error" in res
+          ? { outcome: "error", error: res.error, rounds: [] }
+          : finalizationFromRunUnitResult(res.result);
+      await finalizeUnit(entry, finalization, finalizeCtx);
       // onUnitComplete (best-effort): fired after each result is finalized/errored.
       await runHooks("onUnitComplete", { unit: res.id, runId, runDir, status: entry?.outcome }, ctx.config);
     }
@@ -441,6 +628,9 @@ export async function runConduct(
     `conduct: run ${runId} complete — ${accepted.length}/${state.units.length} unit(s) accepted. ` +
       `Artifacts under ${runDir}.`,
   );
+  // Name each successfully-written stop report so a terminal non-pass unit's diagnostic artifact is
+  // discoverable straight from the run-END output (never left log-only).
+  reportWrittenStopReports(state);
   await fireRunComplete(state.status);
   return { runId, runDir, state };
 }
@@ -677,6 +867,7 @@ export async function resumeConduct(
     `conduct --resume ${runId}: continued — ${accepted.length}/${state.units.length} unit(s) accepted. ` +
       `Artifacts under ${runDir}.`,
   );
+  reportWrittenStopReports(state);
   return { status: "resumed", runId, runDir, state };
 }
 
@@ -1173,18 +1364,23 @@ async function runBrainUnits(
       ...(plan?.seedVerdictPaths?.length ? { seedVerdictPaths: plan.seedVerdictPaths } : {}),
     };
 
+    // Route BOTH a normal result and a thrown error through the SAME shared finalization choke point
+    // the deterministic path uses, so a terminal non-pass unit always writes a stop report.
+    const finalizeCtx: UnitFinalizeCtx = {
+      runDir: p.runDir,
+      maxRounds: ctx.config.build.maxRoundsPerItem,
+      writeStopReportFn: deps.writeStopReportFn ?? writeStopReport,
+    };
     try {
       const result =
         opts.brain === "llm" ? await runUnitLlm(unitDeps) : await runUnitHybrid(unitDeps);
-      entry.outcome = result.outcome;
-      entry.contractAgreed = result.contractAgreed;
-      entry.contractForced = result.contractForced;
-      if (result.finalVerdict?.weightedTotal !== undefined) {
-        entry.score = result.finalVerdict.weightedTotal;
-      }
+      await finalizeUnit(entry, finalizationFromConductResult(result), finalizeCtx);
     } catch (e) {
-      entry.outcome = "error";
-      entry.error = e instanceof Error ? e.message : String(e);
+      await finalizeUnit(
+        entry,
+        { outcome: "error", error: e instanceof Error ? e.message : String(e), rounds: [] },
+        finalizeCtx,
+      );
     }
     await p.writer.write(p.state);
     // onUnitComplete (best-effort): fired once this unit's outcome is finalized (accepted/error/…).

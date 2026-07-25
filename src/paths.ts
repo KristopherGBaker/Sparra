@@ -149,6 +149,18 @@ export class Paths {
   get runs() {
     return path.join(this.dir, "runs");
   }
+  /** Structured stop reports for terminal non-pass BUILD outcomes, run-scoped so two runs that reuse
+   *  item ids never clobber each other (mirrors the run-scoped verdict layout). */
+  get reports() {
+    return path.join(this.dir, "reports");
+  }
+  reportsDir(runId: string) {
+    return path.join(this.reports, runId);
+  }
+  /** A build item's stop report: `.sparra/reports/<runId>/<itemId>.stop.md`. */
+  stopReportFile(runId: string, itemId: string) {
+    return path.join(this.reportsDir(runId), `${itemId}.stop.md`);
+  }
   /** Archived past cycles (one subdir per completed plan→build cycle). */
   get cycles() {
     return path.join(this.dir, "cycles");

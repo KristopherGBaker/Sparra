@@ -420,10 +420,15 @@ Quick triage (from the project's `.sparra/`):
 node -e "const s=require('./.sparra/state.json');console.log('phase',s.phase);for(const[k,v]of Object.entries(s.build.items||{}))console.log(k,v.status,'r'+v.round,'score',v.lastScore,'$'+(v.costUsd||0).toFixed(2),(v.tokensUsed||0)+'tok')"
 ls .sparra/workitems/items.json .sparra/contracts .sparra/verdicts .sparra/traces
 ```
-Then, by symptom: decomposition shape → `workitems/items.json`; contract not converging →
-`contracts/<id>.contract.md`; low/failing score → `verdicts/<run>/<id>.r<n>.verdict.md` (run-scoped
-subdir; interactive evaluator runs persist `verdicts/role-run-evaluator-<stamp>.verdict.md`) — blocking
-with failed assertion evidence + UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
+Then, by symptom: a terminal NON-PASS item/unit (`budget_exceeded`/`failed`/inconclusive/`abandoned`,
+conduct `exhausted`/`error`) → its **stop report** first — `reports/<run>/<id>.stop.md` (build) or
+`conduct/<run>/<unit>/stop.md` (conduct; its path is on the unit's `run.json` + `conduct --status`):
+the stop reason (tripped cap + value / rounds exhausted / error), best score+round, spend, artifact
+location, unresolved blocking + failed assertions, and a next action; decomposition shape →
+`workitems/items.json`; contract not converging → `contracts/<id>.contract.md`; low/failing score →
+`verdicts/<run>/<id>.r<n>.verdict.md` (run-scoped subdir; interactive evaluator runs persist
+`verdicts/role-run-evaluator-<stamp>.verdict.md`) — blocking with failed assertion evidence +
+UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/`; recurring learnings
 → `memory.md`.
 
 ## Hard-won gotchas (cheat sheet)

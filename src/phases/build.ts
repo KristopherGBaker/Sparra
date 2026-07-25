@@ -46,6 +46,7 @@ import { appendLearning, readMemory, hasLearning, hasTechniqueNote, distillTechn
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 import type { WorkItem } from "../build/types.ts";
 import type { RoleConfig } from "../config.ts";
+import { writeStopReport, type StopReportInput } from "../stopReport.ts";
 
 /** Injectable seams so the build orchestration is testable without the SDK/git. */
 export interface BuildDeps {
@@ -73,6 +74,9 @@ export interface BuildDeps {
   execVerifyCommand: CommandExecutor;
   /** Config-gated post-accept measure step (injectable so build.test.ts can fake the whole run). */
   measureAccepted: typeof measureAcceptedItem;
+  /** Best-effort structured stop-report writer for terminal non-pass outcomes. Injectable so a test
+   *  can force a write failure and assert the outcome is unchanged and the report is NOT claimed. */
+  writeStopReport: typeof writeStopReport;
 }
 
 const defaultDeps: BuildDeps = {
@@ -95,6 +99,7 @@ const defaultDeps: BuildDeps = {
   maybeResetWorkspace,
   execVerifyCommand: runVerifyCommand,
   measureAccepted: measureAcceptedItem,
+  writeStopReport,
 };
 
 /** Provider account a role runs against — the granularity a rate/usage limit applies to.
@@ -268,6 +273,52 @@ export async function cmdBuild(
     warn(
       `${itemId}: USD cap did not bind because reported cost was zero or unknown; effective token bound: ${effectiveTokenCapName()}.`
     );
+  };
+
+  // Artifact state for a terminal non-pass stop report. A non-pass build item is NEVER committed
+  // (only an accepted item commits), so `committed` is a truthful `false`. Whether the working tree
+  // holds uncommitted WIP is `unknown` — the terminal path deliberately does NOT run `git status`, so
+  // we never CLAIM a cleanliness we didn't verify (explicit unknown over a guess). Location is the
+  // isolated worktree/branch (relative to root) when building isolated, else in-place.
+  const buildArtifact = (): StopReportInput["artifact"] => {
+    const isolated = !!b.build.workspaceDir && b.build.workspaceDir !== ctx.root;
+    return {
+      ...(isolated
+        ? { worktree: path.relative(ctx.root, b.build.workspaceDir!) || b.build.workspaceDir! }
+        : {}),
+      ...(b.build.branch ? { branch: b.build.branch } : {}),
+      committed: false,
+      uncommitted: "unknown",
+    };
+  };
+
+  // Write a best-effort structured stop report for a terminal non-pass item + name it in the log.
+  // Content is sourced ONLY from harness-owned redacted state (best score/round, spend counters, and
+  // the latest verdict's already-redacted blocking/evidence) — never raw evaluator output or holdout.
+  const writeBuildStop = async (
+    st: ItemState,
+    item: WorkItem,
+    args: { outcome: string; reason: string; nextAction: string },
+  ): Promise<void> => {
+    const input: StopReportInput = {
+      scope: "build",
+      id: item.id,
+      outcome: args.outcome,
+      reason: args.reason,
+      bestScore: st.bestScore ?? "unknown",
+      bestRound: st.bestRound ?? "unknown",
+      rounds: st.round ?? 0,
+      pivots: st.pivots ?? 0,
+      costUsd: st.costUsd ?? "unknown",
+      tokensUsed: st.tokensUsed ?? "unknown",
+      artifact: buildArtifact(),
+      blocking: st.lastVerdict?.blocking ?? [],
+      failedAssertions: st.lastVerdict?.failedAssertions ?? [],
+      verdictPath: st.lastVerdict?.verdictPath ?? false,
+      nextAction: args.nextAction,
+    };
+    const res = await d.writeStopReport({ filePath: ctx.paths.stopReportFile(runId, item.id), input, warn });
+    if (res.written) warn(`${item.id}: stop report → ${res.path}`);
   };
 
   // Auto-restart / fallback state (the "heartbeat"). limitedUntil tracks which backends are in
@@ -612,6 +663,17 @@ export async function cmdBuild(
         detail: `halted (${phase}) at ${which}; spent $${(st.costUsd ?? 0).toFixed(3)} / ${st.tokensUsed ?? 0} tokens; best score ${st.lastScore ?? 0} in ${st.round} round(s).`,
         at: stamp(),
       });
+      // The tripped cap's config KNOB + its configured value (which one bound, in priority order).
+      const capDesc = tokensExceeded(tokenCap, st.tokensUsed ?? 0)
+        ? `build.maxTokensPerItem ${tokenCap}`
+        : overZeroCostFallback(st)
+        ? `build.zeroCostTokenCap ${zeroCostTokenCap}`
+        : `build.maxBudgetUsdPerItem $${cap.toFixed(2)}`;
+      await writeBuildStop(st, item, {
+        outcome: "budget_exceeded",
+        reason: `${which} — crossed cap ${capDesc} (during ${phase})`,
+        nextAction: `Resume with a raised cap (${capDesc.split(" ")[0]}), or split the item into smaller pieces.`,
+      });
     };
 
     // 1) Negotiate the "done" contract.
@@ -669,6 +731,11 @@ export async function cmdBuild(
         await d.appendLearning(ctx.paths, { item: item.id, kind: "note", detail: `human-abandoned round ${st.round} (score ${st.lastScore ?? 0}).`, at: stamp() });
         await ctx.store.save();
         warn(`${item.id}: abandoned by human.`);
+        await writeBuildStop(st, item, {
+          outcome: "abandoned",
+          reason: `human abandoned the item after round ${st.round} (score ${st.lastScore ?? 0})`,
+          nextAction: "Re-plan or split the item before rebuilding; abandonment is a deliberate human stop.",
+        });
         if (await maybeItemGate(item, st)) { pausedRun = true; break; }
         continue;
       }
@@ -913,6 +980,25 @@ export async function cmdBuild(
       st.preflightBounces = 0;
 
       st.lastScore = ev.verdict.weightedTotal;
+      // Best score/round across ALL evaluated rounds (not just the terminal round), plus the latest
+      // verdict's redacted unresolved items — durable so a terminal non-pass stop report renders the
+      // best attempt and the FRESHEST blocking/evidence without re-reading the verdict file. UN-RUN
+      // assertion ids are excluded (no behavioral signal); the verdict fields are already redacted.
+      if (st.bestScore === undefined || ev.verdict.weightedTotal > st.bestScore) {
+        st.bestScore = ev.verdict.weightedTotal;
+        st.bestRound = st.round;
+      }
+      {
+        const unrun = new Set(ev.verdict.unrunAssertionIds ?? []);
+        st.lastVerdict = {
+          round: st.round,
+          verdictPath: ctx.paths.verdictFile(item.id, st.round, runId),
+          blocking: ev.verdict.blocking,
+          failedAssertions: ev.verdict.assertions
+            .filter((a) => !a.pass && !unrun.has(a.id))
+            .map((a) => ({ id: a.id, evidence: a.evidence })),
+        };
+      }
 
       // (Q7c) Calibration gap: pure claims-vs-verdict diff. Omitted/empty assertionsClaimed is a
       // complete no-op. The gap carries assertion ids + count ONLY (never evaluator/holdout text),
@@ -1289,6 +1375,20 @@ export async function cmdBuild(
       }
       // Alongside the failed/inconclusive line: the config-gated transferable technique from history.
       await maybeDistillTechnique(st, item, "failed");
+      // Structured stop report for the rounds-exhausted terminalization (failed OR blocked/
+      // inconclusive) — distinct reason + next action from the budget path.
+      const maxR = ctx.config.build.maxRoundsPerItem;
+      await writeBuildStop(st, item, lastBlocked
+        ? {
+            outcome: "inconclusive",
+            reason: `exercise BLOCKED (inconclusive — could not run; environment, not the artifact) and never verified within build.maxRoundsPerItem ${maxR} round(s)`,
+            nextAction: "Fix the exercise environment so the contract can be verified, then resume the item.",
+          }
+        : {
+            outcome: "failed",
+            reason: `did not pass within build.maxRoundsPerItem ${maxR} round(s)`,
+            nextAction: `Pivot the approach or split the item; raise build.maxRoundsPerItem (currently ${maxR}) to allow more rounds.`,
+          });
     }
     await ctx.store.save();
 
