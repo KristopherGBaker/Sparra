@@ -234,7 +234,7 @@ build:
                               #   history (last report + attempt ledger) and append it to memory.md as a
                               #   marked (`technique:`), holdout-redacted `note`, within the existing
                               #   memory caps. Deterministic (no model call), never the score/bookkeeping,
-                              #   once per item across resume; false (default) = memory exactly as today
+                              #   once per item across resume; false (default) = no distilled-technique note appended
   extraReadDirs: []           # extra dirs the build may READ (e.g. ["~/.cache/models"]) — for big
                               # assets you don't want in git; pre-stage once, no commit, no network
 

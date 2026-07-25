@@ -397,7 +397,8 @@ export interface SparraConfig {
      * on) the item — from the item's durable round history and append it to memory.md as a marked,
      * holdout-redacted `note` learning, within the existing memory caps. Deterministic (no model
      * call), never the score/bookkeeping, once per item across resume. Off by default — with the
-     * knob unset memory content is exactly as today (no extra note appended). See
+     * knob unset no distilled-technique note is appended (other writers — build item outcomes and
+     * `sparra conduct` unit learnings — still write memory). See
      * `memory.distillTechnique` / docs/build-loop.md.
      */
     distillTechnique: boolean;

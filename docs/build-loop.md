@@ -191,7 +191,7 @@ The default `passed` / `failed` learnings are bookkeeping ("accepted in round 2 
 - carries a distinguishing **`technique:` marker** so its once-only dedup keys on that marker (not the `note` kind, which the abandonment/blocked/escalation notes also use) — it runs **exactly once per item terminal** across crash/resume;
 - is **holdout-redacted** (run through `redactHoldout` before append) and obeys the **existing memory caps** (no new cap surface).
 
-With the knob unset, memory content is exactly as today (no extra note appended).
+With the knob unset, no distilled-technique note is appended. (Memory still records the other writers' lines: build item `passed`/`failed`/`note` learnings, and — see [conduct](conduct.md) — each `sparra conduct` unit's terminal outcome and pivot/generalize-spec decisions.)
 
 ## Durable acceptance / resume
 Accepting an item runs three side effects — **reconcile** PLAN.md, **commit**, append the `passed`

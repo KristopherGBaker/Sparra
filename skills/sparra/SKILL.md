@@ -142,6 +142,11 @@ decision seq + a `resumedAt` stamp); prior parked decisions stay answerable and 
 Unknown runId → exit 1 (no side effects); a terminal all-accepted run → no-op. Multi-round re-grades
 (normal AND resumed) thread each prior round's redacted `verdictPath` onto the next evaluator as
 repeatable `--prior-blocking` (paths only) so settled blocking ground is verified, not re-litigated.
+**Cross-unit learning:** at each unit terminal outcome (and at pivot / generalize-spec decisions)
+`conduct` appends ONE holdout-safe, `ParentSummary`-derived line to the shared `.sparra/memory.md`
+(via `src/memory.ts`, existing caps) through a single serialized best-effort writer — so a later-started
+unit and every future run pick it up under **PRIOR LEARNINGS** with no new plumbing (see
+[docs/conduct.md](../../docs/conduct.md#cross-unit-learning-project-memory)).
 **Inspect runs with zero spend**: `sparra conduct --status <runId> [--json]` prints a holdout-safe
 projection of one run (header + per-unit id/title/outcome/score/cost/branch/short-sha/mergedInto + any
 still-parked decisions with a `--decide` hint), and `sparra conduct --list [--json]` lists all runs
@@ -263,7 +268,8 @@ The few that matter most:
   item) from the item's durable round history (last report + attempt ledger) and appends it to
   `memory.md` as a `technique:`-marked, holdout-redacted `note` — deterministic (no model call),
   **never the score/bookkeeping**, once per item across resume (dedup keys on the marker). With it
-  unset, memory content is exactly as today.
+  unset, no distilled-technique note is appended — the other writers (build item outcomes, and
+  `sparra conduct` unit learnings) still write `memory.md`.
 - **`build.env`** — string env vars merged over `process.env` and injected into build SDK
   sessions, evaluator `run_command` spawns, and verify/measure command spawns. Use this for
   per-project tool cache/user dirs (for example `HOME: /private/tmp` under a sandbox). Optional

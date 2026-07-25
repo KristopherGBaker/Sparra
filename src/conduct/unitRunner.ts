@@ -34,6 +34,9 @@ export interface ConductUnitResult {
   /** True when the build proceeded despite a non-agreed contract (forced finalization). */
   contractForced: boolean;
   finalVerdict?: ParentSummary;
+  /** Number of generate→evaluate build rounds actually run (0 when accepted/abandoned before any
+   *  round). Used only to compose the unit's terminal memory learning — never a control signal. */
+  rounds: number;
 }
 
 export interface ConductUnitDeps {
@@ -53,6 +56,10 @@ export interface ConductUnitDeps {
   ) => void;
   /** Write a GENERALIZED-spec brief revision as a NEW file (never edits history); returns its path. */
   writeGeneralizedBrief: (round: number) => Promise<string>;
+  /** Publish a pivot / generalize-spec judgment decision to project memory (best-effort, serialized
+   *  through the coordinator's one writer). Called at the ACTUAL decision call sites so a discarded
+   *  change still teaches a later unit/run. Absent → no decision learning (deterministic path / tests). */
+  recordDecisionLearning?: (d: { decision: "pivot" | "generalize-spec"; round: number; summary?: ParentSummary }) => void;
   recoveryCaps: RecoveryCaps;
   generatorRole: RoleConfig;
   unit: string;
@@ -128,7 +135,7 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
   if (!deps.resumeContract && !contract.agreed) {
     const res = await deps.judge("contract-nonconvergence", contract.rounds.at(-1)?.evaluator);
     if (res.answer === "abandon") {
-      return { outcome: "abandoned", contractAgreed: false, contractForced: false };
+      return { outcome: "abandoned", contractAgreed: false, contractForced: false, rounds: 0 };
     }
     if (res.answer === "revise-brief") {
       brief = await deps.writeGeneralizedBrief(0);
@@ -142,6 +149,7 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
     outcome: cycle.outcome,
     contractAgreed: contract.agreed,
     contractForced,
+    rounds: cycle.rounds,
     ...(cycle.finalVerdict ? { finalVerdict: cycle.finalVerdict } : {}),
   };
 }
@@ -149,8 +157,9 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
 async function runHybridRounds(
   deps: ConductUnitDeps,
   briefOverride?: string,
-): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary }> {
+): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary; rounds: number }> {
   let round = 1;
+  let roundsRun = 0;
   let consecutiveFailures = 0;
   let feedback: string[] = [];
   let pivoting = false;
@@ -163,16 +172,17 @@ async function runHybridRounds(
   const priorVerdictPaths: string[] = [...(deps.seedVerdictPaths ?? [])];
 
   while (round <= deps.maxRounds) {
+    roundsRun += 1;
     const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     const genSpec = deps.specs.generatorSpecFor(genRole, ctx, brief);
     const genRaw = await deps.runRole(genSpec);
     const genRec = await recover(deps, genSpec, genRaw);
-    if (genRec.abandon) return { outcome: "abandoned", finalVerdict: lastEval };
+    if (genRec.abandon) return { outcome: "abandoned", finalVerdict: lastEval, rounds: roundsRun };
 
     const evalSpec = deps.specs.evaluatorSpec(ctx);
     const evalRaw = await deps.runRole(evalSpec);
     const evalRec = await recover(deps, evalSpec, evalRaw);
-    if (evalRec.abandon) return { outcome: "abandoned", finalVerdict: evalRec.summary };
+    if (evalRec.abandon) return { outcome: "abandoned", finalVerdict: evalRec.summary, rounds: roundsRun };
     const evalSummary = evalRec.summary;
     lastEval = evalSummary;
     if (evalSummary.verdictPath) priorVerdictPaths.push(evalSummary.verdictPath);
@@ -186,7 +196,7 @@ async function runHybridRounds(
     if (decision === "accept") {
       if (isBorderline(evalSummary, deps.passThreshold, deps.borderlineMargin)) {
         const res = await deps.judge("borderline-accept", evalSummary);
-        if (res.answer === "abandon") return { outcome: "abandoned", finalVerdict: evalSummary };
+        if (res.answer === "abandon") return { outcome: "abandoned", finalVerdict: evalSummary, rounds: roundsRun };
         if (res.answer === "revise") {
           consecutiveFailures += 1;
           feedback = evalSummary.blocking ?? [];
@@ -195,19 +205,19 @@ async function runHybridRounds(
           continue;
         }
       }
-      return { outcome: "accepted", finalVerdict: evalSummary };
+      return { outcome: "accepted", finalVerdict: evalSummary, rounds: roundsRun };
     }
     if (decision === "grade-not-independent") {
       const res = await deps.judge("gate-collapse", evalSummary);
-      if (res.answer === "accept-anyway") return { outcome: "accepted", finalVerdict: evalSummary };
+      if (res.answer === "accept-anyway") return { outcome: "accepted", finalVerdict: evalSummary, rounds: roundsRun };
       if (res.answer === "retry") {
         round += 1;
         continue;
       }
-      return { outcome: "grade-not-independent", finalVerdict: evalSummary };
+      return { outcome: "grade-not-independent", finalVerdict: evalSummary, rounds: roundsRun };
     }
     if (decision === "inconclusive") {
-      return { outcome: "inconclusive", finalVerdict: evalSummary };
+      return { outcome: "inconclusive", finalVerdict: evalSummary, rounds: roundsRun };
     }
     if (decision === "revise") {
       consecutiveFailures += 1;
@@ -221,6 +231,8 @@ async function runHybridRounds(
     consecutiveFailures = 0;
     feedback = evalSummary.blocking ?? [];
     pivoting = true;
+    // A pivot is a genuinely decision-relevant event (a discarded change may still teach) — remember it.
+    deps.recordDecisionLearning?.({ decision: "pivot", round, summary: evalSummary });
     if (pivotCount >= 2) {
       // 2nd pivot: prefer escalation / spec-generalization over another same-level round.
       if (genRole.escalation) {
@@ -229,6 +241,7 @@ async function runHybridRounds(
       } else {
         brief = await deps.writeGeneralizedBrief(round);
         deps.noteDecision("unit-exhausted", "generalize-spec", "auto-deterministic", "auto", "2nd pivot → generalize brief");
+        deps.recordDecisionLearning?.({ decision: "generalize-spec", round, summary: evalSummary });
       }
     }
     round += 1;
@@ -236,8 +249,8 @@ async function runHybridRounds(
 
   // Rounds exhausted → the fifth judgment point.
   const res = await deps.judge("unit-exhausted", lastEval);
-  if (res.answer === "abandon") return { outcome: "abandoned", finalVerdict: lastEval };
-  return { outcome: "exhausted", finalVerdict: lastEval };
+  if (res.answer === "abandon") return { outcome: "abandoned", finalVerdict: lastEval, rounds: roundsRun };
+  return { outcome: "exhausted", finalVerdict: lastEval, rounds: roundsRun };
 }
 
 /** llm: the brain drives turn-by-turn, hard-bounded by the round budget. */
@@ -255,6 +268,7 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
       );
 
   let round = 1;
+  let roundsRun = 0;
   let genRole = deps.generatorRole;
   let last: ParentSummary | undefined;
   const contractForced = deps.resumeContract?.forced ?? !contract.agreed;
@@ -272,15 +286,15 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
     const action = d?.answer ?? "run";
 
     if (action === "accept") {
-      return { outcome: "accepted", contractAgreed: contract.agreed, contractForced, ...(last ? { finalVerdict: last } : {}) };
+      return { outcome: "accepted", contractAgreed: contract.agreed, contractForced, rounds: roundsRun, ...(last ? { finalVerdict: last } : {}) };
     }
     if (action === "abandon") {
-      return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced };
+      return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced, rounds: roundsRun };
     }
     if (action === "surface") {
       const res = await deps.judge("unit-exhausted", last);
       if (res.answer === "abandon") {
-        return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced };
+        return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced, rounds: roundsRun };
       }
       // otherwise fall through to run a round this turn
     }
@@ -291,16 +305,19 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
 
     // run / revise / pivot / escalate / finalize → run ONE generate+evaluate round.
     const pivoting = action === "pivot";
+    // A brain-chosen pivot is a decision-relevant event — remember it (the prior verdict's blocking).
+    if (pivoting) deps.recordDecisionLearning?.({ decision: "pivot", round, ...(last ? { summary: last } : {}) });
     const feedback = action === "revise" && d?.feedback ? [d.feedback] : pivoting ? last?.blocking ?? [] : [];
     const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     await deps.runRole(deps.specs.generatorSpecFor(genRole, ctx));
     last = await deps.runRole(deps.specs.evaluatorSpec(ctx));
     if (last.verdictPath) priorVerdictPaths.push(last.verdictPath);
+    roundsRun += 1;
     round += 1;
   }
 
   // Budget/round exhausted — terminal, no further drive/role calls.
-  return { outcome: "exhausted", contractAgreed: contract.agreed, contractForced, ...(last ? { finalVerdict: last } : {}) };
+  return { outcome: "exhausted", contractAgreed: contract.agreed, contractForced, rounds: roundsRun, ...(last ? { finalVerdict: last } : {}) };
 }
 
 /** Re-export for `run.ts` to type its contract result. */
