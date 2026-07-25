@@ -27,6 +27,21 @@ export interface ItemState {
    *  reset to `{}` on a GAN pivot alongside `criterionFailStreak`. */
   assertionFailStreak?: Record<string, number>;
   lastScore?: number;
+  /** Best weighted score across ALL evaluated rounds (not just the terminal round), and the round it
+   *  was achieved in — surfaced verbatim in the stop report so a late-round regression doesn't hide a
+   *  better earlier attempt. Additive; absent on older/pre-feature runs. */
+  bestScore?: number;
+  bestRound?: number;
+  /** The MOST RECENT evaluated round's holdout-redacted verdict facts, kept durable so a terminal
+   *  non-pass path (budget/rounds-exhausted/abandon) can render the unresolved items into the stop
+   *  report without re-reading the verdict file. Content is Verdict-derived + already redacted
+   *  (blocking/evidence), UN-RUN assertion ids excluded — never raw evaluator output or holdout. */
+  lastVerdict?: {
+    round: number;
+    verdictPath: string;
+    blocking: string[];
+    failedAssertions: { id: number; evidence: string }[];
+  };
   /** Cumulative USD spent on this item across all rounds (feeds the budget guard). */
   costUsd?: number;
   /** Cumulative tokens spent on this item across all rounds (feeds the token budget guard). */

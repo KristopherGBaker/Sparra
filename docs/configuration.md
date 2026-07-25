@@ -411,6 +411,11 @@ your-project/
    │                   #   needed) under a unique name, so `sparra reflect` gets evaluator evidence
    ├─ interactive/<run>/<item>/  # human-in-the-loop steering folders (`build --step`):
    │                   #   pause.md (redacted), decision.json, feedback.md — see build-loop.md
+   ├─ reports/<run>/<item>.stop.md  # STOP REPORT — a terminal non-pass BUILD item's structured
+   │                   #   halt record (stop reason + tripped cap/value, best score+round, spend,
+   │                   #   artifact location, unresolved blocking + failed assertions, next action).
+   │                   #   Holdout-safe (redacted Verdict fields only); absent for accepted items.
+   │                   #   Conduct's equivalent lives at conduct/<run>/<unit>/stop.md.
    ├─ proposals/       # out-of-scope changes logged for you (brownfield)
    ├─ prompts/         # editable role system prompts (reflect diffs these); seeded from the
    │  ├─ <role>.md     #   built-in defaults at init — can go stale as Sparra improves. Compare/

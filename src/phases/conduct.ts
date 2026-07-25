@@ -618,6 +618,8 @@ function unitLine(u: UnitStateEntry): string {
   if (u.branch) parts.push(`branch=${u.branch}`);
   if (u.committedSha) parts.push(`sha=${u.committedSha.slice(0, 12)}`);
   if (u.mergedInto) parts.push(`merged→${u.mergedInto}`);
+  // Non-pass units carry a concrete stop-report path (older runs lack the field → no marker).
+  if (u.stopReport) parts.push(`stop-report=${u.stopReport}`);
   return parts.join(" ");
 }
 

@@ -29,12 +29,25 @@ import type { AttemptInput, AttemptKind } from "../build/attemptLedger.ts";
  * only the ambiguous case (a limit with no fallback) escalates to a judgment point.
  */
 
+/** One brain-driven build round's evaluator summary (holdout-safe `ParentSummary`), the round number,
+ *  and whether it was a pivot — carried out of the unit runner so the shared conduct finalization can
+ *  build a stop report with best score/round, latest redacted blocking/evidence, and pivot count. */
+export interface ConductRoundRecord {
+  round: number;
+  evaluator: ParentSummary;
+  pivoted: boolean;
+}
+
 export interface ConductUnitResult {
   outcome: UnitOutcome;
   contractAgreed: boolean;
   /** True when the build proceeded despite a non-agreed contract (forced finalization). */
   contractForced: boolean;
   finalVerdict?: ParentSummary;
+  /** Every evaluated build round's record, in round order. Additive — drives the stop report's
+   *  best-round/latest-verdict/pivot facts on the brain path (mirrors the deterministic path's
+   *  `RunUnitResult.cycle.rounds`). */
+  rounds: ConductRoundRecord[];
 }
 
 export interface ConductUnitDeps {
@@ -134,7 +147,7 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
   if (!deps.resumeContract && !contract.agreed) {
     const res = await deps.judge("contract-nonconvergence", contract.rounds.at(-1)?.evaluator);
     if (res.answer === "abandon") {
-      return { outcome: "abandoned", contractAgreed: false, contractForced: false };
+      return { outcome: "abandoned", contractAgreed: false, contractForced: false, rounds: [] };
     }
     if (res.answer === "revise-brief") {
       brief = await deps.writeGeneralizedBrief(0);
@@ -148,6 +161,7 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
     outcome: cycle.outcome,
     contractAgreed: contract.agreed,
     contractForced,
+    rounds: cycle.rounds,
     ...(cycle.finalVerdict ? { finalVerdict: cycle.finalVerdict } : {}),
   };
 }
@@ -155,7 +169,7 @@ export async function runUnitHybrid(deps: ConductUnitDeps): Promise<ConductUnitR
 async function runHybridRounds(
   deps: ConductUnitDeps,
   briefOverride?: string,
-): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary }> {
+): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary; rounds: ConductRoundRecord[] }> {
   let round = 1;
   let consecutiveFailures = 0;
   let feedback: string[] = [];
@@ -164,6 +178,9 @@ async function runHybridRounds(
   let genRole = deps.generatorRole;
   let brief = briefOverride;
   let lastEval: ParentSummary | undefined;
+  // Every evaluated round's record (round + evaluator summary + whether it pivoted), in order — the
+  // brain-path source for the stop report's best-round/latest-verdict/pivot facts.
+  const rounds: ConductRoundRecord[] = [];
   // Prior rounds' persisted verdict paths threaded onto each re-grade as `--prior-blocking`. Seeded
   // from run.json on a RESUME (verify settled ground), then extended per graded round.
   const priorVerdictPaths: string[] = [...(deps.seedVerdictPaths ?? [])];
@@ -187,7 +204,7 @@ async function runHybridRounds(
     const genRec = await recover(deps, genSpec, genRaw);
     if (genRec.abandon) {
       deps.recordRound?.(roundAttempt(round, pivoting, "abandon", genRec.summary, "generation recovery abandoned at judgment point"));
-      return { outcome: "abandoned", finalVerdict: lastEval };
+      return { outcome: "abandoned", finalVerdict: lastEval, rounds };
     }
 
     const evalSpec = deps.specs.evaluatorSpec(ctx);
@@ -195,7 +212,8 @@ async function runHybridRounds(
     const evalRec = await recover(deps, evalSpec, evalRaw);
     if (evalRec.abandon) {
       deps.recordRound?.(roundAttempt(round, pivoting, "abandon", evalRec.summary, "evaluation recovery abandoned at judgment point"));
-      return { outcome: "abandoned", finalVerdict: evalRec.summary };
+      rounds.push({ round, evaluator: evalRec.summary, pivoted: false });
+      return { outcome: "abandoned", finalVerdict: evalRec.summary, rounds };
     }
     const evalSummary = evalRec.summary;
     lastEval = evalSummary;
@@ -217,13 +235,14 @@ async function runHybridRounds(
       { consecutiveFailures },
       { pivotAfterFailures: deps.pivotAfterFailures, requireCrossModel: deps.requireCrossModel },
     );
+    rounds.push({ round, evaluator: evalSummary, pivoted: decision === "pivot" });
 
     if (decision === "accept") {
       if (isBorderline(evalSummary, deps.passThreshold, deps.borderlineMargin)) {
         const res = await deps.judge("borderline-accept", evalSummary);
         if (res.answer === "abandon") {
           rec("abandon", "borderline accept abandoned at judgment point");
-          return { outcome: "abandoned", finalVerdict: evalSummary };
+          return { outcome: "abandoned", finalVerdict: evalSummary, rounds };
         }
         if (res.answer === "revise") {
           deferred = { decision: "continue-patch", summary: evalSummary };
@@ -235,13 +254,13 @@ async function runHybridRounds(
         }
       }
       rec("accept");
-      return { outcome: "accepted", finalVerdict: evalSummary };
+      return { outcome: "accepted", finalVerdict: evalSummary, rounds };
     }
     if (decision === "grade-not-independent") {
       const res = await deps.judge("gate-collapse", evalSummary);
       if (res.answer === "accept-anyway") {
         rec("accept", "cross-model gate collapse — accepted anyway at judgment point");
-        return { outcome: "accepted", finalVerdict: evalSummary };
+        return { outcome: "accepted", finalVerdict: evalSummary, rounds };
       }
       if (res.answer === "retry") {
         deferred = { decision: "continue-patch", summary: evalSummary };
@@ -249,11 +268,11 @@ async function runHybridRounds(
         continue;
       }
       rec("terminal-inconclusive", "cross-model gate collapse (grade not independent)");
-      return { outcome: "grade-not-independent", finalVerdict: evalSummary };
+      return { outcome: "grade-not-independent", finalVerdict: evalSummary, rounds };
     }
     if (decision === "inconclusive") {
       rec("terminal-inconclusive", "evaluator inconclusive (no behavioral signal)");
-      return { outcome: "inconclusive", finalVerdict: evalSummary };
+      return { outcome: "inconclusive", finalVerdict: evalSummary, rounds };
     }
     if (decision === "revise") {
       deferred = { decision: "continue-patch", summary: evalSummary };
@@ -290,12 +309,12 @@ async function runHybridRounds(
     if (executedRound) {
       deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "abandon", lastEval, "unit exhausted — abandoned at judgment point"));
     }
-    return { outcome: "abandoned", finalVerdict: lastEval };
+    return { outcome: "abandoned", finalVerdict: lastEval, rounds };
   }
   if (executedRound) {
     deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "terminal-fail", lastEval, `unit exhausted after ${deps.maxRounds} round(s)`));
   }
-  return { outcome: "exhausted", finalVerdict: lastEval };
+  return { outcome: "exhausted", finalVerdict: lastEval, rounds };
 }
 
 /** Build one attempt-ledger record from a round's `ParentSummary`. Pure + holdout-safe (only the
@@ -340,6 +359,7 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
   let round = 1;
   let genRole = deps.generatorRole;
   let last: ParentSummary | undefined;
+  const rounds: ConductRoundRecord[] = [];
   const contractForced = deps.resumeContract?.forced ?? !contract.agreed;
   const priorVerdictPaths: string[] = [...(deps.seedVerdictPaths ?? [])];
   // Attempt-ledger phantom-round guard: a brain decision made AFTER an already-evaluated round
@@ -364,17 +384,17 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
 
     if (action === "accept") {
       if (executedRound) deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "accept", last, "llm brain accepted"));
-      return { outcome: "accepted", contractAgreed: contract.agreed, contractForced, ...(last ? { finalVerdict: last } : {}) };
+      return { outcome: "accepted", contractAgreed: contract.agreed, contractForced, rounds, ...(last ? { finalVerdict: last } : {}) };
     }
     if (action === "abandon") {
       if (executedRound) deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "abandon", last, "llm brain abandoned"));
-      return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced };
+      return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced, rounds };
     }
     if (action === "surface") {
       const res = await deps.judge("unit-exhausted", last);
       if (res.answer === "abandon") {
         if (executedRound) deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "abandon", last, "llm brain surfaced — abandoned at judgment point"));
-        return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced };
+        return { outcome: "abandoned", contractAgreed: contract.agreed, contractForced, rounds };
       }
       // otherwise fall through to run a round this turn
     }
@@ -396,6 +416,7 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
     const ctx = { round, feedback, pivoting, priorVerdictPaths: [...priorVerdictPaths] };
     await deps.runRole(deps.specs.generatorSpecFor(genRole, ctx));
     last = await deps.runRole(deps.specs.evaluatorSpec(ctx));
+    rounds.push({ round, evaluator: last, pivoted: pivoting });
     if (last.verdictPath) priorVerdictPaths.push(last.verdictPath);
     executedRound = round;
     executedPivoting = pivoting;
@@ -408,7 +429,7 @@ export async function runUnitLlm(deps: ConductUnitDeps): Promise<ConductUnitResu
   if (executedRound) {
     deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "terminal-fail", last, `unit exhausted after ${deps.maxRounds} round(s)`));
   }
-  return { outcome: "exhausted", contractAgreed: contract.agreed, contractForced, ...(last ? { finalVerdict: last } : {}) };
+  return { outcome: "exhausted", contractAgreed: contract.agreed, contractForced, rounds, ...(last ? { finalVerdict: last } : {}) };
 }
 
 /** Re-export for `run.ts` to type its contract result. */

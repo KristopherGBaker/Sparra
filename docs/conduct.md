@@ -408,3 +408,7 @@ side (`orient`/`plan`/`prototype`/`freeze`/`build`/`reflect`/`batch`).
 contract-generator so the contract is drafted, not assumed), `runBuildCycle`, `decideFromEvaluation`,
 the `RoleRunner` seam, and the `ParentSummary` allowlist. Roles run as `sparra role run … --json`
 subprocesses; the spawned bin defaults to this repo's own `bin/sparra.mjs` and honors `SPARRA_BIN`.
+
+## Stop reports (terminal non-pass units)
+
+A conduct unit ending exhausted, abandoned, or error writes a structured stop report under conduct/<runId>/<unitId>/stop.md; its path is recorded on the run.json entry (stopReport) and shown by conduct --status. An exhausted report names the concrete maxRounds cap. Written at the single shared unit-finalization choke point (brain AND deterministic paths). Best-effort + holdout-safe.
