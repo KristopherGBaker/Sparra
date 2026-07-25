@@ -72,6 +72,10 @@ export interface ConductUnitDeps {
   recordRound?: (input: AttemptInput) => void;
   /** Write a GENERALIZED-spec brief revision as a NEW file (never edits history); returns its path. */
   writeGeneralizedBrief: (round: number) => Promise<string>;
+  /** Publish a pivot / generalize-spec judgment decision to project memory (best-effort, serialized
+   *  through the coordinator's one writer). Called at the ACTUAL decision call sites so a discarded
+   *  change still teaches a later unit/run. Absent → no decision learning (deterministic path / tests). */
+  recordDecisionLearning?: (d: { decision: "pivot" | "generalize-spec"; round: number; summary?: ParentSummary }) => void;
   recoveryCaps: RecoveryCaps;
   generatorRole: RoleConfig;
   unit: string;
@@ -288,6 +292,8 @@ async function runHybridRounds(
     consecutiveFailures = 0;
     feedback = evalSummary.blocking ?? [];
     pivoting = true;
+    // A pivot is a genuinely decision-relevant event (a discarded change may still teach) — remember it.
+    deps.recordDecisionLearning?.({ decision: "pivot", round, summary: evalSummary });
     if (pivotCount >= 2) {
       // 2nd pivot: prefer escalation / spec-generalization over another same-level round.
       if (genRole.escalation) {
@@ -296,6 +302,7 @@ async function runHybridRounds(
       } else {
         brief = await deps.writeGeneralizedBrief(round);
         deps.noteDecision("unit-exhausted", "generalize-spec", "auto-deterministic", "auto", "2nd pivot → generalize brief");
+        deps.recordDecisionLearning?.({ decision: "generalize-spec", round, summary: evalSummary });
       }
     }
     round += 1;

@@ -50,6 +50,14 @@ import { runUnitHybrid, runUnitLlm, type ConductRoundRecord, type ConductUnitDep
 import type { ConductRunState, ConductUnit, UnitOutcome, UnitStateEntry } from "./types.ts";
 import { runScriptHooks } from "../scriptHooks.ts";
 import { writeStopReport, type StopReportInput } from "../stopReport.ts";
+import {
+  ConductLearningWriter,
+  composeDecisionLearning,
+  composeUnitLearning,
+  decisionLearningDedup,
+  unitLearningDedup,
+} from "./learnings.ts";
+import type { appendLearning } from "../memory.ts";
 
 /**
  * `src/conduct/run.ts` — the conductor core: decompose a prompt into units, then per
@@ -154,6 +162,12 @@ export interface ConductDeps {
   /** RESUME: worktree reuse/recreate seam (default real `ensureUnitWorktree`). Used only by
    *  `resumeConduct` to reuse-or-recreate each unit's stable-named worktree before re-entry. */
   ensureUnitWorktreeFn?: typeof ensureUnitWorktree;
+
+  // ── U3 cross-unit learning seam ──
+  /** The `appendLearning` used by the coordinator's ONE serialized learning writer at every unit
+   *  terminal + pivot/generalize-spec decision. Default: the real `src/memory.ts` append (best-effort,
+   *  capped). Injected in tests so a rejection / capture can be asserted without touching real memory. */
+  appendLearningFn?: typeof appendLearning;
 
   // ── U2 script-hook fire-point seam ──
   /** The `runScriptHooks` (U1) invocation used at every conduct fire point (onRunStart/onRunComplete/
@@ -421,6 +435,35 @@ async function finalizeUnit(entry: UnitStateEntry, f: UnitFinalization, rc: Unit
   }
 }
 
+/** The unit's final parent-safe verdict summary from a deterministic `RunUnitResult` (final verdict, or
+ *  the last round's evaluator) — for composing its terminal memory learning. Never holdout-bearing. */
+function finalSummaryOf(r: RunUnitResult): ParentSummary | undefined {
+  return r.cycle?.finalVerdict ?? r.cycle?.rounds.at(-1)?.evaluator;
+}
+
+/**
+ * Emit ONE parent-safe terminal learning for a completed unit, routed through the coordinator's ONE
+ * serialized writer with a file-based `runId+unitId+outcome` dedup guard. Best-effort (never rejects).
+ * Composed ONLY from the entry's harness scalars + the parent-safe `ParentSummary` — no holdout content.
+ */
+function emitTerminalLearning(
+  writer: ConductLearningWriter,
+  runId: string,
+  entry: UnitStateEntry,
+  info: { rounds: number; summary?: ParentSummary; error?: string },
+): Promise<void> {
+  const learning = composeUnitLearning({
+    runId,
+    unitId: entry.id,
+    title: entry.title,
+    outcome: entry.outcome,
+    rounds: info.rounds,
+    ...(info.summary ? { summary: info.summary } : {}),
+    ...(info.error ? { error: info.error } : {}),
+  });
+  return writer.write(learning, unitLearningDedup({ runId, unitId: entry.id, outcome: entry.outcome }));
+}
+
 /**
  * Run the full conduct flow. Pure over its injected deps (no live model / spawn / network when a
  * fake `runRole` + `runSessionFn` are supplied). Returns the final state; `run.json` is also
@@ -539,6 +582,14 @@ export async function runConduct(
   const seqRef = { n: 0 };
   const brain = await buildConductBrain(ctx, opts, deps, runDir);
 
+  // The ONE coordinator-owned serialized learning writer for this run: every completion route + every
+  // pivot/generalize-spec decision publishes through it, so concurrent completions never interleave a
+  // write to `.sparra/memory.md`. Best-effort; holdout-safe by construction (parent-safe fields only).
+  const learningWriter = new ConductLearningWriter(
+    ctx.paths,
+    deps.appendLearningFn ? { appendLearningFn: deps.appendLearningFn } : {},
+  );
+
   if (opts.brain) {
     // 3b/4b/5b. Conductor-brain path: hybrid/llm per-unit orchestration + the decision engine.
     // `runBrainUnits` fires `onUnitStart`/`onUnitComplete` itself, per unit, at the top/bottom of
@@ -559,6 +610,7 @@ export async function runConduct(
       trackedRunRole,
       brain,
       seqRef,
+      learningWriter,
     });
     if (brainResult.gateAborted) {
       state.status = "error";
@@ -613,10 +665,25 @@ export async function runConduct(
           ? { outcome: "error", error: res.error, rounds: [] }
           : finalizationFromRunUnitResult(res.result);
       await finalizeUnit(entry, finalization, finalizeCtx);
+      // Terminal learning routed through the ONE writer like every other terminal (after finalizeUnit
+      // so the entry's outcome is settled): a scheduler-level exception carries the error message as
+      // the failure reason (no `blocking` available); a completed unit its final summary.
+      if ("error" in res) {
+        await emitTerminalLearning(learningWriter, runId, entry, { rounds: 0, error: res.error });
+      } else {
+        const summary = finalSummaryOf(res.result);
+        await emitTerminalLearning(learningWriter, runId, entry, {
+          rounds: res.result.cycle?.rounds.length ?? 0,
+          ...(summary ? { summary } : {}),
+        });
+      }
       // onUnitComplete (best-effort): fired after each result is finalized/errored.
       await runHooks("onUnitComplete", { unit: res.id, runId, runDir, status: entry?.outcome }, ctx.config);
     }
   }
+
+  // Drain the learning queue so every terminal/decision line is durable before the run finalizes.
+  await learningWriter.drain();
 
   // 5. Opt-in commit/merge landing (no flags → this block never runs; behavior is byte-identical to
   // today). `--merge` implies `--commit`. Serialized across accepted units.
@@ -760,6 +827,13 @@ export async function resumeConduct(
   // decision (and everything after) is strictly above it. The RECOVERED ANSWER is then APPLIED to
   // control flow — a recovered `abandon`/`accept` STOPS the unit here (marked + excluded from
   // re-entry below) rather than being resolved-then-ignored while generation proceeds anyway.
+  // The ONE serialized learning writer for this resume (a fresh process). Every terminal — recovered
+  // below, and each re-run unit inside `runBrainUnits` — publishes through it.
+  const learningWriter = new ConductLearningWriter(
+    ctx.paths,
+    deps.appendLearningFn ? { appendLearningFn: deps.appendLearningFn } : {},
+  );
+
   const recovered = await recoverParkedDecisions(ctx, runOpts, deps, { runDir, state, writer, brain, seqRef });
 
   // Apply recovered terminal decisions to resumed units (only ones actually re-entering — a leftover
@@ -773,6 +847,8 @@ export async function resumeConduct(
     delete entry.error;
     stopped.add(unitId);
     info(`conduct --resume: unit ${unitId} ${outcome} by recovered parked decision — not re-run.`);
+    // Recovered terminal (accept/abandon) — no evaluator summary here, so the line carries `score n/a`.
+    await emitTerminalLearning(learningWriter, runId, entry, { rounds: 0 });
   }
   await writer.write(state);
 
@@ -841,8 +917,10 @@ export async function resumeConduct(
     trackedRunRole,
     brain,
     seqRef,
+    learningWriter,
     resumePlanByUnit,
   });
+  await learningWriter.drain();
   if (brainResult.gateAborted) {
     state.status = "error";
     await writer.write(state);
@@ -1141,6 +1219,9 @@ interface BrainRunParams {
   brain: Brain | undefined;
   /** Run-global monotonic decision sequence (shared with the landing phase so seq never collides). */
   seqRef: { n: number };
+  /** The run's ONE serialized learning writer (shared with the deterministic + recovered-terminal
+   *  routes) — every unit terminal + pivot/generalize-spec decision publishes through it. */
+  learningWriter: ConductLearningWriter;
   /** RESUME only: per-unit re-entry plan (skip-contract state + seed verdict paths). Absent on a
    *  fresh run — every unit negotiates from scratch and seeds no prior verdicts. */
   resumePlanByUnit?: Map<string, UnitResumePlan>;
@@ -1340,6 +1421,23 @@ async function runBrainUnits(
       return gp;
     };
 
+    // Publish a pivot / generalize-spec judgment decision through the ONE serialized writer, keyed on
+    // runId+unitId+decision+round (stable across replay/resume). Fire-and-forget onto the queue (best-
+    // effort); the run's `drain()` awaits it before finalizing.
+    const recordDecisionLearning = (d: { decision: "pivot" | "generalize-spec"; round: number; summary?: ParentSummary }): void => {
+      const learning = composeDecisionLearning({
+        runId: p.runId,
+        unitId: unit.id,
+        decision: d.decision,
+        round: d.round,
+        ...(d.summary ? { summary: d.summary } : {}),
+      });
+      void p.learningWriter.write(
+        learning,
+        decisionLearningDedup({ runId: p.runId, unitId: unit.id, decision: d.decision, round: d.round }),
+      );
+    };
+
     const unitDeps: ConductUnitDeps = {
       runRole: p.trackedRunRole,
       specs,
@@ -1352,6 +1450,7 @@ async function runBrainUnits(
       recordRound: (input) => {
         void recordAttemptLedger(conductAttemptLedgerPath(p.runDir, unit.id), input);
       },
+      recordDecisionLearning,
       writeGeneralizedBrief,
       recoveryCaps: {
         role: ctx.config.roles.generator,
@@ -1381,12 +1480,19 @@ async function runBrainUnits(
       const result =
         opts.brain === "llm" ? await runUnitLlm(unitDeps) : await runUnitHybrid(unitDeps);
       await finalizeUnit(entry, finalizationFromConductResult(result), finalizeCtx);
+      // Terminal learning (after finalizeUnit so the entry's outcome/score are settled):
+      // accepted → PASSED; any other outcome → a non-PASSED kind with its reason.
+      await emitTerminalLearning(p.learningWriter, p.runId, entry, {
+        rounds: result.rounds.length,
+        ...(result.finalVerdict ? { summary: result.finalVerdict } : {}),
+      });
     } catch (e) {
       await finalizeUnit(
         entry,
         { outcome: "error", error: e instanceof Error ? e.message : String(e), rounds: [] },
         finalizeCtx,
       );
+      await emitTerminalLearning(p.learningWriter, p.runId, entry, { rounds: 0, error: entry.error ?? String(e) });
     }
     await p.writer.write(p.state);
     // onUnitComplete (best-effort): fired once this unit's outcome is finalized (accepted/error/…).

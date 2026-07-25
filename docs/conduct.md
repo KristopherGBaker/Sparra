@@ -329,6 +329,33 @@ sparra conduct --list [--json]
 Both forms are **promptless** and **read-only**: a prompt alongside either, or `--status` combined with
 `--list`/`--resume`/`--decide`, is a **usage error** (exit 1, no side effects, no spend).
 
+## Cross-unit learning (project memory)
+
+`conduct` publishes cross-unit learnings into the project's shared `.sparra/memory.md` — the same
+append-only, capped store the build phase writes and every role-run reads at the start of its work as
+**PRIOR LEARNINGS**. This is *collaboration without shared context*: workers never see each other's
+transcripts, but a completed unit's **outcome** is published in a bounded, structured form a
+later-started unit — and every future build/conduct run against the project — reads back.
+
+- **One line per unit terminal outcome** (accepted / exhausted / abandoned / error /
+  grade-not-independent / inconclusive), carrying the **run id, unit id, title, exact outcome token,
+  rounds used, and score** (`weightedTotal`, or a literal `score n/a` when no evaluator score exists);
+  a non-accepted line also carries the **dominant failure reason** (from the parent-safe `blocking`
+  summaries, or the error message). `accepted` → a `PASSED` learning; a budget/limit terminal →
+  `BUDGET_EXCEEDED`; other non-accepted outcomes → `FAILED` / `NOTE` — never `PASSED`.
+- **A line for pivot and generalize-spec decisions** taken at judgment points (a discarded change may
+  still teach) — pivots use the `PIVOT` kind, generalize-spec a `NOTE` marked `generalize-spec`. Plain
+  `revise` rounds, escalations, and recovery chatter append **nothing** — memory is capped and injected
+  into every role prompt, so noise has a real cost.
+- **Holdout-safe by construction:** every line is composed **only** from a `ParentSummary` (the
+  parent-safe allowlist) plus harness scalars — never `resultText`, a raw verdict, or a trace.
+- **Serialized + best-effort:** all appends route through **one** coordinator-owned writer in the
+  conduct process (concurrent unit completions never interleave a write), obey the existing memory caps
+  (no new cap surface), and a memory-write failure never affects a unit/run outcome. A file-based
+  dedup guard (keyed on run id + unit id + outcome, or + decision) keeps a resume from double-appending.
+- **No new injection plumbing:** later role-runs pick these lines up through the **unchanged**
+  PRIOR LEARNINGS reader — the same path a build item reads.
+
 ## Artifacts layout
 
 Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source of truth):

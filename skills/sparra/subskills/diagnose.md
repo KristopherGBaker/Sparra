@@ -83,7 +83,10 @@ From the project root (the dir you ran `sparra` in):
    when tools fail before project code loads (cache/user dirs, headless app setup, writable HOME).
 
 7. **`.sparra/memory.md`** — durable cross-run learnings (pivots, budget halts, pass/fail, measure).
-   Roles read this each item; a wrong/misleading entry can bias new work.
+   Roles read this each item; a wrong/misleading entry can bias new work. Written by the **build** and
+   **reflect** phases **and** by `sparra conduct` — which appends one holdout-safe line per unit terminal
+   outcome (accepted/exhausted/abandoned/error/grade-not-independent/inconclusive) plus pivot/
+   generalize-spec decisions, so later units and future runs learn from a conduct run's outcomes.
 
 8. **`CHANGELOG.md`** / **`.sparra/proposals/`** — recorded deviations (in-scope) and
    out-of-scope ideas logged for the human (brownfield).

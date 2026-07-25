@@ -238,6 +238,24 @@ export function distillTechnique(input: TechniqueInput): string | null {
 }
 
 /**
+ * True when memory.md already holds a live entry that contains EVERY one of `needles` (a generic,
+ * file-based dedup guard). The conduct cross-unit learning writer keys on this — e.g. `runId + unitId +
+ * outcome` for a terminal line — so a resume replaying the same transition never double-appends, while
+ * two different runs (distinct runId needle) always both append. File-based (not a flag), so it holds
+ * across a crash. Reads the live entries (post-summary-collapse). Never throws — an unreadable/absent
+ * file returns `false` (treat as "not present", let the append proceed).
+ */
+export async function hasLearningLine(paths: Paths, needles: string[]): Promise<boolean> {
+  try {
+    const text = await readText(paths.memory);
+    if (!text) return false;
+    return splitMemory(text).entries.some((ln) => needles.every((n) => ln.includes(n)));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when memory.md already holds a distilled-technique `note` (a `TECHNIQUE_MARKER` line) for
  * `item`. The terminal distillation uses this as its once-only idempotency guard — keyed on the
  * MARKER, not `hasLearning(item, "note")`, which would collide with the other `note` learnings and
