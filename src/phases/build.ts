@@ -20,6 +20,7 @@ import type { Deviation } from "../build/generate.ts";
 import { updateStreaksAndDecide, updateAssertionStreaks, assertionsToEscalate } from "../build/pivot.ts";
 import { maybeResetWorkspace } from "../build/reset.ts";
 import { recordAttempt, attemptFailure, renderPriorAttempts, APPROACH_CAP } from "../build/attempts.ts";
+import { buildAttemptLedgerPath, recordAttemptLedger, type AttemptKind, type AttemptInput } from "../build/attemptLedger.ts";
 import { renderPatchFeedback, renderPivotFeedback, renderBlockedFeedback } from "../build/feedback.ts";
 import { budgetExceeded, tokensExceeded, remainingBudget, costUsdOrZero, zeroCostTokenFallbackExceeded } from "../build/budget.ts";
 import { waitForLimit } from "../build/autoRestart.ts";
@@ -575,6 +576,32 @@ export async function cmdBuild(
     }
     b.build.currentItem = item.id;
 
+    // ── Attempt ledger (U1): the durable, append-only per-round record of what was tried, what it
+    // scored, and what the loop decided AFTER grading — with reconstructable lineage (patch descends
+    // from the prior round; a pivot opens a new descent line). Holdout-safe by construction: every
+    // `reason` is built only from already-redacted Verdict fields / redacted feedback. Best-effort
+    // telemetry (never a gate) persisted to `.sparra/runs/<runId>/<itemId>/attempts.jsonl`.
+    const attemptLedgerFile = buildAttemptLedgerPath(ctx.paths, runId, item.id);
+    let roundKind: AttemptKind = "initial";
+    let roundEval: { score: number; verdict: "pass" | "fail"; verdictPath: string } | undefined;
+    // The last round produced NO behavioral signal (exercise blocked OR every assertion un-run) — so a
+    // terminal record is `terminal-inconclusive` (null verdict), not a behavioral `terminal-fail`.
+    let lastRoundInconclusive = false;
+    const ledger = (input: AttemptInput) => recordAttemptLedger(attemptLedgerFile, input);
+    const ledgerEvaluated = (decision: AttemptInput["decision"], reason: string) =>
+      ledger({
+        round: st.round,
+        kind: roundKind,
+        decision,
+        score: roundEval?.score ?? null,
+        verdict: roundEval?.verdict ?? null,
+        verdictPath: roundEval?.verdictPath ?? null,
+        reason,
+        cost: st.costUsd ?? null,
+      });
+    const ledgerUnevaluated = (decision: AttemptInput["decision"], reason: string) =>
+      ledger({ round: st.round, kind: roundKind, decision, score: null, verdict: null, verdictPath: null, reason, cost: st.costUsd ?? null });
+
     step(`${item.id}: ${item.title}`);
     if (!depsSatisfied(item, b.build.items)) {
       warn(`${item.id} has unmet dependencies (${item.dependsOn.join(", ")}); attempting anyway.`);
@@ -611,6 +638,19 @@ export async function cmdBuild(
         kind: "budget_exceeded",
         detail: `halted (${phase}) at ${which}; spent $${(st.costUsd ?? 0).toFixed(3)} / ${st.tokensUsed ?? 0} tokens; best score ${st.lastScore ?? 0} in ${st.round} round(s).`,
         at: stamp(),
+      });
+      // Ledger the budget halt: a POST-evaluation halt carries this round's score/verdict (roundEval
+      // set); a PRE-evaluation halt (halt after generation, before grading) carries null eval fields —
+      // never fabricated. Dedup on round leaves any already-recorded outcome for this round untouched.
+      await ledger({
+        round: st.round,
+        kind: roundKind,
+        decision: "budget-halt",
+        score: roundEval?.score ?? null,
+        verdict: roundEval?.verdict ?? null,
+        verdictPath: roundEval?.verdictPath ?? null,
+        reason: `budget halt (${phase}): ${which}`,
+        cost: st.costUsd ?? null,
       });
     };
 
@@ -664,9 +704,25 @@ export async function cmdBuild(
         break;
       }
       b.build.paused = undefined;
+      // The paused round was already evaluated (its verdict is what the human is deciding on); record
+      // the human decision against it. `kind` is a heuristic on resume (the pre-pause generation kind
+      // isn't durably tracked): initial for round 1, else patch.
+      const pausedKind: AttemptKind = st.round <= 1 ? "initial" : "patch";
+      const pausedVerdictPath = st.lastEvaluatedRound ? ctx.paths.verdictFile(item.id, st.round, runId) : null;
+      const humanWasFail = (st.lastScore ?? 0) < ctx.config.rubric.passThreshold;
       if (res.decision === "abandon") {
         st.status = "abandoned";
         await d.appendLearning(ctx.paths, { item: item.id, kind: "note", detail: `human-abandoned round ${st.round} (score ${st.lastScore ?? 0}).`, at: stamp() });
+        await ledger({
+          round: st.round,
+          kind: pausedKind,
+          decision: "human-abandon",
+          score: st.lastScore ?? null,
+          verdict: humanWasFail ? "fail" : "pass",
+          verdictPath: pausedVerdictPath,
+          reason: `human abandoned round ${st.round} (score ${st.lastScore ?? 0})`,
+          cost: st.costUsd ?? null,
+        });
         await ctx.store.save();
         warn(`${item.id}: abandoned by human.`);
         if (await maybeItemGate(item, st)) { pausedRun = true; break; }
@@ -682,6 +738,16 @@ export async function cmdBuild(
             throw new Error(`${item.id}: your accept reason contains holdout content — remove it (holdout is evaluator-only).`);
           }
         }
+        await ledger({
+          round: st.round,
+          kind: pausedKind,
+          decision: "human-accept",
+          score: st.lastScore ?? null,
+          verdict: wasFail ? "fail" : "pass",
+          verdictPath: pausedVerdictPath,
+          reason: wasFail ? `human accept OVERRIDING evaluator (round ${st.round}): ${res.reason.trim()}` : `human accept (round ${st.round}, score ${st.lastScore ?? 0})`,
+          cost: st.costUsd ?? null,
+        });
         const accepted = await acceptItem(st, item, (st.lastDeviations ?? []) as Deviation[], wasFail ? res.reason.trim() : undefined);
         if (accepted === "commit-paused") { pausedRun = true; break; }
         if (await maybeItemGate(item, st)) { pausedRun = true; break; }
@@ -706,10 +772,30 @@ export async function cmdBuild(
         fresh = true;
         feedback = res.feedback || "GAN PIVOT: discard the previous approach and rebuild from scratch with a fundamentally different design.";
         warn(`${item.id}: human pivot → rebuilding from scratch (pivot #${st.pivots}).`);
+        await ledger({
+          round: st.round,
+          kind: pausedKind,
+          decision: "pivot",
+          score: st.lastScore ?? null,
+          verdict: humanWasFail ? "fail" : "pass",
+          verdictPath: pausedVerdictPath,
+          reason: `human pivot after round ${st.round} (score ${st.lastScore ?? 0})`,
+          cost: st.costUsd ?? null,
+        });
       } else {
         fresh = false;
         feedback = res.feedback;
         detail(`${item.id}: human continue → patching for round ${st.round + 1}.`);
+        await ledger({
+          round: st.round,
+          kind: pausedKind,
+          decision: "continue-patch",
+          score: st.lastScore ?? null,
+          verdict: humanWasFail ? "fail" : "pass",
+          verdictPath: pausedVerdictPath,
+          reason: `human continue after round ${st.round} (score ${st.lastScore ?? 0})`,
+          cost: st.costUsd ?? null,
+        });
       }
     }
 
@@ -719,6 +805,12 @@ export async function cmdBuild(
         break;
       }
       st.round += 1;
+      // Attempt-ledger bookkeeping for THIS round: `kind` describes the generation about to run
+      // (round 1 = initial; a fresh/pivot restart = pivot; otherwise a patch). `roundEval` is cleared
+      // and only re-set once the evaluator has graded, so a pre-evaluation halt records null eval.
+      roundKind = st.round === 1 ? "initial" : fresh ? "pivot" : "patch";
+      roundEval = undefined;
+      lastRoundInconclusive = false;
       // Quality escalation (per-item, one-way): once the item has accumulated
       // `build.escalateAfterRounds` FAILED rounds, switch its generator to the role's configured
       // `escalation` for the remaining rounds. Quality-triggered — distinct from the
@@ -871,6 +963,15 @@ export async function cmdBuild(
             at: stamp(),
           });
           await ctx.store.save();
+          // Ledger the preflight bounce as a continue-patch with NO evaluation fields (the evaluator
+          // never ran this round) and a reason derived from the redacted failing-command output.
+          await ledgerUnevaluated(
+            "continue-patch",
+            redactHoldout(
+              `preflight bounce: ${preflightFails.map((o) => renderExecOutcome(o)).join(" ")}`,
+              await readHoldout(ctx),
+            ),
+          );
           if (st.round < ctx.config.build.maxRoundsPerItem) {
             // Frame it as a PREFLIGHT failure (not an evaluator verdict) and route it through the
             // SAME holdout-redaction wall the evaluator feedback uses.
@@ -913,6 +1014,13 @@ export async function cmdBuild(
       st.preflightBounces = 0;
 
       st.lastScore = ev.verdict.weightedTotal;
+      // This round now has a grade — record it for the ledger so a post-evaluation budget halt / a
+      // demotion / a terminal record can carry the round's real score + verdict + artifact path.
+      roundEval = {
+        score: ev.verdict.weightedTotal,
+        verdict: ev.verdict.verdict === "pass" ? "pass" : "fail",
+        verdictPath: ctx.paths.verdictFile(item.id, st.round, runId),
+      };
 
       // (Q7c) Calibration gap: pure claims-vs-verdict diff. Omitted/empty assertionsClaimed is a
       // complete no-op. The gap carries assertion ids + count ONLY (never evaluator/holdout text),
@@ -1001,6 +1109,12 @@ export async function cmdBuild(
             break;
           }
           if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+          // Ledger: the evaluator PASSED but the rerun gate demoted — recorded as continue-patch (NOT
+          // accept), carrying the evaluator's own pass verdict + score.
+          await ledgerEvaluated(
+            "continue-patch",
+            `rerun gate demote: ${rerunBad.map((r) => `${r.command} (${r.status})`).join("; ")}`,
+          );
           // Blocking feedback through the existing (holdout-redacted) feedback path.
           feedback = redactHoldout(
             `Your implementation passed the evaluator, but the HARNESS RERUN GATE demoted it: the contract's verify commands must be harness-runnable and exit 0 on EVERY rerun (${reruns}×). Fix the flakiness/failure/unsafe command — rerun-to-green does not pass:\n${lines.join("\n")}`,
@@ -1079,6 +1193,12 @@ export async function cmdBuild(
                 break;
               }
               if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+              // Ledger: the primary evaluator PASSED but the independent second opinion demoted —
+              // recorded as continue-patch (NOT accept), carrying the primary's pass verdict + score.
+              await ledgerEvaluated(
+                "continue-patch",
+                `second-opinion disagreement: ${ev2.verdict.blocking.slice(0, 3).join("; ") || ev2.verdict.notes}`,
+              );
               // Merge the second opinion's blocking into the next round's feedback, marked as a
               // second-opinion disagreement. evaluateItem already redacted the verdict, but re-run
               // every line (and the whole message) through the holdout wall per the feedback contract.
@@ -1127,6 +1247,12 @@ export async function cmdBuild(
           // anywhere in here lose nothing and double nothing — a resume completes the rest.
           const memoryDetail = `accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}); $${(st.costUsd ?? 0).toFixed(3)} spent${st.pivots ? `, ${st.pivots} pivot(s)` : ""}.`;
           const res = await finishAcceptance(st, item, gen.deviations, { memoryDetail });
+          // Ledger the accept: this round's real score/verdict/path + a reason drawn from the (already
+          // redacted) verdict notes/blocking so the record's reason is provenance-bearing, not hardcoded.
+          await ledgerEvaluated(
+            "accept",
+            `accepted (score ${ev.verdict.weightedTotal}${review ? ", code review clean" : ""}) — ${ev.verdict.blocking.slice(0, 3).join("; ") || ev.verdict.notes || "clean"}`,
+          );
           ok(`${item.id} accepted in round ${st.round} (score ${ev.verdict.weightedTotal}${review ? " + code review" : ""}). cumulative $${totalCost.toFixed(3)}`);
           if (res === "paused") {
             // ── Interactive: COMMIT gate — accepted (passed); the commit is deferred to the human. ──
@@ -1151,6 +1277,8 @@ export async function cmdBuild(
           break;
         }
         if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        // Ledger: exercise passed but code review blocked — continue-patch (NOT accept).
+        await ledgerEvaluated("continue-patch", `code review blocked: ${review.blocking.slice(0, 3).join("; ")}`);
         feedback = `Your implementation runs and meets the contract, but an independent CODE REVIEW found blocking issues that must be fixed before it's accepted:\n${review.blocking.map((b) => `- ${b}`).join("\n")}`;
         fresh = false;
         continue;
@@ -1160,6 +1288,7 @@ export async function cmdBuild(
       // advance the fail streak, keep the score — just surface it and steer toward exercisability.
       const blocked = ev.verdict.exerciseStatus === "blocked";
       lastBlocked = blocked;
+      if (blocked) lastRoundInconclusive = true;
       if (blocked) {
         warn(`${item.id}: exercise BLOCKED in round ${st.round} — could not verify (environment, not the artifact); not a behavioral fail, not pivoting.`);
         await d.appendLearning(ctx.paths, {
@@ -1174,6 +1303,17 @@ export async function cmdBuild(
           break;
         }
         if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        // Ledger: an inconclusive BLOCKED round that continues — no behavioral verdict (null).
+        await ledger({
+          round: st.round,
+          kind: roundKind,
+          decision: "continue-patch",
+          score: roundEval?.score ?? null,
+          verdict: null,
+          verdictPath: roundEval?.verdictPath ?? null,
+          reason: `exercise blocked (inconclusive): ${(ev.verdict.blocking.slice(0, 2).join("; ") || ev.verdict.notes)}`,
+          cost: st.costUsd ?? null,
+        });
         feedback = renderBlockedFeedback(ev.verdict);
         fresh = false;
         continue;
@@ -1183,6 +1323,7 @@ export async function cmdBuild(
         ev.verdict.assertions.length > 0 &&
         ev.verdict.assertions.every((a) => unrunIds.has(a.id));
       if (allUnrun) {
+        lastRoundInconclusive = true;
         warn(`${item.id}: all contract assertions were UN-RUN in round ${st.round} — no behavioral signal; not counting as a failed round or pivoting.`);
         await d.appendLearning(ctx.paths, {
           item: item.id,
@@ -1196,6 +1337,17 @@ export async function cmdBuild(
           break;
         }
         if (st.round >= ctx.config.build.maxRoundsPerItem) break;
+        // Ledger: an inconclusive ALL-UN-RUN round that continues — no behavioral verdict (null).
+        await ledger({
+          round: st.round,
+          kind: roundKind,
+          decision: "continue-patch",
+          score: roundEval?.score ?? null,
+          verdict: null,
+          verdictPath: roundEval?.verdictPath ?? null,
+          reason: `all assertions un-run (inconclusive): ${(ev.verdict.notes || ev.verdict.blocking.join("; "))}`,
+          cost: st.costUsd ?? null,
+        });
         feedback = `The evaluator could not execute any contract assertion in its environment; this is UN-RUN/no-signal, not a behavioral failure.\n${renderPatchFeedback(ev.verdict)}`;
         fresh = false;
         continue;
@@ -1222,6 +1374,12 @@ export async function cmdBuild(
         // NEXT fresh generate renders these as PRIOR ATTEMPTS so it can't repeat the approach.
         recordAttempt(st, { round: st.round, approach: gen.report, failure: attemptFailure(ev.verdict) });
         await ctx.store.save();
+        // Ledger the pivot decision for THIS (patch/initial) round — the NEXT round opens a new
+        // descent line (kind=pivot). Reason from the already-redacted Verdict fields.
+        await ledgerEvaluated(
+          "pivot",
+          `GAN pivot on "${decision.criterion}": ${ev.verdict.blocking.slice(0, 3).join("; ") || ev.verdict.notes}`,
+        );
         fresh = true;
         feedback = renderPivotFeedback(ev.verdict, {
           criterion: decision.criterion ?? "(criterion)",
@@ -1237,6 +1395,11 @@ export async function cmdBuild(
         });
       } else {
         fresh = false;
+        // Ledger the patch-continue decision for THIS round — reason from the redacted Verdict fields.
+        await ledgerEvaluated(
+          "continue-patch",
+          `patch: ${ev.verdict.blocking.slice(0, 3).join("; ") || ev.verdict.notes}`,
+        );
         // Escalation register (between patch and pivot): assertions that have failed the SAME check
         // for `build.assertionEscalateAfter` consecutive rounds get UNCAPPED evidence + a
         // diagnose-first instruction naming them, so a thrashing generator stops patching symptoms.
@@ -1289,6 +1452,20 @@ export async function cmdBuild(
       }
       // Alongside the failed/inconclusive line: the config-gated transferable technique from history.
       await maybeDistillTechnique(st, item, "failed");
+      // Ledger the terminal outcome for the final round: an INCONCLUSIVE (blocked/all-un-run) item
+      // carries no behavioral verdict (null); a genuine behavioral FAIL carries the last grade.
+      await ledger({
+        round: st.round,
+        kind: roundKind,
+        decision: lastRoundInconclusive ? "terminal-inconclusive" : "terminal-fail",
+        score: roundEval?.score ?? st.lastScore ?? null,
+        verdict: lastRoundInconclusive ? null : roundEval?.verdict ?? "fail",
+        verdictPath: roundEval?.verdictPath ?? null,
+        reason: lastRoundInconclusive
+          ? `inconclusive after ${ctx.config.build.maxRoundsPerItem} round(s) — no behavioral signal (blocked / all assertions un-run)`
+          : `did not pass in ${ctx.config.build.maxRoundsPerItem} round(s); best score ${st.lastScore ?? 0}, ${st.pivots} pivot(s)`,
+        cost: st.costUsd ?? null,
+      });
     }
     await ctx.store.save();
 

@@ -50,6 +50,13 @@ From the project root (the dir you ran `sparra` in):
    (blocking vs advisory, with `blockOn`). An item that passes the exercise but isn't accepted
    was blocked here.
 
+   **`.sparra/runs/<run>/<id>/attempts.jsonl`** — the append-only **attempt ledger**: one record per
+   decided round (round, kind initial/patch/pivot, loop `decision`, score/verdict-or-null, redacted
+   reason, cost, and `a<seq>` lineage). Read it to answer *what was tried across rounds and why each
+   was kept or abandoned* without re-reading traces; `sparra status --attempts` renders it compactly.
+   The conduct equivalent is `.sparra/conduct/<run>/<unit>/attempts.jsonl`
+   (`sparra conduct --status <run> --attempts`).
+
 5. **`.sparra/traces/<run>/NN-<role>.md` / `.sparra/traces/role-run-*/NN-role-run-*.md`** —
    full role transcripts as markdown. The most recent file (by mtime) shows current activity.
    Read these when the verdict/contract summary isn't enough — e.g. to see what the generator

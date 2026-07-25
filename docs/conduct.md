@@ -19,7 +19,7 @@ sparra conduct "<prompt>" [--max-units N] [--concurrency N] [--budget <usd>] [--
                           [--brain <hybrid|llm>] [--auto] [--commit] [--merge] [--land] [--push] [--dry-run]
 sparra conduct --decide <runId> <seq> <answer> [--note "…"]
 sparra conduct --resume <runId> [--commit] [--merge] [--land] [--push] [--auto]   # continue a crashed/interrupted run in place
-sparra conduct --status <runId> [--json]                        # read-only projection of one run (zero spend)
+sparra conduct --status <runId> [--attempts] [--json]           # read-only projection of one run (zero spend; --attempts dumps the per-round ledger)
 sparra conduct --list [--json]                                  # read-only list of all runs (zero spend)
 ```
 
@@ -303,17 +303,21 @@ call. Both project **metadata and paths only** out of `run.json` — never a bri
 projection is the exact same allowlist the HTTP bridge exposes, shared from `src/conduct/pending.ts`).
 
 ```bash
-sparra conduct --status <runId> [--json]
+sparra conduct --status <runId> [--attempts] [--json]
 sparra conduct --list [--json]
 ```
 
 - **`--status <runId>`** prints a header (`runId`, `status`, `brain`, decision surface, `createdAt`/
   `updatedAt`, the run's `prompt` truncated to **one line**, a `landedInto` line when the run landed
   with `--land`, and a `pushed` line — ok/failed + note — when `--push` ran this run), then one line
-  **per unit** (id, title, outcome, `score`, `cost`, `branch`, a
-  **short** `committedSha`, and `mergedInto` when the unit landed), and finally any **still-parked
+  **per unit** (id + title + outcome + `score` + `cost` + `branch` + a
+  **short** `committedSha` + `mergedInto` when the unit landed), and finally any **still-parked
   decisions** (each with its `seq`, question, and a
-  `conduct --decide <runId> <seq> <answer>` hint). `--json` emits the `run.json` fields plus a
+  `conduct --decide <runId> <seq> <answer>` hint). **`--attempts`** additionally dumps each unit's
+  per-round **attempt-ledger** lineage — one compact line per record (round, kind
+  initial/patch/pivot, decision, `score`/`verdict`-or-`unevaluated`, reason, `a<seq>`→`a<seq>` lineage
+  ref) read from `.sparra/conduct/<runId>/<unitId>/attempts.jsonl` (metadata only, holdout-safe). The
+  default (flagless) output stays compact. `--json` emits the `run.json` fields plus a
   `pendingDecisions` array (the shared allowlist projection) instead. An **unknown** or **unsafe**
   `runId` exits **1** naming it, with **no** side effects.
 - **`--list`** enumerates the run dirs under `.sparra/conduct/` that pass the `isSafeRunId` guard **and**
@@ -331,7 +335,7 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
 
 ```
 .sparra/conduct/<runId>/
-  run.json                 # units, per-unit outcome/score/cost/branch/worktree/verdictPaths, status
+  run.json                 # units, per-unit outcome + score + cost + branch + worktree + verdictPaths, status
                            #   + committedSha/mergedInto when landed with --commit/--merge
                            #   + landedInto ("<defaultBranch>@<sha>") when landed with --land
                            #   + pushed ({ok, branch?, note}) when --push ran (success, failure, or
@@ -341,6 +345,8 @@ Everything lands under `.sparra/conduct/<runId>/` (the filesystem is the source 
     brief.md               # the unit's brief (written from the decomposition)
     contract.md            # the finalized (agreed or forced) contract
     critique-rN.md         # per-round contract-evaluator critiques (paths threaded, never inlined here)
+    attempts.jsonl         # append-only per-round ATTEMPT LEDGER (round, kind, decision, score/verdict,
+                           #   reason, cost, lineage) — surfaced via `conduct --status <runId> --attempts`
 ```
 
 `run.json` is written **incrementally** and **atomically** (temp-file + rename), so a crashed run is

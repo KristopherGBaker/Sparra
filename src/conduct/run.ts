@@ -41,6 +41,7 @@ import { buildUnitRoleSpecs, resolveSparraBin, type UnitRoleSpecs } from "./role
 import { landAcceptedUnits, type LandingDeps, type LandingGit } from "./merge.ts";
 import type { ConductCommitGit } from "./commit.ts";
 import { ensureUnitWorktree, type EnsureUnitWorktreeResult } from "../build/unitWorktree.ts";
+import { conductAttemptLedgerPath, recordAttemptLedger } from "../build/attemptLedger.ts";
 import type { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { conductRunDir, isSafeRunId, runStatePath, RunStateWriter } from "./runState.ts";
 import { deterministicStrategy, type JudgmentStrategy } from "./strategy.ts";
@@ -1155,6 +1156,11 @@ async function runBrainUnits(
       ...(brain ? { brain } : {}),
       judge,
       noteDecision,
+      // Per-round attempt-ledger sink (U1): append a durable, holdout-safe record to
+      // `.sparra/conduct/<runId>/<unitId>/attempts.jsonl`. Best-effort telemetry — never a gate.
+      recordRound: (input) => {
+        void recordAttemptLedger(conductAttemptLedgerPath(p.runDir, unit.id), input);
+      },
       writeGeneralizedBrief,
       recoveryCaps: {
         role: ctx.config.roles.generator,

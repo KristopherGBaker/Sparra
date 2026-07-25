@@ -13,6 +13,7 @@ import {
   type ResumeConductResult,
 } from "../conduct/run.ts";
 import { conductRunDir, isDirectRunFile, isSafeRunId, runStatePath, safeConductRunDir } from "../conduct/runState.ts";
+import { conductAttemptLedgerPath, readAttemptLedger, renderAttemptLine } from "../build/attemptLedger.ts";
 import { requestExists, writeDecisionAnswer } from "../conduct/decisionEngine.ts";
 import { projectPendingDecisions } from "../conduct/pending.ts";
 import type { ConductRunState, UnitStateEntry } from "../conduct/types.ts";
@@ -418,7 +419,7 @@ export async function cmdConductDecide(
  */
 export type ReportInvocation =
   | { kind: "none" }
-  | { kind: "status"; runId: string; json: boolean }
+  | { kind: "status"; runId: string; json: boolean; attempts: boolean }
   | { kind: "list"; json: boolean }
   | { kind: "usage-error"; error: string };
 
@@ -431,7 +432,7 @@ export type ReportInvocation =
  * are the reporting flags themselves. `resume`/`decide` are deliberately ABSENT so they surface via the
  * specific "cannot be combined with" messages below rather than the generic sweep.
  */
-const REPORT_ALLOWED_FLAGS = new Set(["status", "list", "json", "root"]);
+const REPORT_ALLOWED_FLAGS = new Set(["status", "list", "json", "root", "attempts"]);
 
 /**
  * Classify a conduct invocation for the read-only reporting surfaces. Both `--status`/`--list` are
@@ -460,6 +461,13 @@ export function parseConductReport(positionals: string[], flags: Flags): ReportI
   }
   if (flags["json"] !== undefined && flags["json"] !== true) {
     return { kind: "usage-error", error: "conduct: --json is a boolean flag and takes no value" };
+  }
+  if (flags["attempts"] !== undefined && flags["attempts"] !== true) {
+    return { kind: "usage-error", error: "conduct: --attempts is a boolean flag and takes no value" };
+  }
+  // `--attempts` is a STATUS-only view (a per-unit ledger dump); it is meaningless on `--list`.
+  if (hasList && flags["attempts"] === true) {
+    return { kind: "usage-error", error: "conduct: --attempts applies to --status, not --list" };
   }
 
   // Mutually-exclusive with each other and with the write/continue surfaces.
@@ -495,10 +503,10 @@ export function parseConductReport(positionals: string[], flags: Flags): ReportI
     if (!runId) {
       return {
         kind: "usage-error",
-        error: "conduct --status: a runId is required — usage: sparra conduct --status <runId> [--json]",
+        error: "conduct --status: a runId is required — usage: sparra conduct --status <runId> [--attempts] [--json]",
       };
     }
-    return { kind: "status", runId, json };
+    return { kind: "status", runId, json, attempts: flags["attempts"] === true };
   }
   return { kind: "list", json };
 }
@@ -531,11 +539,14 @@ function readRunState(runDir: string): ConductRunState | undefined {
 }
 
 /**
- * `sparra conduct --status <runId> [--json]` — a ZERO-SPEND, read-only projection of a run's
- * `run.json`: a header (runId/status/brain/decisionSurface/timestamps/one-line prompt), one line per
- * unit (id, title, outcome, score, cost, branch, SHORT committedSha, mergedInto when present), and any
- * still-parked decisions (seq + question + a `conduct --decide <runId> <seq> <answer>` hint). `--json`
- * emits the run.json fields plus a `pendingDecisions` array instead. Output is metadata + paths ONLY —
+ * `sparra conduct --status <runId> [--attempts] [--json]` — a ZERO-SPEND, read-only projection of a
+ * run's `run.json`: a header (runId/status/brain/decisionSurface/timestamps/one-line prompt), one line
+ * per unit (id + title + outcome + score + cost + branch + SHORT committedSha + mergedInto when
+ * present), and any still-parked decisions (seq + question + a `conduct --decide <runId> <seq> <answer>`
+ * hint). `--attempts` additionally dumps each unit's per-round attempt-ledger lineage (round, kind,
+ * decision, score/verdict-or-unevaluated, reason, lineage ref) from
+ * `.sparra/conduct/<runId>/<unitId>/attempts.jsonl`. `--json` emits the run.json fields plus a
+ * `pendingDecisions` array instead. Output is metadata + paths ONLY —
  * never a brief/contract/verdict's contents (holdout-safe by construction: `run.json` is paths-only).
  * Unknown or unsafe runId → exit 1 naming it, with no side effects (validated as an opaque id BEFORE
  * any path is built).
@@ -543,7 +554,7 @@ function readRunState(runDir: string): ConductRunState | undefined {
 export async function cmdConductStatus(
   ctx: Ctx,
   runId: string,
-  opts: { json?: boolean } = {},
+  opts: { json?: boolean; attempts?: boolean } = {},
 ): Promise<void> {
   // Resolve the run dir through the realpath-containment guard: an unsafe id, an unknown run, OR a run
   // dir that escapes `.sparra/conduct/` via a symlink all yield `undefined` → "no such run", exit 1,
@@ -581,6 +592,14 @@ export async function cmdConductStatus(
   detail(`units (${units.length}):`);
   for (const u of units) {
     detail(`  ${unitLine(u)}`);
+    // `--attempts`: the durable per-round lineage ledger for this unit, one compact line per record.
+    // Default output stays compact (no per-round dump unless the flag is set); a missing ledger renders
+    // nothing (not an error). Metadata + paths only — holdout-safe by construction (redacted records).
+    if (opts.attempts) {
+      for (const r of readAttemptLedger(conductAttemptLedgerPath(runDir, u.id))) {
+        detail(`    ${renderAttemptLine(r)}`);
+      }
+    }
   }
   if (pending.length > 0) {
     info(`pending decisions (${pending.length}):`);
@@ -591,7 +610,7 @@ export async function cmdConductStatus(
   }
 }
 
-/** One human-readable line for a unit: id, title, outcome + optional score/cost/branch/short-sha/merge. */
+/** One human-readable line for a unit: id + title + outcome + optional score/cost/branch/short-sha/merge. */
 function unitLine(u: UnitStateEntry): string {
   const parts = [`${u.id} [${u.outcome}] "${u.title}"`];
   if (u.score !== undefined) parts.push(`score=${u.score}`);

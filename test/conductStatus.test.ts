@@ -384,8 +384,8 @@ describe("conduct report — usage matrix (assertion 8, pure classifier, no I/O)
   };
 
   it("valid promptless forms classify to status/list", () => {
-    expect(usage(["conduct", "--status", "run-a"])).toEqual({ kind: "status", runId: "run-a", json: false });
-    expect(usage(["conduct", "--status", "run-a", "--json"])).toEqual({ kind: "status", runId: "run-a", json: true });
+    expect(usage(["conduct", "--status", "run-a"])).toEqual({ kind: "status", runId: "run-a", json: false, attempts: false });
+    expect(usage(["conduct", "--status", "run-a", "--json"])).toEqual({ kind: "status", runId: "run-a", json: true, attempts: false });
     expect(usage(["conduct", "--list"])).toEqual({ kind: "list", json: false });
     expect(usage(["conduct", "--list", "--json"])).toEqual({ kind: "list", json: true });
   });

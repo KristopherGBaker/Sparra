@@ -219,5 +219,29 @@ step adds a fifth durable flag (`measured`) with the same persist-on-flip discip
 **config-gated and excluded from acceptance completeness** — a measure-disabled project completes
 acceptance on the three core effects exactly as before.
 
+## Attempt ledger (per-round history)
+Every **decided round** appends one record to a durable, **append-only** per-item ledger at
+**`.sparra/runs/<run>/<item>/attempts.jsonl`** — so "what was tried, what did it score, and why was it
+kept or abandoned" is inspectable data, not something you reconstruct from traces. Each record carries:
+
+- **`round`**, **`kind`** (`initial` / `patch` / `pivot` — the evaluated *generation*), and the loop's
+  **`decision`** *after* grading (`accept` · `continue-patch` · `pivot` · `budget-halt` ·
+  `terminal-fail` · `terminal-inconclusive` · `human-accept` · `human-abandon`). `kind` ≠ `decision`
+  (a `patch` round can carry `decision: pivot`).
+- **`score`**, **`verdict`** (`pass`/`fail`), and the redacted **`verdictPath`** — all **null** when no
+  evaluation happened this round (a pre-evaluation budget halt, a **preflight bounce**, or a
+  blocked / all-un-run inconclusive round) — never fabricated.
+- a short **redacted `reason`** (≤300 chars, built only from redacted Verdict fields / redacted
+  preflight/halt text — the same holdout wall as feedback), and **`cost`** when available.
+- **reconstructable lineage**: `attemptId` = `a<seq>` (append ordinal), `parentAttemptId`, and an
+  integer `lineage` — a **patch** descends from the prior round (same `lineage`, `parentAttemptId` =
+  prior `attemptId`); a **pivot** opens a **new descent line** (`lineage` = max + 1, `parentAttemptId`
+  = null). Records are never rewritten: a crash/replay of an already-recorded round is a no-op.
+
+It is **always-on** (like verdicts), holdout-safe by construction, and best-effort (a persistence
+hiccup never gates the loop). Inspect it with **`sparra status --attempts`** (a compact per-round line
+per item; the default flagless `sparra status` stays compact). The conduct loop keeps the equivalent
+per-unit ledger — see [conduct.md](conduct.md).
+
 ## Calibration (matching your taste)
 Drop reference files into `.sparra/calibration/good/` (aim for this) and `.sparra/calibration/slop/` (avoid this). With `rubric.useCalibration` on, the evaluator reads them before scoring originality/craft.

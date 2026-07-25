@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Ctx } from "../context.ts";
 import { banner, color, detail, info } from "../util/log.ts";
 import { exists } from "../util/io.ts";
+import { buildAttemptLedgerPath, readAttemptLedger, renderAttemptLine } from "../build/attemptLedger.ts";
 
 const NEXT: Record<string, string> = {
   init: "sparra orient   (existing) or   sparra plan   (greenfield)",
@@ -13,7 +14,7 @@ const NEXT: Record<string, string> = {
   done: "sparra reflect   → improve prompts;  or  sparra batch -k N",
 };
 
-export function cmdStatus(ctx: Ctx): void {
+export function cmdStatus(ctx: Ctx, opts: { attempts?: boolean } = {}): void {
   const s = ctx.store.data;
   banner("sparra status");
   info(`mode:  ${color.bold(s.mode)}`);
@@ -30,6 +31,13 @@ export function cmdStatus(ctx: Ctx): void {
       const mark =
         it.status === "passed" ? color.green("✓") : it.status === "failed" ? color.red("✗") : it.status === "abandoned" ? color.gray("⊘") : color.yellow("•");
       detail(`${mark} ${id} — ${it.status} (round ${it.round}, pivots ${it.pivots}, score ${it.lastScore ?? "-"})`);
+      // `--attempts`: the durable per-round lineage ledger for this item, one compact line per record
+      // (round, kind, lineage ref, score/verdict-or-unevaluated, decision, reason). Default output stays
+      // compact — no per-round dump unless the flag is set. A missing ledger renders nothing (not an error).
+      if (opts.attempts && s.build.runId) {
+        const records = readAttemptLedger(buildAttemptLedgerPath(ctx.paths, s.build.runId, id));
+        for (const r of records) detail(`    ${renderAttemptLine(r)}`);
+      }
     }
     if (s.build.runId) detail(`run: ${s.build.runId}  traces: ${path.relative(ctx.root, ctx.paths.traceDir(s.build.runId))}`);
     if (s.build.branch) detail(`branch: ${s.build.branch}`);

@@ -422,7 +422,10 @@ your-project/
    ├─ reflect/         # proposed prompt diffs awaiting approval (+ a run's upstream.md = harness findings)
    ├─ measure/         # post-accept QA metrics: baseline.json + rendered per-run regression reports
    ├─ traces/<run>/    # full transcripts per role, as markdown
-   ├─ runs/            # batch summaries
+   ├─ runs/            # batch summaries + per-item ATTEMPT LEDGER:
+   │  └─ <run>/<item>/attempts.jsonl  # append-only per-round record (round, kind initial/patch/pivot,
+   │                   #   decision, score/verdict, redacted reason, cost, lineage) — reconstructable
+   │                   #   attempt history; inspect with `sparra status --attempts`
    └─ cycles/<n-slug>/ # archived past plan→build cycles (PLAN, HOLDOUT, contracts, verdicts, …) — see `sparra new` / `sparra finish`
 ```
 
