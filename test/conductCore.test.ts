@@ -823,8 +823,8 @@ describe("conduct brain — hybrid consults the brain at ALL five judgment point
       // passes — proving the recovery re-evaluates the existing artifact through the normal accept path.
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, realContract);
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, realContract);
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") {
