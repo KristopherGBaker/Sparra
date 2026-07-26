@@ -4,14 +4,20 @@
 
 Draft checkable assertions, including existing-project no-regression, conventions, and docs-sync
 clauses. Run `contract-evaluator` with `contractPath` until it emits `CONTRACT: AGREED` or the
-configured rounds end. Round 1 is full-scope; on later rounds pass prior critique files through
-`priorCritiquePaths` (see its own description for path order and readability). Use
-`contract-generator` when a model should draft the contract.
+configured rounds end. Use `contract-generator` when a model should draft the contract.
 
-The runner labels later context with its `RE-CRITIQUE` delta instruction: grade only the change,
-preserve resolved positions unless new evidence is named, and keep style nits non-blocking. On an
-older runner without `priorCritiquePaths`, inline the prior critique text plus that delta
-instruction in the brief; do not ask a forbid role to read a `.sparra/` path itself.
+Both negotiation roles are read-only, so the RUNNER owns the disk. A `contract-generator` run
+PERSISTS its produced contract to `contractPath` itself — a fresh round creates the file, a revision
+round replaces the older draft there, and the persisted path comes back on `outPath`; a run with no
+extractable contract and no file at the path fails loudly. Never hand-copy `resultText` to the path.
+
+Critique threading is SYMMETRIC across both roles. Round 1 is full-scope; on later rounds pass this
+contract's prior critique files through `priorCritiquePaths` to EITHER role — the runner reads them
+(paths under `.sparra/` work) and inlines them ahead of the contract, labeled by round and prefixed
+with its `RE-CRITIQUE` delta instruction: a fresh `contract-evaluator` grades only the change while a
+`contract-generator` revises the standing draft to address it, both preserving resolved positions
+unless new evidence is named and keeping style nits non-blocking. Do not inline critique text into
+the brief or ask a forbid role to read a `.sparra/` path itself.
 
 ## Generate
 

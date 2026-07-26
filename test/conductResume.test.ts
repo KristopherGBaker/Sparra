@@ -149,8 +149,8 @@ function seedRun(ctx: Ctx, runId: string, opts: { status: ConductRunState["statu
 function acceptingRunner(): FakeRunner {
   return fakeRunner(({ kind, spec }) => {
     if (kind === "contract-generator") {
-      fs.writeFileSync(argVal(spec.args, "--out")!, "RENEGOTIATED");
-      return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+      fs.writeFileSync(argVal(spec.args, "--contract")!, "RENEGOTIATED");
+      return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
     }
     if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
     if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -407,7 +407,7 @@ describe("evaluator prior-blocking threading (assertions 8/9/10)", () => {
       let evalRound = 0;
       const evalSpecs: RunRoleSpec[] = [];
       const runner = fakeRunner(({ kind, spec }) => {
-        if (kind === "contract-generator") { fs.writeFileSync(argVal(spec.args, "--out")!, "C"); return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") }); }
+        if (kind === "contract-generator") { fs.writeFileSync(argVal(spec.args, "--contract")!, "C"); return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") }); }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
         evalRound += 1;

@@ -351,15 +351,16 @@ export interface RoleRunRequest {
   /** The agreed contract (inline) or a file to read it from. */
   contract?: string;
   contractPath?: string;
-  /** Re-critique input for a `contract-evaluator` run: paths to this contract's PRIOR-round
-   *  critiques, in round order (Round 1 first). The RUNNER — trusted, unlike the role — reads each
-   *  file itself and inlines it (labeled `--- Round N critique ---`) ahead of the contract text,
-   *  prefixed with the autonomous loop's `RE_CRITIQUE_INSTRUCTION`, so a fresh evaluator session
-   *  grades the DELTA instead of relitigating settled points. Because the runner does the read, a
-   *  path under `.sparra/` works even though the role's own readscope excludes it. A missing/
+  /** Re-critique / revision input for a `contract-evaluator` OR `contract-generator` run: paths to
+   *  this contract's PRIOR-round critiques, in round order (Round 1 first). The RUNNER — trusted,
+   *  unlike the role — reads each file itself and inlines it (labeled `--- Round N critique ---`)
+   *  ahead of the contract text, prefixed with the autonomous loop's `RE_CRITIQUE_INSTRUCTION`, so a
+   *  fresh contract-evaluator grades the DELTA (and a contract-generator REVISES the standing draft
+   *  to address it) instead of relitigating/redrafting from scratch. Because the runner does the
+   *  read, a path under `.sparra/` works even though the role's own readscope excludes it. A missing/
    *  unreadable path FAILS CLOSED (throws, naming the path) — bad conductor input, not a silent
-   *  skip. Meaningful only for `contract-evaluator`; supplying it to any other role kind is a hard
-   *  error. Absent/empty → today's behavior, byte-for-byte. */
+   *  skip. Meaningful only for the two negotiation roles; supplying it to any other role kind is a
+   *  hard error. Absent/empty → today's behavior, byte-for-byte. */
   priorCritiquePaths?: string[];
   /** Re-grade input for an `evaluator` run: paths to the PRIOR round's ACCEPTED blocking items, in
    *  document order (top-most first). The RUNNER — trusted, unlike the role — reads each file itself
@@ -686,25 +687,35 @@ async function conventionsBlock(ctx: Ctx): Promise<string> {
   );
 }
 
+/** The two negotiation roles that accept `priorCritiquePaths` (re-critique / revision rounds): the
+ *  contract-EVALUATOR (verify the delta is resolved) and the contract-GENERATOR (revise the draft to
+ *  address the delta). Both are forbid roles, so an inlined critique is still holdout-wall-checked. */
+function acceptsPriorCritique(kind: RoleKind): boolean {
+  return kind === "contract-evaluator" || kind === "contract-generator";
+}
+
 /**
- * Compose the re-critique block a `contract-evaluator` run inlines AHEAD of the contract text — the
- * interactive analogue of the autonomous loop's re-critique seam (`negotiateContract`). The RUNNER
- * (trusted) reads each prior-round critique itself, so a `.sparra/`-resident path works even though
- * the role's own readscope excludes it; the shared `RE_CRITIQUE_INSTRUCTION` (imported from
- * `contract.ts`, never duplicated) prefixes the critiques, each labeled `--- Round N critique ---`
- * in the GIVEN order (Round 1 = the first path). "" when no paths were supplied (today's behavior).
+ * Compose the re-critique / revision block a `contract-evaluator` OR `contract-generator` run inlines
+ * AHEAD of the contract text — the interactive analogue of the autonomous loop's re-critique seam
+ * (`negotiateContract`). The RUNNER (trusted) reads each prior-round critique itself, so a
+ * `.sparra/`-resident path works even though the role's own readscope excludes it; the shared
+ * `RE_CRITIQUE_INSTRUCTION` (imported from `contract.ts`, never duplicated) prefixes the critiques,
+ * each labeled `--- Round N critique ---` in the GIVEN order (Round 1 = the first path). "" when no
+ * paths were supplied (today's behavior). The contract-generator uses the SAME block so a revision
+ * round REVISES the standing draft against every critique instead of re-drafting from the brief.
  *
  * Fail-closed: a missing/unreadable path throws (naming it) rather than silently dropping a round,
- * and the option is meaningful ONLY for `contract-evaluator` — supplying it to any other role kind
- * is a hard error (bad conductor input). The composed text is later covered by `assertNoHoldoutLeak`
- * (contract-evaluator is a forbid role), so an inlined critique carrying a holdout line still throws.
+ * and the option is meaningful ONLY for the two negotiation roles — supplying it to any other role
+ * kind is a hard error (bad conductor input). The composed text is later covered by
+ * `assertNoHoldoutLeak` (both are forbid roles), so an inlined critique carrying a holdout line
+ * still throws.
  */
 async function resolvePriorCritiqueBlock(req: RoleRunRequest): Promise<string> {
   const paths = req.priorCritiquePaths;
   if (!paths || paths.length === 0) return "";
-  if (req.roleKind !== "contract-evaluator") {
+  if (!acceptsPriorCritique(req.roleKind)) {
     throw new Error(
-      `priorCritiquePaths is only meaningful for a contract-evaluator run (re-critique rounds); rejected for "${req.roleKind}". Drop it.`
+      `priorCritiquePaths is only meaningful for a contract-evaluator (re-critique) or contract-generator (revision) run; rejected for "${req.roleKind}". Drop it.`
     );
   }
   const labeled: string[] = [];
@@ -1294,15 +1305,21 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   const memory = memorySection(await readMemory(ctx.paths));
   const conventions = roleKind === "generator" || roleKind === "reviewer" ? await conventionsBlock(ctx) : "";
 
-  // Prior-round critiques (contract-evaluator re-critique) — read RUNNER-side, inlined AHEAD of the
-  // contract text, labeled by round. Throws on a bad path / wrong role kind before any backend call.
+  // Prior-round critiques (contract-evaluator re-critique / contract-generator revision) — read
+  // RUNNER-side, labeled by round. Throws on a bad path / wrong role kind before any backend call.
   const priorCritiqueBlock = await resolvePriorCritiqueBlock(req);
+  // For a contract-GENERATOR revision, the revision-delta instruction + critiques lead the WHOLE
+  // task — ahead of the brief AND the contract — so the model reads "revise per these critiques"
+  // before the brief it is revising against. Every OTHER role (contract-evaluator included) keeps
+  // the block in its mid-task position (after the brief, ahead of the contract), byte-for-byte.
+  const revisionLead = roleKind === "contract-generator" ? priorCritiqueBlock : "";
+  const midCritiqueBlock = roleKind === "contract-generator" ? "" : priorCritiqueBlock;
   // Prior accepted blockings (evaluator re-grade) — read RUNNER-side, inlined AHEAD of the contract
   // text. Throws on a bad path / wrong role kind before any backend call.
   const priorBlockingBlock = await resolvePriorBlockingBlock(req);
   const contractBlock = contract.trim() ? `\nAGREED CONTRACT (satisfy/grade against THIS):\n---\n${contract.trim()}\n---\n` : "";
   const environment = roleKind === "generator" ? await environmentNotesSection(ctx.paths) : "";
-  let task = `${brief.trim()}\n${environment}${provenanceBlock}${priorCritiqueBlock}${priorBlockingBlock}${contractBlock}${conventions}${memory}`;
+  let task = `${revisionLead}${brief.trim()}\n${environment}${provenanceBlock}${midCritiqueBlock}${priorBlockingBlock}${contractBlock}${conventions}${memory}`;
   if (evaluator) {
     task += holdoutSection(holdoutText); // injected ONLY here
   } else {
@@ -1794,6 +1811,32 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       // re-ask above is what lands in the --out file; identical to `res.resultText` otherwise.
       await writeText(req.out, normalizeOutCapture(result.resultText).text);
       result.outPath = req.out;
+    }
+
+    // Runner-owned contract persistence (contract-generator): the role runs READ-ONLY, so it cannot
+    // write its produced contract itself — the RUNNER persists it to the requested `contractPath`, the
+    // SAME runner-owned pattern as the evaluator's auto-persisted verdict above. A fresh round CREATES
+    // the file; a revision round REPLACES the older contract pre-populated at the path (existence
+    // alone is insufficient — we overwrite with the newly produced text). A run that ends with NO
+    // extractable contract AND no file at the path is a LOUD failure (ok:false + an error naming the
+    // path), never a silent success. The persisted path is reported via the existing `outPath` field.
+    if (roleKind === "contract-generator" && req.contractPath) {
+      const produced = normalizeOutCapture(result.resultText).text.trim();
+      if (produced) {
+        await writeText(req.contractPath, `${produced}\n`);
+        result.outPath = req.contractPath;
+      } else if (exists(req.contractPath)) {
+        // The role produced nothing extractable, but a contract already exists on disk (e.g. the
+        // prior round's draft the runner declined to clobber) — keep it and report the path.
+        result.outPath = req.contractPath;
+      } else {
+        result.ok = false;
+        const msg =
+          `contract-generator produced no extractable contract and no file exists at ${req.contractPath} — ` +
+          `refusing to report a silent success (nothing was persisted).`;
+        if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+        warn(msg);
+      }
     }
   }
 

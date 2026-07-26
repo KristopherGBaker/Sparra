@@ -148,6 +148,15 @@ export function validateRoleRunFlags(
     throw new Error('provide a brief: --brief <file> or --brief-text "…"');
   }
   const req = roleRequestFromFlags(ctx, kind, flags, { briefText, briefPath });
+  // `--prior-critique` is meaningful ONLY for the two negotiation roles — the contract-evaluator
+  // (re-critique) and the contract-generator (revision). Reject it PRE-LAUNCH for any other role so
+  // the mistake surfaces at the parser/validator seam (and the argv-acceptance test), mirroring the
+  // runtime guard in roleRun.ts's `resolvePriorCritiqueBlock`.
+  if (req.priorCritiquePaths?.length && kind !== "contract-evaluator" && kind !== "contract-generator") {
+    throw new Error(
+      `--prior-critique is only meaningful for a contract-evaluator (re-critique) or contract-generator (revision) run; rejected for "${kind}". Drop it.`
+    );
+  }
   // Validate eval-provenance params (and baselineCommand) BEFORE the deferred auto-permission probe
   // (a live SDK query): a bad `--expected-head`/`--eval-base`/`--baseline-command` must abort with
   // ZERO model tokens.
@@ -191,8 +200,9 @@ export function roleRequestFromFlags(
     briefPath: brief.briefPath,
     contractPath: typeof flags.contract === "string" ? (flags.contract as string) : undefined,
     // `--prior-critique <path>` (repeatable) → prior-round critique files for a contract-evaluator
-    // re-critique. The parser collapses a single occurrence to a string and repeats to an array, so
-    // normalize both to a string[] (a bare `--prior-critique` with no value is dropped).
+    // re-critique OR a contract-generator revision. The parser collapses a single occurrence to a
+    // string and repeats to an array, so normalize both to a string[] (a bare `--prior-critique`
+    // with no value is dropped).
     priorCritiquePaths: priorCritiquePathsFromFlag(flags["prior-critique"]),
     // `--prior-blocking <path>` (repeatable) → prior round's accepted blocking files for an
     // evaluator re-grade. Same normalization as --prior-critique.

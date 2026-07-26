@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -15,10 +14,10 @@ import { defaultUnitWorktreeDir } from "../build/unitWorktree.ts";
  * `src/conduct/roleSpecs.ts` — builds the `sparra role run … --json` argv for every conduct role.
  *
  * No model calls: each builder returns a {@link RunRoleSpec} the core `runRole` (or a test fake)
- * executes. Builders are pure argv construction with ONE exception — a contract-generator REVISION
- * round writes a composite revision brief file (the runner rejects `--prior-critique` for
- * contract-generators, so critique text must be inlined; the critique is contract-evaluator output
- * and thus holdout-free by construction). Role identity (`--backend --model --effort`) is sourced from
+ * executes. Builders are PURE argv construction (no FS writes) — a contract-generator REVISION round
+ * threads its prior critiques through `--prior-critique` (paths only) and its rolling draft through
+ * `--contract`, exactly like the contract-evaluator; the runner reads the critiques and persists the
+ * revised contract back to the `--contract` path itself. Role identity (`--backend --model --effort`) is sourced from
  * `ctx.config.roles`; the holdout PATH (never contents) rides only on the evaluator spec; the
  * generator identity rides on the evaluator spec as `--baseline-backend/--baseline-model` so the
  * runner can set `sameModelGrade` and the cross-model gate stays effective through the conduct path.
@@ -111,23 +110,6 @@ function critiquePath(unitDir: string, round: number): string {
   return path.join(unitDir, `critique-r${round}.md`);
 }
 
-/** Write the composite revision brief for a contract-generator REVISION round: the original brief,
- *  a delta instruction, and each prior critique's text (in round order) inlined verbatim. Returns
- *  the new file's path (`<unitDir>/brief.r<round>.md`). Critiques are contract-evaluator output —
- *  holdout-free by construction — so inlining them crosses no wall. */
-function writeRevisionBrief(unitDir: string, briefPath: string, ctx: ContractRoundContext): string {
-  const original = fs.readFileSync(briefPath, "utf8");
-  const critiques = ctx.priorCritiquePaths
-    .map((cp, i) => `### Critique ${i + 1} (${path.basename(cp)})\n\n${fs.readFileSync(cp, "utf8")}`)
-    .join("\n\n");
-  const out = path.join(unitDir, `brief.r${ctx.round}.md`);
-  fs.writeFileSync(
-    out,
-    `${original}\n\n---\nREVISION ROUND ${ctx.round}: revise the existing contract (the file passed via --contract) as a DELTA — address each critique item below, preserve resolved positions unless new evidence is named, and end with a short changelog of what changed.\n\n## Prior critique(s), in order\n\n${critiques}\n`,
-  );
-  return out;
-}
-
 /**
  * Build the four spec functions a conduct unit hands to core `runUnit`: contract-generator +
  * contract-evaluator (the negotiation), then generator + evaluator (the build cycle). Every spec
@@ -160,14 +142,16 @@ export function buildUnitRoleSpecs(p: ConductRoleSpecParams): {
       "contract-generator",
       ...roleFlags(p.roles.contractGenerator),
       "--brief",
-      // The runner rejects --prior-critique for contract-generators (re-critique threading is
-      // contract-evaluator-only), so a REVISION round inlines the critique text into a composite
-      // revision brief — a NEW file per round, the original brief is never edited.
-      ctx.priorCritiquePaths.length > 0
-        ? writeRevisionBrief(p.unitDir, p.briefPath, ctx)
-        : p.briefPath,
-      "--out",
+      p.briefPath,
+      // Pass the rolling contract through the REAL `--contract` seam: on a revision round the runner
+      // reads the standing draft from this path, injects it, and REPLACES it with the revised contract
+      // it persists there (runner-owned persistence) — not just an `--out` copy.
+      "--contract",
       p.contractPath,
+      // A REVISION round threads each prior critique through `--prior-critique` (paths only, never
+      // contents) — the runner reads them and inlines the RE-CRITIQUE/revision block itself, exactly
+      // like the contract-evaluator. Critiques are contract-evaluator output (holdout-free).
+      ...priorCritiqueArgs(ctx.priorCritiquePaths),
       ...capFlags(p.budget, p.maxTurns),
       "--json",
     ]);

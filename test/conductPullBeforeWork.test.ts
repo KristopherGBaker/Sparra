@@ -81,8 +81,8 @@ function fakeRunner(handler: (c: { kind: string; unit?: string; spec: RunRoleSpe
 /** Contract phase: generator drafts, evaluator AGREES (round 1). Undefined for other kinds. */
 function contractAgree(kind: string, spec: RunRoleSpec): ParentSummary | undefined {
   if (kind === "contract-generator") {
-    fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-    return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+    fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+    return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
   }
   if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
   return undefined;

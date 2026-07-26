@@ -112,8 +112,8 @@ describe("conduct core — decompose + wiring", () => {
       expect(fs.existsSync(path.join(dir, ".sparra"))).toBe(false); // no init
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "PROPOSAL");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "PROPOSAL");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -172,8 +172,8 @@ describe("conduct core — multi-unit flow + feedback threading", () => {
       const evalRounds: Record<string, number> = {};
       const runner = fakeRunner(({ kind, unit, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") {
@@ -227,8 +227,8 @@ describe("conduct core — cross-model gate + judgment strategy", () => {
       const mk = (sameModel: boolean) =>
         fakeRunner(({ kind, spec }) => {
           if (kind === "contract-generator") {
-            fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-            return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+            fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+            return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
           }
           if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
           if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -255,8 +255,8 @@ describe("conduct core — cross-model gate + judgment strategy", () => {
       let evalCalls = 0;
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -292,7 +292,9 @@ describe("conduct core — contract negotiation (generator-driven)", () => {
         if (kind === "contract-generator") {
           genRound++;
           genArgsByRound.push(spec.args);
-          const out = argVal(spec.args, "--out")!;
+          // The RUNNER persists the produced contract to the `--contract` path (simulated here) —
+          // a revision round REPLACES the older draft there.
+          const out = argVal(spec.args, "--contract")!;
           fs.writeFileSync(out, `PROPOSAL-ROUND-${genRound}`); // DISTINCT per round
           return summary({ roleKind: "contract-generator", outPath: out });
         }
@@ -311,17 +313,17 @@ describe("conduct core — contract negotiation (generator-driven)", () => {
       expect(u.contractForced).toBe(true);
       // Ran the full round cap of contract-generator drafts.
       expect(genRound).toBe(rounds);
-      // The runner REJECTS --prior-critique for contract-generators ("provide … Drop it.", exit 1
-      // — live-fire regression), so round 2 must NOT carry it; instead it gets a composite
-      // revision brief: a NEW file whose content inlines round 1's critique text + the original.
-      expect(argVals(genArgsByRound[1]!, "--prior-critique")).toHaveLength(0);
+      // The runner now ACCEPTS --prior-critique for contract-generators (symmetric revision
+      // threading), so round 2 threads round 1's critique path — no composite revision brief, the
+      // SAME original brief is reused verbatim across rounds.
+      expect(argVals(genArgsByRound[1]!, "--prior-critique")).toEqual([critiquePaths[0]]);
+      expect(argVals(genArgsByRound[0]!, "--prior-critique")).toHaveLength(0);
       const r1Brief = argVal(genArgsByRound[0]!, "--brief")!;
       const r2Brief = argVal(genArgsByRound[1]!, "--brief")!;
-      expect(r2Brief).not.toBe(r1Brief);
-      const r2Text = fs.readFileSync(r2Brief, "utf8");
-      expect(r2Text).toContain("nope"); // round-1 critique text inlined
-      expect(r2Text).toContain(fs.readFileSync(r1Brief, "utf8").trim()); // original brief preserved
-      // Forced finalization persists the LATEST generated proposal text.
+      expect(r2Brief).toBe(r1Brief); // original brief reused, never rewritten into a composite
+      // The revision round routes the rolling contract through the REAL --contract seam.
+      expect(argVal(genArgsByRound[1]!, "--contract")).toBe(u.contractPath);
+      // Forced finalization persists the LATEST generated proposal text (replaced in place).
       const finalContract = fs.readFileSync(u.contractPath!, "utf8");
       expect(finalContract).toBe(`PROPOSAL-ROUND-${rounds}`);
       // argv used the correct role kinds.
@@ -337,8 +339,8 @@ describe("conduct core — contract negotiation (generator-driven)", () => {
       const ctx = await makeCtx(dir);
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "AGREED-PROP");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "AGREED-PROP");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -360,8 +362,8 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
       const ctx = await makeCtx(dir);
       const runner = fakeRunner(({ kind, unit, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out"), costUsd: 0.01 });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract"), costUsd: 0.01 });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true, costUsd: 0.02 });
         if (kind === "generator") {
@@ -411,8 +413,8 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
           midSnapshot = JSON.parse(rj); // throws here if a torn/partial write was ever observed
         }
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out"), costUsd: 0.01 });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract"), costUsd: 0.01 });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator")
@@ -458,8 +460,8 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
       const runner = fakeRunner(({ kind, spec }) => {
         (specsByKind[kind] ??= []).push(spec);
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -511,8 +513,8 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
         await new Promise((r) => setTimeout(r, 5));
         live--;
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") {
@@ -587,8 +589,8 @@ describe("conduct core — run.json fields, holdout wall, git safety, specs, bin
       const ctx = await makeCtx(dir);
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
         if (kind === "generator") return summary({ roleKind: "generator", filesChanged: 1 });
@@ -675,8 +677,8 @@ function sess(text: string, sessionId = "brain-s"): RunResult {
 /** Contract phase: generator drafts, evaluator AGREES (round 1). Returns undefined for other kinds. */
 function contractAgree(kind: string, spec: RunRoleSpec): ParentSummary | undefined {
   if (kind === "contract-generator") {
-    fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-    return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+    fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+    return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
   }
   if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
   return undefined;
@@ -712,8 +714,8 @@ describe("conduct brain — hybrid consults the brain at ALL five judgment point
       // contract-evaluator NEVER agrees → contract non-convergence judgment point.
       const runner = fakeRunner(({ kind, spec }) => {
         if (kind === "contract-generator") {
-          fs.writeFileSync(argVal(spec.args, "--out")!, "C");
-          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+          fs.writeFileSync(argVal(spec.args, "--contract")!, "C");
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--contract") });
         }
         if (kind === "contract-evaluator") {
           fs.writeFileSync(argVal(spec.args, "--out")!, "no");

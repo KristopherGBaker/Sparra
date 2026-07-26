@@ -428,9 +428,11 @@ reviewer), `--backend`, `--model`, `--effort <low|medium|high|xhigh|max>`, `--br
 `--verify` (a bare boolean — the CLI form of the `allowVerify` MCP arg: lets an **in-place
 generator** auto-run `build.verifyCommands` through the strict allow-hook; no-op on `eval`, which
 runs the evaluator, not a writer), `--prior-critique <file>` (repeatable, contract-evaluator
-only — the CLI form of the `priorCritiquePaths` MCP arg: the RUNNER reads each file and inlines it
-into the re-critique task labeled by round in the order given, so critique files under `.sparra/`
-work even though the role itself can't read them), and `--prior-blocking <file>` (repeatable,
+**or contract-generator** only — the CLI form of the `priorCritiquePaths` MCP arg: the RUNNER reads
+each file and inlines it into the re-critique / revision task labeled by round in the order given,
+so a fresh contract-evaluator grades the delta and a contract-generator revises the standing draft,
+and critique files under `.sparra/` work even though the role itself can't read them; rejected
+pre-launch for any other role), and `--prior-blocking <file>` (repeatable,
 evaluator only — the CLI form of the `priorBlockingPaths` MCP arg: inlines the prior round's
 ACCEPTED blocking items into the evaluator re-grade task, prefixed with the ACCEPTED-BLOCKING
 instruction, so a fresh evaluator sees that the conductor accepted those blockings and does not
@@ -458,6 +460,14 @@ flags, artifact paths, `tokens`, and `costUsd`; `resultDigest` is an optional wo
 `contract-evaluator` the `--contract`), so a config-less `run_role`/`sparra-loop` call needn't hand-write
 one. Writers/proposers (`generator`, `contract-generator`) still require an explicit `--brief`, and
 `contract-evaluator` needs at least a `--contract` (nothing to critique otherwise).
+
+**Runner-owned contract persistence (`contract-generator`).** The contract-generator runs read-only,
+so it cannot write its produced contract itself — the RUNNER persists it to `--contract`/`contractPath`,
+the same runner-owned pattern as the evaluator's auto-persisted verdict. A fresh round CREATES the
+file; a revision round (with `--prior-critique`) reads the older draft from that path, injects it, and
+REPLACES it with the revised contract, reporting the persisted path on `outPath`. A run that ends with
+no extractable contract AND no file at the path fails loudly (`ok:false`, an error naming the path) —
+never a silent success.
 
 When `--out` / `out` captures a non-evaluator role's markdown artifact, the runner writes
 from the first real markdown heading (`#` through `######`) and drops any conversational

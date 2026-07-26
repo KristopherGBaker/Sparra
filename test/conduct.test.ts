@@ -447,8 +447,8 @@ function u2GateCollapseRunner(): { runRole: (s: RunRoleSpec) => Promise<ParentSu
       specs.push(spec);
       const kind = u2KindOf(spec.args);
       if (kind === "contract-generator") {
-        fs.writeFileSync(u2ArgVal(spec.args, "--out")!, "C");
-        return u2Summary({ roleKind: "contract-generator", outPath: u2ArgVal(spec.args, "--out") });
+        fs.writeFileSync(u2ArgVal(spec.args, "--contract")!, "C");
+        return u2Summary({ roleKind: "contract-generator", outPath: u2ArgVal(spec.args, "--contract") });
       }
       if (kind === "contract-evaluator") return u2Summary({ roleKind: "contract-evaluator", contractAgreed: true });
       if (kind === "generator") return u2Summary({ roleKind: "generator", filesChanged: 1 });

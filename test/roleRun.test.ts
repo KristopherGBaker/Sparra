@@ -2705,17 +2705,114 @@ describe("runRole — contract-evaluator prior-critique inlining (U3)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("(#5b) supplying priorCritiquePaths to a NON-contract-evaluator role is a hard error (documented reject)", async () => {
+  it("(#5b) supplying priorCritiquePaths to a role that is NEITHER negotiation role is a hard error (documented reject)", async () => {
     const { ctx, dir } = await makeCtx(false);
     const p1 = path.join(dir, "r1.md");
     fs.writeFileSync(p1, "some prior critique");
     const rec = recorder();
-    for (const kind of ["generator", "evaluator", "reviewer", "contract-generator"] as RoleKind[]) {
+    // contract-generator is now ACCEPTED (revision threading); only generator/evaluator/reviewer reject.
+    for (const kind of ["generator", "evaluator", "reviewer"] as RoleKind[]) {
       await expect(
         runRole({ ctx, roleKind: kind, brief: "do the thing", contract: CONTRACT_TEXT, priorCritiquePaths: [p1], runSessionFn: rec.fn })
-      ).rejects.toThrow(/priorCritiquePaths|contract-evaluator/i);
+      ).rejects.toThrow(/priorCritiquePaths|contract-evaluator|contract-generator/i);
     }
     expect(rec.calls).toHaveLength(0); // rejected before any backend call, for every kind
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── U1: runner-owned contract persistence + contract-generator revision threading ──
+describe("runRole — contract-generator persistence + revision (U1)", () => {
+  const PRODUCED = "# Contract — U-X\n\nAssertion 1: the produced contract sentinel PROD-NEW.";
+
+  it("(#1 fresh) persists the produced contract to an ABSENT contractPath, reports it on outPath (#3)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const contractPath = path.join(dir, "unit", "contract.md");
+    expect(fs.existsSync(contractPath)).toBe(false);
+    const rec = recorder(PRODUCED);
+    const res = await runRole({ ctx, roleKind: "contract-generator", brief: "draft it", contractPath, runSessionFn: rec.fn });
+    expect(fs.existsSync(contractPath)).toBe(true);
+    expect(fs.readFileSync(contractPath, "utf8")).toContain("PROD-NEW");
+    expect(res.outPath).toBe(contractPath); // persisted path on the existing envelope field
+    expect(res.ok).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#1 revision) REPLACES the older contract pre-populated at contractPath (existence alone insufficient)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const contractPath = path.join(dir, "contract.md");
+    fs.writeFileSync(contractPath, "# OLD CONTRACT\n\nOLD-DRAFT-SENTINEL kept from a prior round.");
+    const rec = recorder(PRODUCED);
+    const res = await runRole({ ctx, roleKind: "contract-generator", brief: "revise it", contractPath, runSessionFn: rec.fn });
+    const persisted = fs.readFileSync(contractPath, "utf8");
+    expect(persisted).toContain("PROD-NEW");
+    expect(persisted).not.toContain("OLD-DRAFT-SENTINEL"); // replaced, not appended
+    expect(res.outPath).toBe(contractPath);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#2) NO extractable contract AND no file at the path → LOUD failure (ok:false, error names the path)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const contractPath = path.join(dir, "nope", "contract.md");
+    const rec = recorder(""); // empty completion → nothing extractable
+    const res = await runRole({ ctx, roleKind: "contract-generator", brief: "draft it", contractPath, runSessionFn: rec.fn });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.includes(contractPath))).toBe(true);
+    expect(fs.existsSync(contractPath)).toBe(false); // nothing persisted, no silent success
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4) priorCritiquePaths on a contract-generator: revision-delta instruction + Round 1 then Round 2, ahead of BOTH the brief and the contract", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const BRIEF_TEXT = "REVISE-BRIEF-SENTINEL: draft the done contract.";
+    const CONTRACT_TEXT = "STANDING-DRAFT-SENTINEL: assertion 2 is unsatisfiable.";
+    const contractPath = path.join(dir, "contract.md");
+    fs.writeFileSync(contractPath, CONTRACT_TEXT);
+    const p1 = path.join(dir, "r1.md");
+    const p2 = path.join(dir, "r2.md");
+    const ROUND1 = "GEN-ROUND-ONE-SENTINEL: tighten assertion 3.";
+    const ROUND2 = "GEN-ROUND-TWO-SENTINEL: name a real verify command.";
+    fs.writeFileSync(p1, ROUND1);
+    fs.writeFileSync(p2, ROUND2);
+    const rec = recorder(PRODUCED);
+    await runRole({ ctx, roleKind: "contract-generator", brief: BRIEF_TEXT, contractPath, priorCritiquePaths: [p1, p2], runSessionFn: rec.fn });
+    const prompt = rec.calls[0]!.prompt;
+    const iInstr = prompt.indexOf(RE_CRITIQUE_INSTRUCTION);
+    const iR1Label = prompt.indexOf("--- Round 1 critique ---");
+    const iR1 = prompt.indexOf(ROUND1);
+    const iR2 = prompt.indexOf(ROUND2);
+    const iBrief = prompt.indexOf(BRIEF_TEXT);
+    const iContract = prompt.indexOf(CONTRACT_TEXT);
+    // Explicit full order: instruction -> Round 1 -> Round 2 -> brief -> contract.
+    expect(iInstr).toBeGreaterThanOrEqual(0);
+    expect(iR1Label).toBeGreaterThan(iInstr);
+    expect(iR1).toBeGreaterThan(iR1Label);
+    expect(iR2).toBeGreaterThan(iR1);
+    expect(iBrief).toBeGreaterThan(iR2); // revision block ahead of the BRIEF
+    expect(iContract).toBeGreaterThan(iBrief); // …and the brief ahead of the contract text
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#4 contrast) a FRESH contract-generator run WITHOUT priorCritiquePaths injects no revision block", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const contractPath = path.join(dir, "contract.md");
+    const rec = recorder(PRODUCED);
+    await runRole({ ctx, roleKind: "contract-generator", brief: "draft it", contractPath, runSessionFn: rec.fn });
+    expect(rec.calls[0]!.prompt).not.toContain("RE-CRITIQUE");
+    expect(rec.calls[0]!.prompt).not.toContain("--- Round 1 critique ---");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(#5) a contract-generator prior-critique file carrying a holdout line THROWS sanitized before any backend call", async () => {
+    const { ctx, dir } = await makeCtx(); // holdout present (HOLDOUT_LINE)
+    const contractPath = path.join(dir, "contract.md");
+    const leaky = path.join(dir, "leak.md");
+    fs.writeFileSync(leaky, `Round 1 notes.\n${HOLDOUT_LINE}\n`);
+    const rec = recorder(PRODUCED);
+    await expect(
+      runRole({ ctx, roleKind: "contract-generator", brief: "revise it", contractPath, priorCritiquePaths: [leaky], runSessionFn: rec.fn })
+    ).rejects.toThrow(/holdout/i);
+    expect(rec.calls).toHaveLength(0); // wall fired before the model call
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

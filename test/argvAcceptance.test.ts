@@ -127,6 +127,20 @@ describe("seam — contrasting negatives (assertion 2)", () => {
     expect(res.accepted).toBe(false);
     expect(res.reason).toMatch(/unsupported command/);
   });
+
+  it("ACCEPTS --prior-critique for a contract-generator but REJECTS it for a generator (U1 assertion 6)", () => {
+    const accepted = acceptArgv(
+      ["role", "run", "--kind", "contract-generator", "--brief", briefPath, "--contract", contractPath, "--prior-critique", contractPath, "--json"],
+      { root: tmp },
+    );
+    expect(accepted.accepted, `contract-generator + --prior-critique should be accepted: ${accepted.reason}`).toBe(true);
+    const rejected = acceptArgv(
+      ["role", "run", "--kind", "generator", "--brief", briefPath, "--contract", contractPath, "--prior-critique", contractPath, "--json"],
+      { root: tmp },
+    );
+    expect(rejected.accepted).toBe(false);
+    expect(rejected.reason).toMatch(/prior-critique/);
+  });
 });
 
 describe("seam — eval alias normalization shared with cli.ts (assertion 4)", () => {

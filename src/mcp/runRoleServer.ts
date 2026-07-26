@@ -233,12 +233,17 @@ export async function startRunRoleServer(root: string): Promise<void> {
       roleKind: z.enum(["generator", "contract-generator", "contract-evaluator", "evaluator", "reviewer"]),
       brief: z.string().optional().describe("Task brief (inline). Provide this or briefPath."),
       briefPath: z.string().optional().describe("Path to a task-brief file."),
-      contractPath: z.string().optional().describe("Path to the agreed contract."),
+      contractPath: z
+        .string()
+        .optional()
+        .describe(
+          "Path to the agreed contract. For a contract-generator run the runner PERSISTS the produced contract here itself (the role is read-only): a fresh round creates the file, a revision round replaces the older draft pre-populated at the path, and the persisted path comes back on `outPath`. A run that yields no extractable contract AND no file at the path fails loudly (ok:false)."
+        ),
       priorCritiquePaths: z
         .array(z.string())
         .optional()
         .describe(
-          "contract-evaluator re-critique ONLY: paths to this contract's prior-round critiques, in round order (Round 1 first). The runner reads them itself and inlines them (labeled by round, prefixed with the RE-CRITIQUE instruction) ahead of the contract — so a fresh evaluator grades the DELTA, not from scratch. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to another role is an error."
+          "contract-evaluator re-critique OR contract-generator revision: paths to this contract's prior-round critiques, in round order (Round 1 first). The runner reads them itself and inlines them (labeled by round, prefixed with the RE-CRITIQUE instruction) ahead of the contract — so a fresh contract-evaluator grades the DELTA and a contract-generator REVISES the standing draft against it, neither from scratch. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to any other role is an error."
         ),
       priorBlockingPaths: z
         .array(z.string())
