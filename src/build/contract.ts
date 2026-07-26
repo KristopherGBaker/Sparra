@@ -22,15 +22,20 @@ import { isLinkedWorktree } from "../util/git.ts";
 import { CONTRACT_AGREED_MARKER as AGREED } from "../roleEnvelope.ts";
 const SECTION = "## AGREED CONTRACT";
 
-// Delta instruction injected on round>1 evaluator calls (alongside the prior critiques). A fresh
-// session re-reviews from scratch each round — reversing its own prior positions and promoting
-// nits to blockers — so re-critique rounds must be scoped to the delta: confirm prior points are
-// resolved, don't reopen settled ground, don't reverse without citing the round. The distinctive
-// `RE-CRITIQUE:` marker is asserted by the round-shape tests. Exported so the interactive
-// role-runner (`roleRun.ts`) reuses the EXACT same instruction when a conductor drives re-critique
-// rounds via `priorCritiquePaths` — the two paths must not drift.
+// Delta marker injected on round>1 evaluator calls (alongside the prior critiques). The FULL
+// re-critique rule (grade only the delta, don't reopen settled ground, don't reverse without
+// citing the round, style nits non-blocking) lives ONCE in the contract-evaluator's own system
+// prompt (DEFAULT_PROMPTS["contract-evaluator"] in `src/prompts.ts`, "on a RE-CRITIQUE round…") —
+// that prompt is loaded into this SAME session (see `roleSystemPrompt`/`evalSystem` above and
+// `roleRun.ts`'s `roleSystemPrompt` call composed with `resolvePriorCritiqueBlock`'s task text), so
+// restating the rule here would be a same-session duplicate. This instruction therefore carries
+// only the SESSION-SPECIFIC context the prompt can't know statically: that this round IS a
+// re-critique and where the labeled prior critiques are. The distinctive `RE-CRITIQUE:` marker is
+// asserted by the round-shape tests. Exported so the interactive role-runner (`roleRun.ts`) reuses
+// the EXACT same instruction when a conductor drives re-critique rounds via `priorCritiquePaths` —
+// the two paths must not drift.
 export const RE_CRITIQUE_INSTRUCTION =
-  `RE-CRITIQUE: this is a revision of a contract you already critiqued (your prior critiques are below, labeled by round). Verify each prior point is resolved; do NOT raise new points outside the changed text unless correctness-critical; do NOT reverse a position you took in a prior round unless you name the round and why; style/conciseness nits are non-blocking on re-critique.`;
+  `RE-CRITIQUE: this is a revision of a contract you already critiqued — apply the re-critique rule from your instructions. Prior critiques are below, labeled by round.`;
 
 // Accepted-blocking instruction injected on re-grade artifact evaluator rounds. The conductor
 // ACCEPTED these blockings from a prior round (including any out-of-scope carve-out); a fresh

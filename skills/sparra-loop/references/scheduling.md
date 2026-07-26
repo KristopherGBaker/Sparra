@@ -33,5 +33,5 @@ unit worktree `ub`, and contract evaluation ready launches all three: evaluator
 Persistent generator worktrees are distinct from evaluator throwaway snapshots; their isolation
 and teardown behavior is covered by `test/unitWorktree.test.ts` and `test/evalWorktree.test.ts`.
 Reuse the same unit name across generator rounds. On both accept and abandon, call
-`remove_unit_worktree(name=…)` or `sparra role rm-worktree --name <name>`; without `force`,
-teardown refuses a dirty tree or an unmerged branch.
+`remove_unit_worktree(name=…)` or `sparra role rm-worktree --name <name>` (see its own description
+for the default dirty-tree/unmerged-branch refusal and the `force` override).

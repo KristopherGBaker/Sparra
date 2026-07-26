@@ -471,7 +471,8 @@ describe("negotiateContract — delta-critique protocol on re-critique rounds", 
     return { calls, fn };
   }
   const clean: CommandExecutor = async (_ws, cmd) => ({ ran: true, command: cmd, exitCode: 0, stdout: "", stderr: "", timedOut: false });
-  const evalPrompts = (calls: RunSessionParams[]) => calls.filter((c) => c.role === "contract-evaluator").map((c) => c.prompt);
+  const evalCalls = (calls: RunSessionParams[]) => calls.filter((c) => c.role === "contract-evaluator");
+  const evalPrompts = (calls: RunSessionParams[]) => evalCalls(calls).map((c) => c.prompt);
 
   it("round>1 evaluator prompts accumulate ALL prior critiques labeled by round + the RE-CRITIQUE marker; round 1 has neither (assertions 1, 2)", async () => {
     const { ctx, root, wt } = await makeCtx();
@@ -515,17 +516,32 @@ describe("negotiateContract — delta-critique protocol on re-critique rounds", 
     fs.rmSync(wt, { recursive: true, force: true });
   });
 
-  it("the RE-CRITIQUE instruction states all four delta rules (assertion 4)", async () => {
+  it("the ASSEMBLED round>2 contract-evaluator session states all four delta rules exactly ONCE, in the systemPrompt — the injected RE-CRITIQUE marker carries only session-specific context, not the restated rule (assertion 4; single-layer guidance sweep)", async () => {
     const { ctx, root, wt } = await makeCtx();
     const session = scripted([plain("v1"), plain("v2")], ["needs work", "CONTRACT: AGREED"]);
     await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, clean);
-    const p2 = evalPrompts(session.calls)[1]!;
+    const call2 = evalCalls(session.calls)[1]!;
+    const system = call2.systemPrompt ?? "";
+    const p2 = call2.prompt;
+    // The marker + session-specific context (this IS a re-critique; prior critiques follow) still
+    // rides in the injected task text — that part is NOT duplicated by the static system prompt.
     expect(p2).toMatch(/RE-CRITIQUE:/);
-    expect(p2).toMatch(/each prior point is resolved/i); // prior-points-resolved check
-    expect(p2).toMatch(/new points outside the changed text/i); // no new points outside changed text…
-    expect(p2).toMatch(/correctness-critical/i); // …unless correctness-critical
-    expect(p2).toMatch(/reverse a position[^]*name the round/i); // no reversal without naming the round
-    expect(p2).toMatch(/style\/conciseness nits are non-blocking/i); // style nits non-blocking on re-critique
+    expect(p2).toMatch(/prior critiques are below, labeled by round/i);
+    // The four delta RULES themselves live ONCE, in the contract-evaluator's system prompt (the
+    // single authoritative home — DEFAULT_PROMPTS["contract-evaluator"] in src/prompts.ts) — not
+    // restated in the per-round injected instruction (src/build/contract.ts RE_CRITIQUE_INSTRUCTION).
+    expect(system).toMatch(/grade only the delta/i);
+    expect(system).toMatch(/confirm each prior point resolved/i);
+    expect(system).toMatch(/raise nothing new outside the changed text/i);
+    expect(system).toMatch(/correctness-critical/i);
+    expect(system).toMatch(/never reverse a prior-round position without naming/i);
+    expect(system).toMatch(/style\/conciseness nits as non-blocking/i);
+    // Removed duplicate: the OLD injected instruction's verbose restatement of the same rules must
+    // NOT appear in the per-round task text (it would be a same-session duplicate of the system
+    // prompt above).
+    expect(p2).not.toMatch(/do NOT raise new points outside the changed text/i);
+    expect(p2).not.toMatch(/do NOT reverse a position you took in a prior round/i);
+    expect(p2).not.toMatch(/style\/conciseness nits are non-blocking on re-critique/i);
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(wt, { recursive: true, force: true });
   });

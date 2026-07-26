@@ -4,8 +4,8 @@
 
 Draft checkable assertions, including existing-project no-regression, conventions, and docs-sync
 clauses. Run `contract-evaluator` with `contractPath` until it emits `CONTRACT: AGREED` or the
-configured rounds end. Round 1 is full-scope. On later rounds pass prior critique files in order
-through `priorCritiquePaths`; the trusted runner may read `.sparra/` paths. Use
+configured rounds end. Round 1 is full-scope; on later rounds pass prior critique files through
+`priorCritiquePaths` (see its own description for path order and readability). Use
 `contract-generator` when a model should draft the contract.
 
 The runner labels later context with its `RE-CRITIQUE` delta instruction: grade only the change,
