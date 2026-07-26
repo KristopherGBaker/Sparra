@@ -636,6 +636,22 @@ function hasVerdictShape(text: string): boolean {
   return !!extractJsonWhere(text, isVerdict);
 }
 
+/**
+ * The launch-time ENOENT shape: the backend died at spawn/launch because the workspace/cwd did not
+ * exist, producing NO model output. Detected NARROWLY so an infra failure isn't confused with a
+ * genuine model-output failure: the run must have FAILED (`!ok`), carry NO provider `limitHit`,
+ * have produced NO result text (the session never got far enough to answer), and name an
+ * ENOENT / os-error-2 / "No such file or directory" cause in its errors. When true, the runner
+ * surfaces an infra-shaped result (errors, NO verdict) so the conductor re-runs the environment
+ * instead of treating a synthetic weightedTotal-0 verdict as "the artifact failed". A session that
+ * RAN (any output) — garbage/no-JSON text, or an empty completion from a non-ENOENT cause — is NOT
+ * matched, keeping today's forced-fail verdict.
+ */
+function isLaunchEnoent(res: Pick<RunResult, "ok" | "resultText" | "limitHit" | "errors">): boolean {
+  if (res.ok || res.limitHit || res.resultText.trim()) return false;
+  return res.errors.some((e) => /ENOENT|os error 2|No such file or directory/i.test(e));
+}
+
 /** Recompute the weighted rubric total ourselves (don't trust model arithmetic). */
 function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
   const w = ctx.config.rubric.weights;
@@ -1269,6 +1285,52 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
 }
 
 /**
+ * The ONE normalization seam for the worktree'd role-run paths: resolve the SELECTED source dir
+ * (`req.workspace ?? ctx.root`) to an ABSOLUTE path against the process cwd, and verify it EXISTS —
+ * BEFORE any worktree is created or session launched. Both worktree wrappers funnel through here so
+ * a RELATIVE `workspace` resolves IDENTICALLY for every downstream consumer: the snapshot dir
+ * (`defaultTempWorktreeDir`), git's `-C <src>` semantics in `addWipWorktree`/`ensureUnitWorktree`,
+ * dep provisioning (`depSourceDir`), the delegate's `workspace`, and teardown. Left relative, the
+ * snapshot dir would resolve against the SOURCE dir (git `-C`) while the delegate `workspace`
+ * resolves against the process cwd — the mismatch that nested the snapshot inside the source tree,
+ * launched the backend at a nonexistent cwd (ENOENT), and leaked the snapshot on teardown.
+ *
+ * A nonexistent workspace fails LOUDLY here — naming both the raw input and the RESOLVED absolute
+ * path — so the failure is a clear pre-launch error, never a synthetic graded verdict. An ALREADY
+ * absolute, normalized workspace is byte-identical (`path.resolve` is a no-op on it), so the
+ * absolute-path workaround keeps working unchanged.
+ */
+function resolveWorktreeSource(req: RoleRunRequest, existsFn: (p: string) => boolean = exists): string {
+  const raw = req.workspace ?? req.ctx.root;
+  const src = path.resolve(raw);
+  if (!existsFn(src)) {
+    throw new Error(
+      `worktree run: workspace does not exist — "${raw}" resolved to ${src} (against process cwd ${process.cwd()}). ` +
+        `Aborting BEFORE any worktree is created or session launched — point --workspace at an existing checkout.`
+    );
+  }
+  return src;
+}
+
+/**
+ * Guard against the nested-snapshot shape: the computed snapshot dir must NEVER live inside the
+ * source tree. A nested snapshot poisons the WIP snapshot of every subsequent run (the untracked
+ * snapshot dir travels into the next snapshot), so refuse BEFORE creating it — throwing and naming
+ * BOTH paths. Cheap containment check that closes the whole class regardless of which
+ * `worktreeDirFn` computed the path.
+ */
+function assertSnapshotNotUnderSource(src: string, wtDir: string): void {
+  const rel = path.relative(src, path.resolve(wtDir));
+  const nested = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  if (nested) {
+    throw new Error(
+      `worktree run: refusing to create the snapshot worktree INSIDE the source tree — snapshot ${wtDir} is under source ${src}. ` +
+        `A nested snapshot poisons the WIP snapshot of every subsequent run; this indicates a relative-path resolution bug.`
+    );
+  }
+}
+
+/**
  * `unitWorktree`: run the GENERATOR in a PERSISTENT, named per-unit worktree (U-W). Validates the
  * role/flag combination and the name, ensures the worktree (create-on-first-use, reuse thereafter —
  * see `ensureUnitWorktree`), then delegates to the ordinary in-place run with the worktree as its
@@ -1291,7 +1353,10 @@ export async function runRoleInUnitWorktree(req: RoleRunRequest): Promise<RoleRu
       `unitWorktree (persistent generator tree) and useWorktree (throwaway judge snapshot) are mutually exclusive — pick one.`
     );
   }
-  const src = req.workspace ?? ctx.root;
+  // Shared normalization seam: resolve the selected source to an ABSOLUTE path (fail loudly if it
+  // doesn't exist) BEFORE `ensureUnitWorktree` so the persistent tree, its sibling dir, dep
+  // provisioning (`depSourceDir = src`), and the delegate workspace all see the SAME absolute path.
+  const src = resolveWorktreeSource(req);
   const wt = await ensureUnitWorktree(ctx, name, src, req.unitWorktreeDeps);
   info(
     `role-run-${roleKind}: ${wt.created ? "created" : "reusing"} persistent unit worktree "${name}" at ${wt.dir} on ${wt.branch}`
@@ -1336,7 +1401,11 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
         `a generator gets its build worktree via the full loop (\`sparra build\`). Drop --worktree, or use --workspace to point at an existing checkout.`
     );
   }
-  const src = req.workspace ?? ctx.root; // the SELECTED source dir — never blindly ctx.root
+  // Shared normalization seam: resolve the SELECTED source dir to an ABSOLUTE path (fail loudly if
+  // it doesn't exist) BEFORE provenance/baseline/snapshot — so `defaultTempWorktreeDir`, git's
+  // `-C <src>` add, dep provisioning (`depSourceDir`), the delegate `workspace`, and teardown all
+  // see the SAME absolute path (a relative workspace otherwise resolved differently per consumer).
+  const src = resolveWorktreeSource(req); // the SELECTED source dir (absolute) — never blindly ctx.root
   // Eval provenance is verified/scoped against the SOURCE tree BEFORE the snapshot: a HEAD mismatch
   // or bad base ref aborts here — no worktree is created, no session launches. The resolved text is
   // threaded to the in-place delegate (params stripped) so it isn't recomputed against the detached
@@ -1352,6 +1421,9 @@ export async function runRoleInTempWorktree(req: RoleRunRequest, deps: TempWorkt
   }
   const provenanceText = resolveEvalProvenance(req, src, { onWorktree: true }, req.provenanceDeps, baselineManifest);
   const wtDir = (deps.worktreeDirFn ?? defaultTempWorktreeDir)(src);
+  // Nested-snapshot guard: never create the snapshot INSIDE the source tree (poisons every
+  // subsequent run's WIP snapshot) — refuse BEFORE any worktree add, whatever computed `wtDir`.
+  assertSnapshotNotUnderSource(src, wtDir);
   const added = (deps.addWorktreeFn ?? addWipWorktree)(src, wtDir);
   if (!added.ok) throw new Error(`--worktree: could not snapshot ${src} into a temp worktree: ${added.out.trim()}`);
   info(`role-run-${roleKind}: temp eval worktree ${wtDir} (WIP snapshot of ${src})`);
@@ -1851,6 +1923,23 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // that neutralized a .sparra prose reference); absent for an in-place run / no-.sparra brief.
     remapCount: remapCount > 0 ? remapCount : undefined,
   };
+
+  // Infra ≠ verdict: a LAUNCH-time ENOENT (the backend died before ANY model output because the
+  // workspace/cwd did not exist) is an ENVIRONMENT failure, not a graded artifact failure. Surface
+  // it as an infra-shaped result (errors + NO verdict) — even for the evaluator, which otherwise
+  // forces a synthetic weightedTotal-0 "no verdict parsed" FAIL — so the conductor can tell
+  // "re-run, environment broken" from "artifact failed". Short-circuits BEFORE the classification
+  // matrix, the report/verdict re-asks (a dead session can't be resumed), and verdict parsing.
+  // Tightly scoped via `isLaunchEnoent`: only the no-output ENOENT shape reroutes here.
+  if (isLaunchEnoent(res)) {
+    result.ok = false;
+    const msg =
+      `role-run-${roleKind}: the backend died at launch — the workspace/cwd did not exist (ENOENT / os error 2), ` +
+      `producing no model output. This is an INFRASTRUCTURE failure, NOT a graded verdict; re-run with a valid workspace.`;
+    if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
+    warn(msg);
+    return result; // NO verdict — the conductor distinguishes infra from a real artifact failure.
+  }
 
   // Classification — a strict top-down matrix, FIRST match wins; at most ONE of the flags
   // (limitHit / hitMaxTurns / emptyCompletion / noProgress) is set. An empty completion is

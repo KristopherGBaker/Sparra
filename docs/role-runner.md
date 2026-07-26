@@ -149,6 +149,20 @@ eval/review/critique in a **temporary, throwaway linked git worktree** snapshott
 WIP — the same machinery as `sparra eval --worktree` (`keepWorktree` retains it), torn down after the
 run.
 
+**Relative `workspace` paths are resolved to an absolute path** for the snapshot. Both worktree'd
+wrappers (`--worktree` and `--unit-worktree`) funnel the selected source (`workspace`, else the
+project root) through **one normalization seam** that `path.resolve`s it against the process cwd
+before anything else, so the snapshot dir, the `git -C <src>` worktree add, dep provisioning, the
+delegate's cwd, and teardown all see the **same absolute path** — a relative `workspace` (e.g.
+`./unit-u1`) no longer resolves differently per consumer (which previously nested the snapshot inside
+the source tree, launched the backend at a nonexistent cwd, and leaked the snapshot on teardown). An
+**absolute** `workspace` is byte-identical (the resolve is a no-op). A **nonexistent** `workspace`
+fails loudly **before** any worktree is created or session launched, naming the resolved absolute
+path; and the computed snapshot dir is refused if it would land **inside** the source tree. A
+launch-time `ENOENT` (the backend dying at a missing cwd with no model output) is surfaced as an
+**infrastructure error with no verdict**, so the conductor can tell "re-run, environment broken" from
+"artifact failed" instead of recording a synthetic weightedTotal-0 FAIL.
+
 `unitWorktree: <name>` is the **generator (writer)** counterpart and is a *different* thing: a
 **PERSISTENT, named per-unit worktree** on a `sparra/<name>` branch, created on first use (deps
 provisioned) and **reused across that unit's rounds** so the generator's WIP survives round N → N+1.
