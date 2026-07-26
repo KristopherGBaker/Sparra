@@ -803,6 +803,74 @@ describe("conduct brain — hybrid consults the brain at ALL five judgment point
     }
   });
 
+  it("contract-defect signature at exhaustion — strikes the poisoned assertion in a REAL contract and re-evaluates to acceptance (assertions 3, 4, 5, 7)", async () => {
+    const dir = tmpdir();
+    try {
+      const ctx = await makeCtx(dir);
+      ctx.config.build.maxRoundsPerItem = 2;
+      ctx.config.pivot.N = 5; // never pivot within 2 rounds → reach exhaustion with the same failing id
+      // A REAL numbered contract with assertions #1..#3; the poisoned one (#3) must actually resolve.
+      const realContract =
+        "# Contract — unit-001\n\n## Assertions\n\n" +
+        "1. The artifact does the first thing.\n" +
+        "2. The artifact does the second thing.\n" +
+        "3. The artifact satisfies a criterion unsatisfiable in the judge environment.\n";
+      let genCalls = 0;
+      let evalCalls = 0;
+      // Evaluator fails ONLY #3 every build round (the signature); the post-strike RE-EVAL (call 3)
+      // passes — proving the recovery re-evaluates the existing artifact through the normal accept path.
+      const runner = fakeRunner(({ kind, spec }) => {
+        if (kind === "contract-generator") {
+          fs.writeFileSync(argVal(spec.args, "--out")!, realContract);
+          return summary({ roleKind: "contract-generator", outPath: argVal(spec.args, "--out") });
+        }
+        if (kind === "contract-evaluator") return summary({ roleKind: "contract-evaluator", contractAgreed: true });
+        if (kind === "generator") {
+          genCalls += 1;
+          return summary({ roleKind: "generator", filesChanged: 1 });
+        }
+        evalCalls += 1;
+        if (evalCalls >= 3) return summary({ roleKind: "evaluator", verdict: "pass", weightedTotal: 90, sameModelGrade: false });
+        return summary({
+          roleKind: "evaluator",
+          verdict: "fail",
+          weightedTotal: 40,
+          blocking: ["assertion 3 failed"],
+          failedAssertions: [{ id: 3, pass: false, evidence: "unsatisfiable in judge env" }],
+          sameModelGrade: false,
+        });
+      });
+      const res = await runConduct(ctx, AUTO(), { runRole: runner.runRole, runSessionFn: decomposerFn(1), brain: null });
+      const unit = res.state.units[0]!;
+
+      // The re-eval reached the NORMAL accept path.
+      expect(unit.outcome).toBe("accepted");
+      // Exactly two generator calls (one per build round) — the strike re-eval ran NO generator.
+      expect(genCalls).toBe(2);
+      expect(evalCalls).toBe(3); // 2 build rounds + 1 post-strike re-eval
+
+      const cd = (unit.decisions ?? []).find((d) => d.kind === "contract-defect");
+      expect(cd).toBeTruthy();
+      expect(cd!.options).toEqual(["strike-assertion", "pivot", "abandon"]);
+      expect(cd!.default).toBe("strike-assertion");
+      expect(cd!.chosen).toBe("strike-assertion");
+      expect(cd!.reason).toContain("#3"); // the poisoned assertion id is recorded in the decision log
+      // A generic unit-exhausted decision is NOT surfaced when the signature holds.
+      expect((unit.decisions ?? []).some((d) => d.kind === "unit-exhausted")).toBe(false);
+
+      // The strike surgically DEACTIVATED #3 in the on-disk contract; #1/#2 remain live and unchanged.
+      const contract = fs.readFileSync(path.join(res.runDir, "unit-001", "contract.md"), "utf8");
+      expect(contract).toContain("\n1. The artifact does the first thing.\n");
+      expect(contract).toContain("\n2. The artifact does the second thing.\n");
+      expect(contract).not.toContain("\n3. The artifact satisfies a criterion unsatisfiable in the judge environment.\n");
+      expect(contract).toContain("~~[STRUCK #3 — contract-defect; INERT, do NOT grade]~~ 3. The artifact satisfies a criterion");
+      expect(contract).toContain("## Struck assertions (contract-defect)");
+      expect(contract).toContain("#3 — STRUCK");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("negative — a clean, non-borderline PASS never consults the brain", async () => {
     const dir = tmpdir();
     try {

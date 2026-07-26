@@ -46,7 +46,7 @@ import type { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { conductRunDir, isSafeRunId, runStatePath, RunStateWriter } from "./runState.ts";
 import { deterministicStrategy, type JudgmentStrategy } from "./strategy.ts";
 import type { RecoveryCaps } from "./recovery.ts";
-import { runUnitHybrid, runUnitLlm, type ConductRoundRecord, type ConductUnitDeps, type ConductUnitResult } from "./unitRunner.ts";
+import { runUnitHybrid, runUnitLlm, strikeContractAssertion, type ConductRoundRecord, type ConductUnitDeps, type ConductUnitResult } from "./unitRunner.ts";
 import type { ConductRunState, ConductUnit, UnitOutcome, UnitStateEntry } from "./types.ts";
 import { runScriptHooks } from "../scriptHooks.ts";
 import { writeStopReport, type StopReportInput } from "../stopReport.ts";
@@ -1337,6 +1337,13 @@ async function runBrainUnits(
       });
       // AUDIT TRAIL step 1: append the PENDING record + persist run.json + phase-log the request BEFORE
       // waiting for an answer, so an in-flight (parked) decision is durably inspectable.
+      // Contract-defect: persist the poisoned (persistently-failing) assertion id(s) as the record's
+      // `reason` — the concrete signature the strike-assertion decision acts on — so the run's decision
+      // log carries which assertion was struck. Ids only (holdout-safe); the final round isolates one.
+      const contractDefectReason =
+        kind === "contract-defect" && summary?.failedAssertions && summary.failedAssertions.length > 0
+          ? `poisoned assertion(s) #${summary.failedAssertions.map((a) => a.id).join(", #")}`
+          : undefined;
       const pending: DecisionRecord = {
         seq: s,
         unit: unit.id,
@@ -1346,6 +1353,7 @@ async function runBrainUnits(
         default: req.default,
         status: "pending",
         requestedAt,
+        ...(contractDefectReason ? { reason: contractDefectReason } : {}),
       };
       record(pending);
       await p.writer.write(p.state);
@@ -1452,6 +1460,11 @@ async function runBrainUnits(
       },
       recordDecisionLearning,
       writeGeneralizedBrief,
+      // Contract-defect / strike-assertion recovery: surgically strike the poisoned assertion in the
+      // unit's on-disk contract, preserving its id + rationale as an inert annotation, so the follow-up
+      // re-evaluation no longer grades an unsatisfiable criterion.
+      strikeAssertion: (assertionId, rationale) =>
+        strikeContractAssertion(entry.contractPath ?? path.join(unitDir, "contract.md"), assertionId, rationale),
       recoveryCaps: {
         role: ctx.config.roles.generator,
         ...(opts.budget !== undefined ? { budget: opts.budget } : {}),

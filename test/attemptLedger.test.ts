@@ -387,6 +387,7 @@ function conductDeps(over: Partial<ConductUnitDeps>, sink: AttemptInput[]): Cond
     judge: async () => ({ answer: "abandon", source: "auto-deterministic", via: "auto" }),
     noteDecision: () => {},
     writeGeneralizedBrief: async () => "/g.md",
+    strikeAssertion: async () => {},
     recordRound: (input) => { sink.push(input); },
     recoveryCaps: { role },
     generatorRole: role,

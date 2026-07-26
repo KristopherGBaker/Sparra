@@ -1,3 +1,5 @@
+import fsp from "node:fs/promises";
+
 import {
   negotiateContract,
   type ContractNegotiationResult,
@@ -72,6 +74,11 @@ export interface ConductUnitDeps {
   recordRound?: (input: AttemptInput) => void;
   /** Write a GENERALIZED-spec brief revision as a NEW file (never edits history); returns its path. */
   writeGeneralizedBrief: (round: number) => Promise<string>;
+  /** Contract-defect / strike-assertion recovery: rewrite the unit's contract to STRIKE (deactivate)
+   *  the poisoned assertion, preserving its id + rationale as an INERT annotation — never a gradeable
+   *  assertion. Called ONLY when the contract-defect signature holds; the strike is immediately followed
+   *  by a re-EVALUATION of the existing artifact (no generate round). */
+  strikeAssertion: (assertionId: number, rationale: string) => Promise<void>;
   /** Publish a pivot / generalize-spec judgment decision to project memory (best-effort, serialized
    *  through the coordinator's one writer). Called at the ACTUAL decision call sites so a discarded
    *  change still teaches a later unit/run. Absent → no decision learning (deterministic path / tests). */
@@ -130,6 +137,201 @@ async function recover(
  *  contract role — the persisted contract file is reused in place. */
 function resumedContract(r: { agreed: boolean; forced: boolean }): ContractNegotiationResult {
   return { agreed: r.agreed, rounds: [], critiquePaths: [] };
+}
+
+/** The failing assertion ids reported by one round's evaluator (already redacted to genuine failures
+ *  by the runner — un-run/no-signal assertions are excluded upstream). */
+function failedAssertionIds(summary: ParentSummary): number[] {
+  return (summary.failedAssertions ?? []).map((a) => a.id);
+}
+
+/**
+ * DETECT the contract-defect signature over a unit's completed rounds. The signature: the SAME
+ * assertion id appears in the failed set of EVERY completed round AND the final round has NO OTHER
+ * failing assertion (its failed set is exactly that one id). Returns the poisoned id when it holds,
+ * else `undefined`.
+ *
+ * Deliberately does NOT require a singleton failure in every round — an earlier round may fail the
+ * poisoned id PLUS others; only the FINAL round must isolate it. Any round where the id is absent from
+ * the failed set (it passed there, or that round failed a different id) breaks the signature, as does a
+ * final round with two or more distinct failing ids.
+ */
+export function detectContractDefect(rounds: ConductRoundRecord[]): number | undefined {
+  if (rounds.length === 0) return undefined;
+  const finalIds = failedAssertionIds(rounds[rounds.length - 1]!.evaluator);
+  // The final round must isolate exactly ONE failing assertion (no OTHER failing ids).
+  if (finalIds.length !== 1) return undefined;
+  const poisoned = finalIds[0]!;
+  // That id must appear in the failed set of EVERY completed round.
+  for (const r of rounds) {
+    if (!failedAssertionIds(r.evaluator).includes(poisoned)) return undefined;
+  }
+  return poisoned;
+}
+
+/** The rationale recorded on a contract-defect strike (audit trail + inert contract annotation). */
+function contractDefectRationale(assertionId: number): string {
+  return (
+    `contract-defect signature: assertion #${assertionId} failed every round while all other ` +
+    `assertions passed — the artifact is correct and the assertion is the defect`
+  );
+}
+
+/**
+ * STRIKE-ASSERTION recovery: deactivate the poisoned assertion in the contract, then re-EVALUATE the
+ * EXISTING artifact (NEVER a generate round) and route the re-eval through the NORMAL acceptance
+ * decision — a passing re-eval reaches the accept path, a failing one the normal failure handling.
+ */
+async function strikeAndReEvaluate(
+  deps: ConductUnitDeps,
+  args: { poisonedId: number; round: number; priorVerdictPaths: string[]; rounds: ConductRoundRecord[] },
+): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary; rounds: ConductRoundRecord[] }> {
+  const { poisonedId, round, rounds } = args;
+  // 1. Strike the poisoned assertion (surgical: only it becomes inert; every other assertion unchanged).
+  await deps.strikeAssertion(poisonedId, contractDefectRationale(poisonedId));
+  // 2. Re-run EVALUATION of the existing artifact — NO generator invocation.
+  const ctx = { round, feedback: [] as string[], pivoting: false, priorVerdictPaths: [...args.priorVerdictPaths] };
+  const evalSpec = deps.specs.evaluatorSpec(ctx);
+  const evalRaw = await deps.runRole(evalSpec);
+  const evalRec = await recover(deps, evalSpec, evalRaw);
+  if (evalRec.abandon) {
+    rounds.push({ round, evaluator: evalRec.summary, pivoted: false });
+    deps.recordRound?.(roundAttempt(round, false, "abandon", evalRec.summary, "strike-assertion re-eval recovery abandoned at judgment point"));
+    return { outcome: "abandoned", finalVerdict: evalRec.summary, rounds };
+  }
+  const evalSummary = evalRec.summary;
+  rounds.push({ round, evaluator: evalSummary, pivoted: false });
+  // 3. Route the re-eval through the NORMAL acceptance decision.
+  const decision = deps.decide(
+    evalSummary,
+    { consecutiveFailures: 0 },
+    { pivotAfterFailures: deps.pivotAfterFailures, requireCrossModel: deps.requireCrossModel },
+  );
+  if (decision === "accept") {
+    deps.recordRound?.(roundAttempt(round, false, "accept", evalSummary, "strike-assertion re-eval accepted"));
+    return { outcome: "accepted", finalVerdict: evalSummary, rounds };
+  }
+  if (decision === "grade-not-independent") {
+    deps.recordRound?.(roundAttempt(round, false, "terminal-inconclusive", evalSummary, "strike-assertion re-eval: cross-model gate collapse"));
+    return { outcome: "grade-not-independent", finalVerdict: evalSummary, rounds };
+  }
+  if (decision === "inconclusive") {
+    deps.recordRound?.(roundAttempt(round, false, "terminal-inconclusive", evalSummary, "strike-assertion re-eval inconclusive (no behavioral signal)"));
+    return { outcome: "inconclusive", finalVerdict: evalSummary, rounds };
+  }
+  // revise / pivot — the re-eval still fails: normal failure handling leaves the unit exhausted.
+  deps.recordRound?.(roundAttempt(round, false, "terminal-fail", evalSummary, "strike-assertion re-eval still failing"));
+  return { outcome: "exhausted", finalVerdict: evalSummary, rounds };
+}
+
+/** A markdown line that OPENS a contract assertion item, with its explicit ordinal when numbered. */
+interface AssertionOpener {
+  /** 0-based line index in the contract. */
+  index: number;
+  /** The explicit ordinal for a numbered opener (`3.` / `3)`), else `null` for an unnumbered bullet. */
+  num: number | null;
+}
+
+/** A numbered assertion opener: optionally under a `-`/`*`/`+` bullet or `**bold**`, then `<n>.`/`<n>)`. */
+const NUMBERED_OPENER = /^\s*(?:[-*+]\s+)?(?:\*\*)?(\d+)[.)]/;
+/** An unnumbered bullet opener: `-`/`*`/`+` then non-space content. */
+const BULLET_OPENER = /^\s*[-*+]\s+\S/;
+/** A markdown heading. */
+const HEADING = /^#{1,6}\s/;
+/** The "## Assertions" (or similar) section heading. */
+const ASSERTIONS_HEADING = /^#{1,6}\s+.*\bassertions?\b/i;
+
+/** The `[start, end)` line range of the contract's assertions section — the block under an
+ *  `assertions` heading (up to the next heading), or the WHOLE document when no such heading exists. */
+function assertionRegion(lines: string[]): [number, number] {
+  const h = lines.findIndex((l) => ASSERTIONS_HEADING.test(l));
+  if (h < 0) return [0, lines.length];
+  let end = lines.length;
+  for (let i = h + 1; i < lines.length; i++) {
+    if (HEADING.test(lines[i]!)) {
+      end = i;
+      break;
+    }
+  }
+  return [h + 1, end];
+}
+
+/**
+ * Resolve the poisoned assertion id to the contract LINE that opens it, across EVERY supported
+ * assertion form. Returns the 0-based line index, or `-1` when the id cannot be resolved (so the caller
+ * can FAIL CLOSED). Within the assertions region:
+ *   1. an explicit numbered opener whose ordinal === `assertionId` wins (numbered lists);
+ *   2. else, when the list is (partly) UNNUMBERED, the `assertionId`-th opener by position wins
+ *      (positional/unnumbered-bullet lists — the evaluator numbers those by order);
+ *   3. else — a fully-numbered list with no matching ordinal, or a position out of range — it is
+ *      UNRESOLVED (`-1`): never silently strike the wrong line.
+ */
+export function resolveAssertionLineIndex(lines: string[], assertionId: number): number {
+  const [start, end] = assertionRegion(lines);
+  const openers: AssertionOpener[] = [];
+  for (let i = start; i < end; i++) {
+    const numMatch = NUMBERED_OPENER.exec(lines[i]!);
+    if (numMatch) {
+      openers.push({ index: i, num: Number(numMatch[1]) });
+    } else if (BULLET_OPENER.test(lines[i]!)) {
+      openers.push({ index: i, num: null });
+    }
+  }
+  // 1. explicit numbered opener match.
+  const byNum = openers.find((o) => o.num === assertionId);
+  if (byNum) return byNum.index;
+  // 2. positional fallback — ONLY when the list carries unnumbered openers (a fully-numbered list with
+  //    no matching ordinal must fail closed, never be resolved by accidental position).
+  const hasUnnumbered = openers.some((o) => o.num === null);
+  if (hasUnnumbered && assertionId >= 1 && assertionId <= openers.length) {
+    return openers[assertionId - 1]!.index;
+  }
+  return -1;
+}
+
+/**
+ * The surgical contract rewrite behind the `strikeAssertion` dep: DEACTIVATE the poisoned assertion in
+ * place — the resolved opener line is flagged INERT (struck), so it is no longer a gradeable assertion
+ * while its id + text survive — and append an INERT strike-record annotation carrying the struck id +
+ * rationale. Every OTHER assertion id and requirement in the file is left byte-for-byte unchanged.
+ *
+ * FAILS CLOSED: if the id cannot be resolved to an assertion in the contract text (a missing contract,
+ * an out-of-range/absent id, an unparseable form), it throws WITHOUT writing anything — no false strike
+ * record, so the caller never re-evaluates against a still-live requirement.
+ */
+export async function strikeContractAssertion(
+  contractPath: string,
+  assertionId: number,
+  rationale: string,
+): Promise<void> {
+  let text: string;
+  try {
+    text = await fsp.readFile(contractPath, "utf8");
+  } catch {
+    throw new Error(
+      `strike-assertion: cannot read contract at ${contractPath} to strike assertion #${assertionId} — failing closed (no strike, no re-eval)`,
+    );
+  }
+  const lines = text.split("\n");
+  const target = resolveAssertionLineIndex(lines, assertionId);
+  if (target < 0) {
+    // FAIL CLOSED — do NOT write an annotation for an assertion we could not actually deactivate.
+    throw new Error(
+      `strike-assertion: assertion #${assertionId} could not be resolved in the contract text — failing closed (no strike record written, no re-evaluation)`,
+    );
+  }
+  // Deactivate the resolved opener: prefix an INERT struck marker. Its text survives verbatim, but the
+  // line no longer opens a live assertion item (it starts with the marker, not a number/bullet).
+  lines[target] = `~~[STRUCK #${assertionId} — contract-defect; INERT, do NOT grade]~~ ${lines[target]}`;
+  const body = lines.join("\n");
+  const record =
+    `<!-- sparra:struck-assertions -->\n` +
+    `## Struck assertions (contract-defect)\n\n` +
+    `INERT — do NOT grade. Struck by the conductor's contract-defect / strike-assertion recovery after ` +
+    `this assertion failed every round while all other assertions passed:\n\n` +
+    `- #${assertionId} — STRUCK: ${rationale}\n`;
+  const sep = body.endsWith("\n\n") ? "" : body.endsWith("\n") ? "\n" : "\n\n";
+  await fsp.writeFile(contractPath, `${body}${sep}${record}`, "utf8");
 }
 
 /** hybrid: deterministic loop + brain/decision-engine at the five judgment points. */
@@ -300,6 +502,16 @@ async function runHybridRounds(
         genRole = genRole.escalation;
         deps.noteDecision("unit-exhausted", "escalate", "auto-deterministic", "auto", "2nd pivot → escalate generator");
       } else {
+        // Where the deterministic path would generalize the spec, prefer STRIKE-ASSERTION instead —
+        // but ONLY when the contract-defect signature holds (the same assertion has failed every round
+        // while the latest round isolates it). A poisoned assertion is unsatisfiable no matter how the
+        // brief is reworded, so strike it and re-evaluate the existing artifact rather than spend more
+        // generate rounds. With the signature absent, behavior is UNCHANGED — generalize-spec as before.
+        const poisonedId = detectContractDefect(rounds);
+        if (poisonedId !== undefined) {
+          deps.noteDecision("contract-defect", "strike-assertion", "auto-deterministic", "auto", contractDefectRationale(poisonedId));
+          return await strikeAndReEvaluate(deps, { poisonedId, round: round + 1, priorVerdictPaths, rounds });
+        }
         brief = await deps.writeGeneralizedBrief(round);
         deps.noteDecision("unit-exhausted", "generalize-spec", "auto-deterministic", "auto", "2nd pivot → generalize brief");
         deps.recordDecisionLearning?.({ decision: "generalize-spec", round, summary: evalSummary });
@@ -308,9 +520,34 @@ async function runHybridRounds(
     round += 1;
   }
 
-  // Rounds exhausted → the fifth judgment point. Record the terminal outcome against the LAST EXECUTED
-  // round (its deferred "continue" is discarded — never flushed — so the terminal claims that round's
-  // record; the FINAL ledger record reflects the unit's true outcome and NO phantom round is invented).
+  // Rounds exhausted → DETECT the contract-defect signature first: the SAME assertion id failed every
+  // completed round AND the final round isolated it (no other failing assertion). When it holds, the
+  // artifact is correct and the CONTRACT is the defect, so surface the dedicated `contract-defect`
+  // decision (default: strike the poisoned assertion + re-evaluate) rather than the generic
+  // unit-exhausted point — which just spends another round on an unsatisfiable criterion.
+  const poisonedId = detectContractDefect(rounds);
+  if (poisonedId !== undefined) {
+    const cd = await deps.judge("contract-defect", lastEval);
+    if (cd.answer === "strike-assertion") {
+      return await strikeAndReEvaluate(deps, { poisonedId, round, priorVerdictPaths, rounds });
+    }
+    if (cd.answer === "abandon") {
+      if (executedRound) {
+        deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "abandon", lastEval, "contract-defect — abandoned at judgment point"));
+      }
+      return { outcome: "abandoned", finalVerdict: lastEval, rounds };
+    }
+    // pivot (or any non-strike, non-abandon): fall through to the plain exhausted terminal.
+    if (executedRound) {
+      deps.recordRound?.(roundAttempt(executedRound, executedPivoting, "terminal-fail", lastEval, `contract-defect not struck — exhausted after ${deps.maxRounds} round(s)`));
+    }
+    return { outcome: "exhausted", finalVerdict: lastEval, rounds };
+  }
+
+  // No contract-defect signature → the fifth judgment point. Record the terminal outcome against the
+  // LAST EXECUTED round (its deferred "continue" is discarded — never flushed — so the terminal claims
+  // that round's record; the FINAL ledger record reflects the unit's true outcome and NO phantom round
+  // is invented).
   const res = await deps.judge("unit-exhausted", lastEval);
   if (res.answer === "abandon") {
     if (executedRound) {

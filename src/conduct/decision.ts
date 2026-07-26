@@ -20,6 +20,7 @@ import type { ParentSummary } from "../../conductors/core/index.ts";
 export type JudgmentKind =
   | "contract-nonconvergence"
   | "unit-exhausted"
+  | "contract-defect"
   | "gate-collapse"
   | "recovery"
   | "borderline-accept"
@@ -110,6 +111,11 @@ export interface BrainDecision {
 export const JUDGMENT_OPTIONS: Record<JudgmentKind, { options: string[]; default: string }> = {
   "contract-nonconvergence": { options: ["finalize", "revise-brief", "abandon"], default: "finalize" },
   "unit-exhausted": { options: ["pivot", "generalize-spec", "abandon"], default: "pivot" },
+  // Contract-defect signature at unit-exhausted: the SAME assertion id failed every completed round
+  // while the final round had no OTHER failing assertion — the artifact is correct and the CONTRACT is
+  // the defect. `strike-assertion` (the default) deactivates the poisoned assertion and re-EVALUATES the
+  // existing artifact; `pivot` falls through to the plain exhausted terminal; `abandon` stops the unit.
+  "contract-defect": { options: ["strike-assertion", "pivot", "abandon"], default: "strike-assertion" },
   "gate-collapse": { options: ["abandon", "accept-anyway", "retry"], default: "abandon" },
   "recovery": { options: ["wait", "fallback", "abandon"], default: "wait" },
   "borderline-accept": { options: ["accept", "revise", "abandon"], default: "accept" },
@@ -130,6 +136,8 @@ export function judgmentQuestion(kind: JudgmentKind, unit: string): string {
       return `Unit ${unit}: the contract never converged — finalize as-is, revise the brief, or abandon?`;
     case "unit-exhausted":
       return `Unit ${unit}: rounds exhausted without acceptance — pivot, generalize the spec, or abandon?`;
+    case "contract-defect":
+      return `Unit ${unit}: one assertion failed every round while the rest passed (a contract defect) — strike that assertion and re-evaluate, pivot, or abandon?`;
     case "gate-collapse":
       return `Unit ${unit}: the cross-model gate collapsed (no distinct grader) — abandon, accept anyway, or retry?`;
     case "recovery":
@@ -179,6 +187,12 @@ export function buildDecisionRequest(params: {
     if (s.hitMaxTurns !== undefined) context.hitMaxTurns = s.hitMaxTurns;
     if (s.emptyCompletion !== undefined) context.emptyCompletion = s.emptyCompletion;
     if (s.filesChanged !== undefined) context.filesChanged = s.filesChanged;
+    // Contract-defect: surface the poisoned (persistently-failing) assertion id(s) so a human/brain
+    // answering the strike-assertion decision sees exactly which assertion is struck. Ids only — never
+    // holdout evidence. At the signature the final round isolates a single id.
+    if (params.kind === "contract-defect" && s.failedAssertions && s.failedAssertions.length > 0) {
+      context.failedAssertions = s.failedAssertions.map((a) => a.id).join(",");
+    }
   }
   return {
     id: `${params.unit}-${params.seq}`,

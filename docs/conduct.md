@@ -55,6 +55,23 @@ sparra conduct --list [--json]                                  # read-only list
   5. **borderline final accept** (a pass within a few points of threshold) — accept / revise / abandon.
 
   A clean, non-borderline pass never consults the brain.
+
+  **Contract-defect signature (a specialization of #2).** When a unit exhausts its rounds because the
+  **SAME assertion id failed EVERY completed round** while the **final round had no OTHER failing
+  assertion**, the artifact is correct and the **contract** is the defect (an assertion unsatisfiable in
+  the judge environment, or gated on harness-owned state). Rather than the generic `unit-exhausted`
+  point, the run surfaces a dedicated **`contract-defect`** decision — options **`strike-assertion`
+  (default) / `pivot` / `abandon`**:
+  - **`strike-assertion`** (the default) rewrites the unit's contract to **strike** the poisoned
+    assertion — it becomes an **inert annotation** preserving the id + rationale, never a gradeable
+    assertion; every other assertion is left byte-for-byte unchanged — then **re-EVALUATES the existing
+    artifact** (no generate round). The re-eval flows through the normal acceptance decision: a passing
+    re-eval reaches the normal accept path, a failing one the normal failure handling.
+  - **`pivot`** falls through to the plain exhausted terminal; **`abandon`** stops the unit.
+  - The recorded decision carries the **poisoned assertion id** (in `reason`), shape-consistent with the
+    other kinds. The signature is detected identically on the **auto-deterministic** path: where it would
+    otherwise generalize the spec at a 2nd pivot, it **prefers `strike-assertion`** when — and only when —
+    the signature holds (signature absent → generalize-spec, unchanged).
 - **`llm`.** The brain drives turn-by-turn: given holdout-safe run state + the latest summaries it
   chooses the next action (run role / revise-with-feedback / pivot / escalate / finalize / accept /
   abandon / surface-to-human) until the run completes or the round budget exhausts (a hard bound — an
