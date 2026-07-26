@@ -45,6 +45,16 @@ export const RE_CRITIQUE_INSTRUCTION =
 export const ACCEPTED_BLOCKING_INSTRUCTION =
   `ACCEPTED-BLOCKING: a prior round raised the blockings below and the conductor ACCEPTED them (including any out-of-scope carve-out). Verify each issue remains resolved. Do NOT reverse an accepted carve-out or re-bounce an accepted fix as out-of-scope. Raise nothing new unless correctness-critical.`;
 
+// Retired-holdout instruction injected on re-grade rounds (build-loop AND interactive) when a prior
+// round RETIRED a holdout as CONTRACT-CONTRADICTED — the cited contract clause directly contradicts
+// the holdout, so the harness removed it from artifact grading. Mirrors the ACCEPTED-BLOCKING
+// no-whipsaw rule: a fresh stateless re-grade must not re-raise a settled retirement. The
+// distinctive `RETIRED-HOLDOUT:` marker is asserted by the threading tests. Single-sourced here and
+// imported by BOTH re-grade paths (`evaluate.ts`/`build.ts` autonomous, `roleRun.ts` interactive) —
+// must not drift, exactly like ACCEPTED_BLOCKING_INSTRUCTION.
+export const RETIRED_HOLDOUT_INSTRUCTION =
+  `RETIRED-HOLDOUT: a prior round flagged the holdout(s) below as CONTRACT-CONTRADICTED and the harness RETIRED them (the cited contract clause directly contradicts the holdout). Do NOT re-raise a retired holdout as blocking or re-fail the artifact over it — the retirement is settled, like an accepted carve-out. Verify only that the carve-out is not being abused (the cited clause still stands in the contract); raise nothing new on the retired holdout.`;
+
 export interface ContractResult {
   text: string;
   agreed: boolean;

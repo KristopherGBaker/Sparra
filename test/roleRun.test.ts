@@ -8,7 +8,8 @@ import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
 import { mergedBuildEnv } from "../src/build/env.ts";
-import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION } from "../src/build/contract.ts";
+import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION, RETIRED_HOLDOUT_INSTRUCTION } from "../src/build/contract.ts";
+import { holdoutId, renderRetiredHoldouts, RETIRED_HOLDOUT_MARKER } from "../src/build/holdout.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -3751,6 +3752,71 @@ describe("runRole — F2 reportPath (generator-report channel)", () => {
       runRole({ ctx, roleKind: "evaluator", brief: "Grade it.", reportPath: path.join(dir, "nope.md"), runSessionFn: rec.fn })
     ).rejects.toThrow(/generator-report path not found/i);
     expect(rec.calls).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── U3: interactive holdout retirement (parse/redact/render/persist + priorBlockingPaths threading) ──
+describe("runRole — U3 holdout retirement (interactive)", () => {
+  const CONTRACT_TEXT = "Assertion 1: the artifact MUST import and use SumiKit for every render pass.";
+  // A prior verdict file bearing a durable retirement record (as evaluate.ts would have written).
+  function retirementVerdictFile(dir: string): string {
+    const p = path.join(dir, "prior.verdict.md");
+    const section = renderRetiredHoldouts([{ holdoutId: holdoutId(HOLDOUT_LINE), contractClause: "the artifact MUST import and use SumiKit", reason: "settled" }]);
+    fs.writeFileSync(p, `# Verdict\n\n## Blocking\n_none_\n\n${section}\n## Notes\nn\n`);
+    return p;
+  }
+
+  it("(9) priorBlockingPaths naming a verdict WITH a retirement record → task carries the RETIRED-HOLDOUT instruction", async () => {
+    const { ctx, dir } = await makeCtx();
+    const p = retirementVerdictFile(dir);
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "re-grade", contract: CONTRACT_TEXT, priorBlockingPaths: [p], runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps });
+    const prompt = rec.calls[0]!.prompt;
+    expect(prompt).toContain(RETIRED_HOLDOUT_INSTRUCTION);
+    expect(prompt).toContain(ACCEPTED_BLOCKING_INSTRUCTION); // still threads the accepted-blocking channel
+    expect(prompt).toContain(holdoutId(HOLDOUT_LINE)); // the record content rode along
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(9 anti-no-op) priorBlockingPaths WITHOUT a retirement record → NO RETIRED-HOLDOUT marker", async () => {
+    const { ctx, dir } = await makeCtx();
+    const p = path.join(dir, "plain.verdict.md");
+    fs.writeFileSync(p, "# Verdict\n\n## Blocking\n- function foo undefined\n\n## Notes\nn\n");
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "re-grade", contract: CONTRACT_TEXT, priorBlockingPaths: [p], runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps });
+    const prompt = rec.calls[0]!.prompt;
+    expect(prompt).not.toContain("RETIRED-HOLDOUT");
+    expect(prompt).toContain(ACCEPTED_BLOCKING_INSTRUCTION); // unchanged accepted-blocking behavior
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(14) parseVerdict preserves holdoutContradictions; redactVerdict redacts entry fields; the persisted file surfaces the redacted retirement", async () => {
+    const { ctx, dir } = await makeCtx(); // holdout = HOLDOUT_LINE
+    const planted = HOLDOUT_LINE; // a verbatim substantive holdout line planted in the entry
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [{ id: 1, pass: true, evidence: "ok" }],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 90 },
+        verdict: "pass",
+        blocking: [],
+        notes: "n",
+        holdoutContradictions: [{ holdout: planted, contractClause: "the artifact MUST import and use SumiKit for every render pass", reason: `contradiction ${planted}` }],
+      }) +
+      "\n```";
+    const rec = recorder(json);
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", contract: CONTRACT_TEXT, runSessionFn: rec.fn, integrityDeps: cleanIntegrityDeps });
+    // survives parseVerdict + redacted by redactVerdict
+    expect(r.verdict?.holdoutContradictions).toHaveLength(1);
+    expect(r.verdict!.holdoutContradictions![0]!.holdout).toBe("[redacted: holdout]");
+    expect(r.verdict!.holdoutContradictions![0]!.reason).toContain("[redacted: holdout]");
+    expect(JSON.stringify(r.verdict)).not.toContain("byte-identical"); // no holdout text leaks
+    // auto-persisted verdict file surfaces the redacted retirement (marker + holdoutId, no holdout text)
+    const persisted = fs.readFileSync(r.verdictPath!, "utf8");
+    expect(persisted).toContain(RETIRED_HOLDOUT_MARKER);
+    expect(persisted).toContain(holdoutId(HOLDOUT_LINE));
+    expect(persisted).not.toContain("byte-identical");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

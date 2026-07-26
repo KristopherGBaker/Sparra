@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { holdoutSection, assertNoHoldoutLeak, makeHoldoutReadDecider } from "../src/build/holdout.ts";
+import { holdoutSection, assertNoHoldoutLeak, makeHoldoutReadDecider, holdoutId, renderRetiredHoldouts, parseRetiredHoldouts, RETIRED_HOLDOUT_MARKER } from "../src/build/holdout.ts";
 import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -13,11 +13,43 @@ describe("holdoutSection", () => {
     expect(holdoutSection("")).toBe("");
     expect(holdoutSection("   ")).toBe("");
   });
-  it("labels the holdout for the evaluator and marks failures blocking", () => {
+  it("labels the holdout for the evaluator and marks failures blocking, AND states the CONTRACT-CONTRADICTED carve-out (both halves)", () => {
     const s = holdoutSection("- Entering a 6-digit code logs in within 2 seconds.");
     expect(s).toMatch(/HOLDOUT ACCEPTANCE CHECKS/);
     expect(s).toMatch(/BLOCKING/);
     expect(s).toContain("6-digit code");
+    // U3 — the wall still declares failures blocking (half 1) AND states the VALID contradiction
+    // exception (half 2): flag CONTRACT-CONTRADICTED with a verbatim clause; "inconvenient" never qualifies.
+    expect(s).toContain("regardless of rubric score"); // half 1: still absolute-blocking by default
+    expect(s).toContain("CONTRACT-CONTRADICTED"); // half 2: the carve-out
+    expect(s).toMatch(/holdoutContradictions/);
+    expect(s).toMatch(/verbatim/i);
+    expect(s).toMatch(/[Ii]nconvenient/);
+  });
+});
+
+describe("holdoutId / retirement record (de)serialization (U3)", () => {
+  const H = "The executable must NOT import the SumiKit module under any circumstances whatsoever.";
+
+  it("holdoutId is stable, short, holdout-safe, and distinguishes distinct holdouts", () => {
+    const a = holdoutId(H);
+    expect(a).toMatch(/^[0-9a-f]{12}$/);
+    expect(holdoutId(H)).toBe(a); // stable
+    expect(holdoutId(`  ${H.toUpperCase()}  `)).toBe(a); // normalized (case/whitespace-insensitive)
+    expect(holdoutId("A completely different holdout check about login timing.")).not.toBe(a);
+    expect(a).not.toContain("SumiKit"); // reveals no holdout text
+  });
+
+  it("render → parse round-trips a retirement record (holdout-safe: id + clause only)", () => {
+    const rec = { holdoutId: holdoutId(H), contractClause: "The artifact MUST import and use SumiKit for drawing.", reason: "forbids a mandate" };
+    const rendered = renderRetiredHoldouts([rec]);
+    expect(rendered).toContain(RETIRED_HOLDOUT_MARKER);
+    expect(rendered).not.toContain("SumiKit module under"); // no holdout text
+    const parsed = parseRetiredHoldouts(rendered);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]!.holdoutId).toBe(rec.holdoutId);
+    expect(parsed[0]!.contractClause).toContain("import and use SumiKit");
+    expect(renderRetiredHoldouts([])).toBe(""); // empty → nothing
   });
 });
 

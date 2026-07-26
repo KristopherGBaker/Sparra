@@ -13,7 +13,7 @@ import { ensureAutoProbed } from "../sdk/guard.ts";
 import { decompose } from "../build/decompose.ts";
 import { negotiateContract } from "../build/contract.ts";
 import { generateItem } from "../build/generate.ts";
-import { evaluateItem } from "../build/evaluate.ts";
+import { evaluateItem, readPriorRetirements } from "../build/evaluate.ts";
 import { reviewItem } from "../build/review.ts";
 import type { ReviewOutput } from "../build/review.ts";
 import type { Deviation } from "../build/generate.ts";
@@ -1081,6 +1081,9 @@ export async function cmdBuild(
 
       const evalPick = pickRole(ctx.config.roles.evaluator, limitedUntil, Date.now());
       if (evalPick.usedFallback) info(`${item.id}: ${backendKey(ctx.config.roles.evaluator)} limited — evaluating with fallback ${evalPick.role.model}.`);
+      // U3: thread any prior-round RETIRED-HOLDOUT records from the durable verdict channel into this
+      // round's evaluator (no-whipsaw). Read from disk here so the threading is resume-safe.
+      const priorRetirements = await readPriorRetirements(ctx, item.id, st.round, runId);
       const ev = await d.evaluateItem({
         ctx,
         item,
@@ -1093,6 +1096,7 @@ export async function cmdBuild(
         priorLearnings,
         role: evalPick.role,
         maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
+        priorRetirements,
       });
       const evCost = costUsdOrZero(ev.costUsd);
       totalCost += evCost;
@@ -1271,6 +1275,7 @@ export async function cmdBuild(
               priorLearnings,
               role: second,
               maxBudgetUsd: remainingBudget(cap, st.costUsd ?? 0),
+              priorRetirements,
             });
             const ev2Cost = costUsdOrZero(ev2.costUsd);
             totalCost += ev2Cost;

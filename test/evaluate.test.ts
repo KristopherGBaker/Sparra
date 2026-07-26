@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { evaluateItem } from "../src/build/evaluate.ts";
+import { holdoutId, RETIRED_HOLDOUT_MARKER } from "../src/build/holdout.ts";
+import { RETIRED_HOLDOUT_INSTRUCTION } from "../src/build/contract.ts";
 import type { Exerciser } from "../src/sdk/exercise.ts";
 import type { IntegrityDeps } from "../src/build/integrity.ts";
 import { Paths } from "../src/paths.ts";
@@ -1154,5 +1156,226 @@ describe("evaluateItem — run-scoped verdict files (collision-free across runs,
     expect(fs.existsSync(r2)).toBe(true);
     expect(path.dirname(r1)).toBe(path.dirname(r2)); // same run's location
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── U3: holdout RETIREMENT (CONTRACT-CONTRADICTED) ──
+describe("evaluateItem — U3 holdout retirement", () => {
+  const CLAUSE = "The artifact MUST import and use the SumiKit rendering module for all drawing operations.";
+  const CONTRACT = `Assertion 1: renders the widget correctly.\n${CLAUSE}`;
+  const HOLDOUT_A = "The executable must NOT import the SumiKit module under any circumstances whatsoever.";
+  const HOLDOUT_B = "The login button must stay disabled until every input field validates successfully.";
+  const PERSIST = "The widget must persist across every app restart without any data loss at all.";
+
+  const stub = (status: "ran" | "none" = "ran"): Exerciser => ({ mcpServers: {}, allowedTools: [], guidance: "", exerciseStatus: () => status });
+
+  function evalJson(o: Record<string, unknown>): string {
+    return "```json\n" + JSON.stringify({ scores: { design: 90, originality: 90, craft: 90, functionality: 90 }, notes: "n", ...o }) + "\n```";
+  }
+
+  async function evalU3(
+    json: string,
+    opts: { holdout: string[]; contractText?: string; round?: number; priorRetirements?: unknown; existing?: { ctx: Ctx; dir: string } }
+  ) {
+    const base = opts.existing ?? (await makeCtx());
+    const { ctx, dir } = base;
+    fs.writeFileSync(ctx.paths.holdout, `# HOLDOUT\n\n${opts.holdout.map((h) => `- ${h}`).join("\n")}\n`);
+    const rec = recorder(json);
+    const out = await evaluateItem({
+      ctx,
+      item: ITEM,
+      contractText: opts.contractText ?? CONTRACT,
+      workspaceDir: dir,
+      round: opts.round ?? 1,
+      traceDir: path.join(dir, "trace"),
+      traceSeq: 1,
+      runSessionFn: rec.fn,
+      integrityDeps: cleanIntegrityDeps,
+      buildExerciserFn: () => stub("ran"),
+      ...(opts.priorRetirements !== undefined ? { priorRetirements: opts.priorRetirements as never } : {}),
+    });
+    return { out, ctx, dir, rec };
+  }
+
+  // Paired fixtures (a) NO flag and (b) SAME failure + VALID flag — identical except the entry.
+  const A_ASSERTS = [
+    { id: 1, pass: true, evidence: "contract assertion 1 ok" },
+    { id: 99, pass: false, evidence: `HOLDOUT failed: ${HOLDOUT_A}` },
+  ];
+  const A_BLOCKING = [`HOLDOUT failed: ${HOLDOUT_A}`];
+  const VALID_ENTRY = { holdout: HOLDOUT_A, contractClause: CLAUSE, reason: `holdout forbids what the contract mandates; ${PERSIST}` };
+
+  it("(3a) contradicted holdout WITHOUT a flag → FAIL, blocking present, functionality capped", async () => {
+    const { out, dir } = await evalU3(evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING }), { holdout: [HOLDOUT_A, PERSIST] });
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.length).toBeGreaterThan(0);
+    expect(out.verdict.scores.functionality).toBe(50); // 1/2 runnable pass → cap
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(3b) SAME failure + VALID cited entry → holdout retired, verdict PASS (store-only would still fail)", async () => {
+    const { out, ctx, dir } = await evalU3(evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING, holdoutContradictions: [VALID_ENTRY] }), {
+      holdout: [HOLDOUT_A, PERSIST],
+    });
+    expect(out.verdict.verdict).toBe("pass"); // a store-only impl leaves this "fail"
+    expect(out.verdict.blocking).toEqual([]); // derived holdout blocking dropped
+    expect(out.verdict.scores.functionality).toBe(90); // retired assertion excluded from the cap
+    expect(out.verdict.assertions.map((a) => a.id)).toEqual([1]); // id 99 (the holdout) excluded from grading
+    // (6) returned contradiction fields redacted; (6) file carries a marked retirement keyed by holdoutId
+    const hc = out.verdict.holdoutContradictions!;
+    expect(hc[0]!.holdout).toBe("[redacted: holdout]");
+    expect(hc[0]!.reason).toContain("[redacted: holdout]"); // planted PERSIST holdout line redacted
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toContain(RETIRED_HOLDOUT_MARKER);
+    expect(written).toContain(holdoutId(HOLDOUT_A));
+    expect(written).toContain("SumiKit rendering module"); // names the cited contract clause
+    expect(written).not.toContain(PERSIST); // no unredacted holdout text
+    expect(written).not.toContain("must NOT import"); // holdout A not leaked
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(3b no-echo) a valid contradiction retires even when the failure note does NOT duplicate holdout text (references it by number)", async () => {
+    // The failure note references the holdout by ASSERTION NUMBER only — NO verbatim holdout echo.
+    // The association keys on the structured record (holdoutId), so retirement still yields PASS.
+    const noEchoAsserts = [
+      { id: 1, pass: true, evidence: "contract assertion 1 ok" },
+      { id: 99, pass: false, evidence: "HOLDOUT acceptance check #99 failed" },
+    ];
+    const { out, ctx, dir } = await evalU3(
+      evalJson({ assertions: noEchoAsserts, verdict: "fail", blocking: ["HOLDOUT acceptance check #99 failed"], holdoutContradictions: [VALID_ENTRY] }),
+      { holdout: [HOLDOUT_A] } // ONLY the retired holdout in HOLDOUT.md
+    );
+    expect(out.verdict.verdict).toBe("pass"); // retired despite zero holdout-text overlap in the note
+    expect(out.verdict.blocking).toEqual([]);
+    expect(out.verdict.assertions.map((a) => a.id)).toEqual([1]);
+    expect(fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8")).toContain(holdoutId(HOLDOUT_A));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(4) retirement never launders — a FAILED contract assertion keeps the verdict FAIL", async () => {
+    const asserts = [
+      { id: 1, pass: false, evidence: "contract assertion 1 is genuinely broken" },
+      { id: 99, pass: false, evidence: `HOLDOUT failed: ${HOLDOUT_A}` },
+    ];
+    const { out, dir } = await evalU3(
+      evalJson({ assertions: asserts, verdict: "fail", blocking: ["assertion 1 broken: bad output", ...A_BLOCKING], holdoutContradictions: [VALID_ENTRY] }),
+      { holdout: [HOLDOUT_A] }
+    );
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain("assertion 1 broken"); // non-retired blocking survives
+    expect(out.verdict.blocking.join(" ")).not.toContain("must NOT import"); // only the contradicted holdout was removed
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (5) invalid-citation negatives — DISTINCT fixtures, each NOT retired.
+  it("(5a) missing/empty contractClause → NOT retired, holdout stays live, invalid claim blocked", async () => {
+    const { out, ctx, dir } = await evalU3(
+      evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING, holdoutContradictions: [{ holdout: HOLDOUT_A, contractClause: "", reason: "x" }] }),
+      { holdout: [HOLDOUT_A] }
+    );
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain("NOT honored");
+    expect(fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8")).not.toContain(RETIRED_HOLDOUT_MARKER);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(5b) non-resolving contractClause → NOT retired", async () => {
+    const bogus = "This distinctive clause does not appear anywhere in the agreed contract text today.";
+    const { out, ctx, dir } = await evalU3(
+      evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING, holdoutContradictions: [{ holdout: HOLDOUT_A, contractClause: bogus, reason: "x" }] }),
+      { holdout: [HOLDOUT_A] }
+    );
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain("NOT honored");
+    expect(fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8")).not.toContain(RETIRED_HOLDOUT_MARKER);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(5c) generic token that resolves but fails distinctiveness → NOT retired", async () => {
+    const { out, ctx, dir } = await evalU3(
+      evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING, holdoutContradictions: [{ holdout: HOLDOUT_A, contractClause: "the", reason: "x" }] }),
+      { holdout: [HOLDOUT_A] }
+    );
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking.join(" ")).toContain("NOT honored");
+    expect(fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8")).not.toContain(RETIRED_HOLDOUT_MARKER);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(11) a genuine (non-contradicted) holdout failure still fails, exactly as today", async () => {
+    const { out, dir } = await evalU3(evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING }), { holdout: [HOLDOUT_A] });
+    expect(out.verdict.verdict).toBe("fail");
+    expect(out.verdict.blocking[0]).toContain("[redacted: holdout]");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(7) build-loop threading: prior retirement → task carries the RETIRED-HOLDOUT instruction + record; anti-no-op without one", async () => {
+    const prior = [{ holdoutId: holdoutId(HOLDOUT_A), contractClause: CLAUSE, reason: "settled" }];
+    const threaded = await evalU3(evalJson({ assertions: [{ id: 1, pass: true, evidence: "ok" }], verdict: "pass", blocking: [] }), {
+      holdout: [HOLDOUT_A],
+      round: 2,
+      priorRetirements: prior,
+    });
+    const prompt = threaded.rec.calls[0]!.prompt;
+    expect(prompt).toContain(RETIRED_HOLDOUT_INSTRUCTION);
+    expect(prompt).toContain(holdoutId(HOLDOUT_A));
+    fs.rmSync(threaded.dir, { recursive: true, force: true });
+
+    const clean = await evalU3(evalJson({ assertions: [{ id: 1, pass: true, evidence: "ok" }], verdict: "pass", blocking: [] }), {
+      holdout: [HOLDOUT_A],
+      priorRetirements: [],
+    });
+    expect(clean.rec.calls[0]!.prompt).not.toContain("RETIRED-HOLDOUT");
+    fs.rmSync(clean.dir, { recursive: true, force: true });
+  });
+
+  it("(8) durability: a round-1 retirement persisted to disk threads into round 2 with NO in-memory carryover", async () => {
+    const base = await makeCtx();
+    // Round 1 retires holdout A and writes the record to the verdict file.
+    await evalU3(evalJson({ assertions: A_ASSERTS, verdict: "fail", blocking: A_BLOCKING, holdoutContradictions: [VALID_ENTRY] }), {
+      holdout: [HOLDOUT_A],
+      existing: base,
+    });
+    expect(fs.readFileSync(base.ctx.paths.verdictFile(ITEM.id, 1), "utf8")).toContain(RETIRED_HOLDOUT_MARKER);
+    // Round 2 — pass NO priorRetirements: evaluateItem must READ the round-1 record off disk.
+    const r2 = await evalU3(evalJson({ assertions: [{ id: 1, pass: true, evidence: "ok" }], verdict: "pass", blocking: [] }), {
+      holdout: [HOLDOUT_A],
+      round: 2,
+      existing: base,
+    });
+    expect(r2.rec.calls[0]!.prompt).toContain(RETIRED_HOLDOUT_INSTRUCTION);
+    expect(r2.rec.calls[0]!.prompt).toContain(holdoutId(HOLDOUT_A));
+    fs.rmSync(base.dir, { recursive: true, force: true });
+  });
+
+  it("(20) selective two-holdout retirement + reload — A retired, B stays live, only A threads to round 2", async () => {
+    const base = await makeCtx();
+    const asserts = [
+      { id: 1, pass: true, evidence: "contract assertion 1 ok" },
+      { id: 98, pass: false, evidence: `HOLDOUT failed: ${HOLDOUT_B}` },
+      { id: 99, pass: false, evidence: `HOLDOUT failed: ${HOLDOUT_A}` },
+    ];
+    const blocking = [`HOLDOUT failed: ${HOLDOUT_A}`, `HOLDOUT failed: ${HOLDOUT_B}`];
+    const r1 = await evalU3(evalJson({ assertions: asserts, verdict: "fail", blocking, holdoutContradictions: [VALID_ENTRY] }), {
+      holdout: [HOLDOUT_A, HOLDOUT_B],
+      existing: base,
+    });
+    // A retired: excluded from grading; B live: blocking + cap still apply → FAIL.
+    expect(r1.out.verdict.verdict).toBe("fail");
+    expect(r1.out.verdict.assertions.map((a) => a.id)).toEqual([1, 98]); // id 99 (A) removed, 98 (B) kept
+    expect(r1.out.verdict.blocking.length).toBe(1); // only B's blocking survives
+    expect(r1.out.verdict.scores.functionality).toBe(50); // B's failure still anchors the cap (1/2)
+    const written = fs.readFileSync(base.ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).toContain(holdoutId(HOLDOUT_A));
+    expect(written).not.toContain(holdoutId(HOLDOUT_B)); // B was never retired
+    // Round 2 reload — only A's record threads; B is not settled.
+    const r2 = await evalU3(evalJson({ assertions: [{ id: 1, pass: true, evidence: "ok" }], verdict: "pass", blocking: [] }), {
+      holdout: [HOLDOUT_A, HOLDOUT_B],
+      round: 2,
+      existing: base,
+    });
+    expect(r2.rec.calls[0]!.prompt).toContain(holdoutId(HOLDOUT_A));
+    expect(r2.rec.calls[0]!.prompt).not.toContain(holdoutId(HOLDOUT_B));
+    fs.rmSync(base.dir, { recursive: true, force: true });
   });
 });

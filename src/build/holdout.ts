@@ -1,5 +1,7 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { Ctx } from "../context.ts";
+import type { RetiredHoldout } from "./types.ts";
 import { readText } from "../util/io.ts";
 
 /**
@@ -17,7 +19,52 @@ export async function readHoldout(ctx: Ctx): Promise<string> {
 /** Wrap holdout text for the EVALUATOR prompt. Pure; "" when there is no holdout. */
 export function holdoutSection(text: string): string {
   if (!text.trim()) return "";
-  return `\nHOLDOUT ACCEPTANCE CHECKS — the builder NEVER saw these; they guard against overfitting to the contract. Exercise each against the artifact and treat ANY holdout failure as BLOCKING (it fails the item regardless of rubric score):\n---\n${text.trim()}\n---\n`;
+  return `\nHOLDOUT ACCEPTANCE CHECKS — the builder NEVER saw these; they guard against overfitting to the contract. Exercise each against the artifact and treat ANY holdout failure as BLOCKING (it fails the item regardless of rubric score) — with ONE exception: a holdout that DIRECTLY, logically contradicts the agreed contract (it demands behavior the contract explicitly forbids, or forbids behavior it explicitly mandates) is NOT a valid check — flag it CONTRACT-CONTRADICTED in \`holdoutContradictions\` (quoting the contradicted contract clause verbatim) instead of failing the artifact; the harness retires it. "Inconvenient" never qualifies:\n---\n${text.trim()}\n---\n`;
+}
+
+/** Normalize a holdout assertion's text for a STABLE, holdout-safe id / match: lowercase, strip
+ *  markdown markers, collapse whitespace. Reveals no holdout text (only feeds the hash / a match). */
+export function normalizeHoldout(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[#>*`_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Short, stable, holdout-SAFE id for a holdout assertion — a content hash of its normalized text.
+ *  Reveals no holdout text, is stable across rounds, and distinguishes multiple holdouts after
+ *  redaction (the durable retirement record is keyed by this). */
+export function holdoutId(text: string): string {
+  return createHash("sha256").update(normalizeHoldout(text)).digest("hex").slice(0, 12);
+}
+
+/** The marker line naming the durable retirement section in a persisted verdict file. Grep-precise
+ *  (carries the literal `CONTRACT-CONTRADICTED`) so the stale-claim sweep and re-grade threading can
+ *  both detect it. */
+export const RETIRED_HOLDOUT_MARKER = "Retired holdouts (CONTRACT-CONTRADICTED)";
+
+/** Render the durable, holdout-SAFE retirement section for a verdict file. Keyed by `holdoutId`
+ *  (no holdout text); names the cited contract clause + reason. "" when there is nothing retired.
+ *  The clause/reason are already holdout-redacted by the caller; inner quotes are stripped so the
+ *  section stays machine-parseable by `parseRetiredHoldouts`. */
+export function renderRetiredHoldouts(records: RetiredHoldout[]): string {
+  if (!records.length) return "";
+  const safe = (s: string) => s.replace(/"/g, "'").replace(/\s+/g, " ").trim();
+  const lines = records.map(
+    (r) => `- holdoutId \`${r.holdoutId}\` — contract clause: "${safe(r.contractClause)}"${r.reason ? ` — reason: ${safe(r.reason)}` : ""}`
+  );
+  return `## ${RETIRED_HOLDOUT_MARKER}\n${lines.join("\n")}\n`;
+}
+
+/** Parse durable retirement records back out of a persisted verdict file's retirement section —
+ *  the inverse of `renderRetiredHoldouts`, used by later-round re-grade threading. */
+export function parseRetiredHoldouts(text: string): RetiredHoldout[] {
+  const out: RetiredHoldout[] = [];
+  const re = /- holdoutId `([0-9a-f]+)` — contract clause: "([^"]*)"(?: — reason: ([^\n]*))?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) out.push({ holdoutId: m[1]!, contractClause: m[2]!, reason: (m[3] ?? "").trim() });
+  return out;
 }
 
 /** Redact any verbatim holdout line from conductor/human-facing text — used for

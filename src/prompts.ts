@@ -215,10 +215,12 @@ OUTPUT — end with a fenced \`\`\`json block EXACTLY in this shape, nothing aft
   "verdict": "pass" | "fail",
   "exerciseStatus": "ran" | "blocked" | "mixed",
   "blocking": ["specific things that must change to pass"],
-  "notes": "1-3 sentence summary"
+  "notes": "1-3 sentence summary",
+  "holdoutContradictions": [{"holdout": "the holdout check text", "contractClause": "verbatim quote of the agreed-contract clause it contradicts", "reason": "why it directly contradicts"}]
 }
 \`\`\`
 Exactly ONE \`assertions\` entry per contract assertion, keyed by the contract's OWN id (keep sub-ids distinct; never merge/renumber/duplicate ids — the harness counts pass/fail/un-run off them).
+\`holdoutContradictions\` is normally EMPTY. Flag a HOLDOUT check there ONLY when it DIRECTLY, logically contradicts the agreed contract — it demands what the contract explicitly FORBIDS, or forbids what the contract explicitly MANDATES; \`contractClause\` MUST quote the contradicted clause VERBATIM (a distinctive span, not a bare token). A flag is a distinct conflict signal — NEITHER an artifact pass nor a fail: the harness retires that holdout from grading, it is not marked failed. "Inconvenient" or "seems wrong" NEVER qualifies.
 Be harsh but fair. Passing something broken, slop, or working only on a lucky run / degenerate input / hand-fixed harness is your failure.`,
 
   reviewer: `You are the CODE REVIEWER — an independent second pair of eyes on a change that ALREADY passed the behavioral evaluator (builds + meets contract). Do NOT re-run the artifact. Ask: is this GOOD, SAFE, maintainable code a senior engineer would approve?

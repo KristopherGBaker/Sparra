@@ -12,7 +12,7 @@ import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
-import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout, makeHoldoutReadDecider } from "./holdout.ts";
+import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout, makeHoldoutReadDecider, holdoutId, renderRetiredHoldouts, RETIRED_HOLDOUT_MARKER } from "./holdout.ts";
 import { runVerifyCommand } from "./exec.ts";
 import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 
@@ -20,10 +20,10 @@ import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
 // now lives in holdout.ts so the autonomous build-loop forbid roles share the exact same wall.
 export { makeHoldoutReadDecider };
 import { contractModeClauses, deviationPolicy, rubricText, calibrationText, existingTestsText, selfVerifyGuidance, verifyGateWarning } from "./modeText.ts";
-import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION } from "./contract.ts";
+import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION, RETIRED_HOLDOUT_INSTRUCTION } from "./contract.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict } from "./types.ts";
+import { RUBRIC_CRITERIA, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
@@ -656,6 +656,21 @@ function unrunIdsFrom(v: unknown): number[] {
   return [...new Set(arr.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
 }
 
+/** Parse the raw `holdoutContradictions` off a model verdict into typed entries (defensive: ignores
+ *  non-array / non-object junk). Kept here so `parseVerdict` preserves the field instead of dropping
+ *  it when it rebuilds the schema. */
+function holdoutContradictionsFrom(v: unknown): HoldoutContradiction[] {
+  const raw = (v as { holdoutContradictions?: unknown })?.holdoutContradictions;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e) => e && typeof e === "object")
+    .map((e) => ({
+      holdout: String((e as { holdout?: unknown }).holdout ?? ""),
+      contractClause: String((e as { contractClause?: unknown }).contractClause ?? ""),
+      reason: String((e as { reason?: unknown }).reason ?? ""),
+    }));
+}
+
 function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[]): Verdict["assertions"] {
   const unrun = new Set(unrunIds);
   return assertions.filter((a) => !unrun.has(a.id));
@@ -772,15 +787,21 @@ async function resolvePriorBlockingBlock(req: RoleRunRequest): Promise<string> {
     );
   }
   const labeled: string[] = [];
+  let hasRetirement = false;
   for (let i = 0; i < paths.length; i++) {
     const p = paths[i]!;
     const text = await readText(p);
     if (text == null) {
       throw new Error(`prior-blocking path not found or unreadable: ${p} (refusing to re-grade without the accepted blockings it names).`);
     }
+    if (text.includes(RETIRED_HOLDOUT_MARKER)) hasRetirement = true;
     labeled.push(`--- Accepted blocking ${i + 1} ---\n${text}`);
   }
-  return `${ACCEPTED_BLOCKING_INSTRUCTION}\n\nPRIOR ACCEPTED BLOCKINGS (verify each remains resolved):\n${labeled.join("\n\n")}\n\n`;
+  // U3: a prior verdict carrying a RETIRED-HOLDOUT record threads the same no-whipsaw instruction as
+  // the build loop — mirroring the ACCEPTED-BLOCKING channel — so the interactive re-grade does not
+  // re-raise a settled retirement. A prior verdict WITHOUT one injects no marker (anti-no-op).
+  const retiredLead = hasRetirement ? `${RETIRED_HOLDOUT_INSTRUCTION}\n\n` : "";
+  return `${retiredLead}${ACCEPTED_BLOCKING_INSTRUCTION}\n\nPRIOR ACCEPTED BLOCKINGS (verify each remains resolved):\n${labeled.join("\n\n")}\n\n`;
 }
 
 /** Instruction + label for the generator report inlined into an EVALUATOR task via `reportPath`.
@@ -838,6 +859,17 @@ function redactVerdict(v: Verdict, holdoutText: string): Verdict {
     notes: redactHoldout(v.notes, holdoutText),
     // Rebuild each assertion to the exact schema (no spread) so no stray field survives.
     assertions: v.assertions.map((a) => ({ id: a.id, pass: a.pass, evidence: redactHoldout(a.evidence, holdoutText) })),
+    // U3: the CONTRACT-CONTRADICTED entries' `holdout` field IS holdout text; redact every field
+    // (contractClause/reason too, defensively) so nothing reaches the conductor unredacted.
+    ...(v.holdoutContradictions
+      ? {
+          holdoutContradictions: v.holdoutContradictions.map((c) => ({
+            holdout: redactHoldout(c.holdout, holdoutText),
+            contractClause: redactHoldout(c.contractClause, holdoutText),
+            reason: redactHoldout(c.reason, holdoutText),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -850,12 +882,16 @@ function renderInteractiveVerdict(
   actualRole: RoleConfig,
   verdict: Verdict,
   threshold: number,
-  fallbackFrom?: { backend: string; model?: string }
+  fallbackFrom?: { backend: string; model?: string },
+  retired: RetiredHoldout[] = []
 ): string {
   const unrun = new Set(verdict.unrunAssertionIds ?? []);
   const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
   const fallbackNote = fallbackFrom ? ` — fell back from ${fallbackFrom.backend}/${fallbackFrom.model ?? "?"}` : "";
-  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n`;
+  // U3: surface the durable, holdout-SAFE retirement section (keyed by holdoutId) — "" when nothing
+  // was retired, keeping the `--out` file byte-identical to today's for the no-retirement case.
+  const retirementSection = retired.length ? `\n${renderRetiredHoldouts(retired)}` : "";
+  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n`;
 }
 
 /** Parse + normalize an evaluator verdict the same way the build loop does.
@@ -924,6 +960,9 @@ export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: Exerci
   // Normalize to the EXACT schema — the evaluator's JSON is untrusted model output, so
   // drop any extra properties (e.g. a smuggled `holdoutQuote`) that would otherwise ride
   // through to conductor-facing artifacts.
+  // Preserve the evaluator's CONTRACT-CONTRADICTED flags through the schema rebuild (U3) — the
+  // interactive path surfaces + persists them (redacted) so a re-grade can thread the retirement.
+  const holdoutContradictions = holdoutContradictionsFrom(parsed);
   return {
     assertions,
     unrunAssertionIds,
@@ -933,6 +972,7 @@ export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: Exerci
     exerciseStatus: finalStatus,
     blocking: (Array.isArray(parsed.blocking) ? parsed.blocking : []).map((b) => String(b)),
     notes: [String(parsed.notes ?? ""), capNote].filter(Boolean).join(" | "),
+    ...(holdoutContradictions.length ? { holdoutContradictions } : {}),
   };
 }
 
@@ -1968,7 +2008,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // verifications actually ran; override feeds the pass gate above and the pivot/build branches.
     // `result.resultText` (not raw `res.resultText`) so a verdict recovered by the cap-death re-ask
     // above is what gets parsed; identical to `res.resultText` when no re-ask recovered anything.
-    const verdict = redactVerdict(parseVerdict(ctx, result.resultText, exerciser?.exerciseStatus()), holdoutText);
+    const parsedVerdict = parseVerdict(ctx, result.resultText, exerciser?.exerciseStatus());
+    // U3: build the durable retirement records from the UN-redacted contradictions — holdoutId is a
+    // content hash of the ORIGINAL holdout text (must be computed before redaction), while the
+    // clause/reason are holdout-redacted for the conductor-facing file/header.
+    const retiredRecords: RetiredHoldout[] = (parsedVerdict.holdoutContradictions ?? []).map((c) => ({
+      holdoutId: holdoutId(c.holdout),
+      contractClause: redactHoldout(c.contractClause, holdoutText),
+      reason: redactHoldout(c.reason, holdoutText),
+    }));
+    const verdict = redactVerdict(parsedVerdict, holdoutText);
     // If the evaluator mutated the artifact surface, FORCE the verdict to fail (a verdict from an
     // evaluator that edited the code it grades cannot be trusted). The write was already reverted.
     if (mutatedArtifacts.length) {
@@ -1987,7 +2036,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     result.ok = res.ok && verdict.verdict === "pass";
     // Pass `ranRole` (the actual grader) — NOT the requested `role` — so the header names who
     // actually graded. When a fallback occurred, append a note naming the requested identity.
-    const header = renderInteractiveVerdict(roleKind, ranRole, verdict, ctx.config.rubric.passThreshold, fallbackFrom);
+    const header = renderInteractiveVerdict(roleKind, ranRole, verdict, ctx.config.rubric.passThreshold, fallbackFrom, retiredRecords);
     // Auto-persist the redacted verdict to a UNIQUELY-named file under .sparra/verdicts/ — always,
     // without the caller passing `out` — so an interactive/loop cycle leaves evaluator-side evidence
     // for `sparra reflect` (whose bundle excludes the holdout-bearing evaluator traces). The token

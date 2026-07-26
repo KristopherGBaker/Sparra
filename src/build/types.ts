@@ -41,6 +41,32 @@ export interface Verdict {
   /** Set by the build loop when the generator's `assertionsClaimed` contradicted this verdict
    *  (build/claims.ts) — the round's calibration gap (assertion ids + count only). */
   claimMismatches?: { count: number; ids: number[] };
+  /** Holdout assertions the evaluator flagged CONTRACT-CONTRADICTED — each demands behavior the
+   *  agreed contract explicitly forbids, or forbids behavior it explicitly mandates, citing the
+   *  clause. A flag is NOT an artifact pass or fail: a VALID one (evaluate.ts validates the cited
+   *  clause resolves + is distinctive) RETIRES that holdout from the round's grading and is
+   *  persisted holdout-redacted, keyed by a stable `holdoutId`, so later rounds treat it as settled
+   *  (mirrors ACCEPTED-BLOCKING). Conductor/generator-visible copies are holdout-redacted. */
+  holdoutContradictions?: HoldoutContradiction[];
+}
+
+/** An evaluator-flagged direct contradiction between a HOLDOUT check and the agreed contract.
+ *  `holdout` is the holdout assertion text (holdout-redacted before it reaches conductor/generator);
+ *  `contractClause` quotes the contradicted contract clause verbatim; `reason` explains the
+ *  contradiction. Shape is stable across the build-loop and interactive paths. */
+export interface HoldoutContradiction {
+  holdout: string;
+  contractClause: string;
+  reason: string;
+}
+
+/** A durable, holdout-SAFE retirement record persisted in the verdict channel and threaded into
+ *  later rounds. Keyed by `holdoutId` (a content hash of the normalized holdout text — reveals no
+ *  holdout text, stable across rounds, distinguishes multiple holdouts after redaction). */
+export interface RetiredHoldout {
+  holdoutId: string;
+  contractClause: string;
+  reason: string;
 }
 
 export const RUBRIC_CRITERIA = ["design", "originality", "craft", "functionality"] as const;

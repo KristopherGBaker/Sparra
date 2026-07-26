@@ -13,12 +13,22 @@ import { buildReadDirs } from "./readscope.ts";
 import { budgetExceeded, costUsdOrZero } from "./budget.ts";
 import { extractAllJson, extractJsonWhere } from "../util/extract.ts";
 import { reaskBudgetUsd, reportReaskOverrides, verdictReaskPrompt } from "./jsonReask.ts";
-import { writeText } from "../util/io.ts";
+import { readText, writeText } from "../util/io.ts";
 import { info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { readHoldout, holdoutSection, redactHoldout, holdoutLines } from "./holdout.ts";
+import {
+  readHoldout,
+  holdoutSection,
+  redactHoldout,
+  holdoutLines,
+  holdoutId,
+  normalizeHoldout,
+  renderRetiredHoldouts,
+  parseRetiredHoldouts,
+} from "./holdout.ts";
+import { RETIRED_HOLDOUT_INSTRUCTION } from "./contract.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
-import { RUBRIC_CRITERIA, type ExerciseStatus, type Verdict, type WorkItem } from "./types.ts";
+import { RUBRIC_CRITERIA, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 
@@ -43,6 +53,60 @@ function computeWeighted(ctx: Ctx, scores: Verdict["scores"]): number {
 
 function parseExerciseStatus(v: unknown): ExerciseStatus {
   return v === "blocked" || v === "mixed" ? v : "ran";
+}
+
+/** Case/whitespace-folded normalization for the contract-clause resolution check. */
+function foldForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Is a CONTRACT-CONTRADICTED entry's cited `contractClause` VALID? It must resolve to actual text
+ * in the round's `contractText` (case/whitespace-folded substring) AND be DISTINCTIVE — ≥ 20
+ * non-whitespace chars spanning ≥ 4 words after normalization — so a generic/partial token (`the`,
+ * `must`) that merely appears in the contract never qualifies. Missing/empty → invalid.
+ */
+export function isValidContradictionClause(clause: string, contractText: string): boolean {
+  const folded = foldForMatch(clause);
+  if (!folded) return false;
+  const nonWs = folded.replace(/\s/g, "").length;
+  const words = folded.split(" ").filter(Boolean);
+  if (nonWs < 20 || words.length < 4) return false;
+  return foldForMatch(contractText).includes(folded);
+}
+
+/** Parse the raw `holdoutContradictions` array off a model verdict into typed entries (defensive:
+ *  ignores non-array / non-object junk). */
+function parseHoldoutContradictions(v: unknown): HoldoutContradiction[] {
+  const raw = (v as { holdoutContradictions?: unknown })?.holdoutContradictions;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e) => e && typeof e === "object")
+    .map((e) => ({
+      holdout: String((e as { holdout?: unknown }).holdout ?? ""),
+      contractClause: String((e as { contractClause?: unknown }).contractClause ?? ""),
+      reason: String((e as { reason?: unknown }).reason ?? ""),
+    }));
+}
+
+/** Read the durable retirement records persisted by rounds BEFORE `round` for this item (the verdict
+ *  channel under `.sparra/verdicts/`). Resume-safe: reads from disk, so a reload between rounds still
+ *  threads the record. Deduped by `holdoutId` (a holdout retired once stays retired). */
+export async function readPriorRetirements(ctx: Ctx, itemId: string, round: number, runId?: string): Promise<RetiredHoldout[]> {
+  const byId = new Map<string, RetiredHoldout>();
+  for (let r = 1; r < round; r++) {
+    const text = await readText(ctx.paths.verdictFile(itemId, r, runId));
+    if (!text) continue;
+    for (const rec of parseRetiredHoldouts(text)) if (!byId.has(rec.holdoutId)) byId.set(rec.holdoutId, rec);
+  }
+  return [...byId.values()];
+}
+
+/** Compose the RETIRED-HOLDOUT re-grade block injected into a later round's evaluator task. "" when
+ *  nothing was retired (anti-no-op: a first round injects no marker). */
+function retirementBlock(records: RetiredHoldout[]): string {
+  if (!records.length) return "";
+  return `\n${RETIRED_HOLDOUT_INSTRUCTION}\n\nRETIRED HOLDOUTS (settled — do not re-raise):\n${renderRetiredHoldouts(records)}\n`;
 }
 
 function unrunIdsFrom(v: unknown): number[] {
@@ -124,6 +188,10 @@ export async function evaluateItem(args: {
   /** Injectable for tests; defaults to the real `buildExerciser`. Lets a test assert the
    *  harness-status override without driving a live model through run_command. */
   buildExerciserFn?: (config: SparraConfig, workspaceDir: string, opts?: { inProcessMcp?: boolean }) => Exerciser;
+  /** Retirement records from prior rounds to thread into THIS round (RETIRED-HOLDOUT no-whipsaw).
+   *  Normally supplied by the build loop from the durable verdict channel; when omitted, evaluateItem
+   *  reads them itself from disk (`readPriorRetirements`, resume-safe). */
+  priorRetirements?: RetiredHoldout[];
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
   const role = args.role ?? ctx.config.roles.evaluator;
@@ -157,6 +225,10 @@ export async function evaluateItem(args: {
   const memory = memorySection(args.priorLearnings ?? (await readMemory(ctx.paths)));
   const holdoutText = await readHoldout(ctx);
   const holdout = holdoutSection(holdoutText);
+  // RETIRED-HOLDOUT threading: later rounds inject the settled retirements (no whipsaw). Read from
+  // the durable verdict channel on disk when the build loop didn't pass them (resume-safe).
+  const priorRetirements = args.priorRetirements ?? (await readPriorRetirements(ctx, item.id, round, args.runId));
+  const retirement = retirementBlock(priorRetirements);
 
   // KNOWN-limits block for THIS judge. A no-OS-sandbox Claude backend gets no sandbox-policy rows but
   // still receives the KNOWN RUNNER LIMITS note (the vitest worker/reporter-RPC CPU-saturation flake).
@@ -177,7 +249,7 @@ AGREED CONTRACT (grade against THIS, not the plan prose):
 ---
 ${contractText}
 ---
-${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
+${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real, check every assertion with evidence, score the rubric, and emit the JSON verdict exactly as specified in your instructions.`;
 
   info(`Evaluating ${item.id} (round ${round}) with ${role.model} — exercising via ${ctx.config.exercise.mechanism}…`);
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
@@ -300,6 +372,7 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
 
   let verdict: Verdict;
   let capNote = ""; // set when the anchor cap actually lowered the functionality score
+  let retiredRecords: RetiredHoldout[] = []; // holdouts retired THIS round (for the durable file)
   if (!parsed || !parsed.scores) {
     warn(`Evaluator for ${item.id} returned no parseable verdict — treating as FAIL.`);
     verdict = {
@@ -320,26 +393,78 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
       const v = Number(parsed.scores[c] ?? 0);
       parsed.scores[c] = Math.max(0, Math.min(100, isFinite(v) ? v : 0));
     }
-    // Anchor functionality to the assertion outcomes (rubric.anchorFunctionality): with any
-    // FAILED assertion, functionality is CEILINGED at round(100 × passed/total) — a cap only
-    // lowers, never raises, so an already-low score stands. Zero assertions → no cap (nothing
-    // to anchor to; also guards the division).
-    if (ctx.config.rubric.anchorFunctionality) {
-      const asserts = Array.isArray(parsed.assertions) ? parsed.assertions : [];
-      const unrunIds = unrunIdsFrom(parsed);
-      const runnable = runnableAssertions(
-        asserts.map((a) => ({
+    const rawAssertions = Array.isArray(parsed.assertions)
+      ? parsed.assertions.map((a) => ({
           id: Number((a as { id?: unknown })?.id ?? 0),
           pass: Boolean((a as { pass?: unknown })?.pass),
           evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
-        })),
-        unrunIds
-      );
+        }))
+      : [];
+    const rawBlocking = Array.isArray(parsed.blocking) ? parsed.blocking.map((b) => String(b)) : [];
+
+    // U3 — holdout RETIREMENT. A CONTRACT-CONTRADICTED flag whose cited clause is VALID (resolves to
+    // real contract text AND is distinctive) removes that holdout from THIS round's grading (its
+    // failed-assertion line excluded from the cap, its derived blocking line dropped, no fail-forcing)
+    // and is persisted holdout-redacted, keyed by a stable holdoutId. An INVALID flag is NOT honored:
+    // no retirement, the holdout stays live, and the invalid claim surfaces as its own blocking line.
+    // SELECTIVE per-holdout: only the flagged holdout is retired; other failed holdouts stay live.
+    const contradictions = parseHoldoutContradictions(parsed);
+    const retiredNorms: string[] = []; // normalized holdout texts of the retired holdouts
+    const retiredIdSet = new Set<string>(); // stable holdoutIds of the retired holdouts (the structured key)
+    const invalidBlocking: string[] = [];
+    const holdoutContradictions: HoldoutContradiction[] = [];
+    for (const c of contradictions) {
+      if (isValidContradictionClause(c.contractClause, contractText)) {
+        const id = holdoutId(c.holdout);
+        retiredRecords.push({ holdoutId: id, contractClause: c.contractClause, reason: c.reason });
+        retiredNorms.push(normalizeHoldout(c.holdout));
+        retiredIdSet.add(id);
+        holdoutContradictions.push(c);
+      } else {
+        invalidBlocking.push(
+          `Holdout contradiction claim NOT honored (cited clause missing/unresolved/non-distinctive) — holdout stays live: "${c.contractClause.slice(0, 80)}"`
+        );
+      }
+    }
+    // TRUE when EVERY holdout in HOLDOUT.md is retired (keyed on the stable holdoutId — the harness
+    // owns the source, so this needs no evaluator echo). Gates the paraphrase fallback below so a
+    // still-LIVE holdout can never be swept, and a non-holdout failure never laundered.
+    const allHoldoutIds = holdoutLines(holdoutText).map((l) => holdoutId(l));
+    const allHoldoutsRetired = allHoldoutIds.length > 0 && allHoldoutIds.every((id) => retiredIdSet.has(id));
+    // Does a failure LINE (failed-assertion evidence or a blocking line) belong to a RETIRED holdout?
+    // The association is keyed on the structured record — NOT on the evaluator echoing the full holdout
+    // verbatim (which broke a paraphrased/by-number failure note and pressured holdout repetition):
+    //   1. the line references a retired holdout's text (holdoutId-stable, selective across holdouts); OR
+    //   2. it is a holdout-derived failure named only by number/paraphrase (no holdout text) AND EVERY
+    //      holdout is retired — so "HOLDOUT acceptance check #99 failed" is still retired, while a live
+    //      holdout (a non-retired id present) blocks the sweep and keeps that failure live.
+    // Both matched BEFORE redaction (the retired line is dropped, never persisted).
+    const isHoldoutDerived = (text: string): boolean => /holdout/i.test(text);
+    const belongsToRetired = (text: string): boolean => {
+      if (!retiredRecords.length) return false;
+      const n = normalizeHoldout(text);
+      if (retiredNorms.some((h) => h.length > 0 && n.includes(h))) return true;
+      return allHoldoutsRetired && isHoldoutDerived(text);
+    };
+    const hasRetirement = retiredRecords.length > 0;
+    const assertions = hasRetirement ? rawAssertions.filter((a) => !belongsToRetired(a.evidence)) : rawAssertions;
+    const blocking = [
+      ...(hasRetirement ? rawBlocking.filter((b) => !belongsToRetired(b)) : rawBlocking),
+      ...invalidBlocking,
+    ];
+
+    // Anchor functionality to the assertion outcomes (rubric.anchorFunctionality): with any
+    // FAILED assertion, functionality is CEILINGED at round(100 × passed/total) — a cap only
+    // lowers, never raises, so an already-low score stands. Zero assertions → no cap (nothing
+    // to anchor to; also guards the division). Retired-holdout assertions are already excluded above.
+    const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
+    if (ctx.config.rubric.anchorFunctionality) {
+      const runnable = runnableAssertions(assertions, unrunAssertionIds);
       const passed = runnable.filter((a) => a.pass).length;
       if (runnable.length > 0 && passed < runnable.length) {
         const cap = Math.round((100 * passed) / runnable.length);
         if (parsed.scores.functionality > cap) {
-          capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${runnable.length} assertions passed${unrunIds.length ? `; ${unrunIds.length} un-run excluded` : ""} — rubric.anchorFunctionality)`;
+          capNote = `functionality capped at ${cap} (model scored ${parsed.scores.functionality}; ${passed}/${runnable.length} assertions passed${unrunAssertionIds.length ? `; ${unrunAssertionIds.length} un-run excluded` : ""} — rubric.anchorFunctionality)`;
           parsed.scores.functionality = cap;
         }
       }
@@ -352,24 +477,26 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
     // harness-overridden status (not the raw self-report) gates the pass.
     const finalStatus = decideStatus(parseExerciseStatus(parsed.exerciseStatus));
     const isBlocked = finalStatus === "blocked";
-    const assertions = Array.isArray(parsed.assertions)
-      ? parsed.assertions.map((a) => ({
-          id: Number((a as { id?: unknown })?.id ?? 0),
-          pass: Boolean((a as { pass?: unknown })?.pass),
-          evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
-        }))
-      : [];
-    const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
     const allUnrun = allAssertionsUnrun(assertions, unrunAssertionIds);
+    // When a holdout was retired, the model's own `verdict` may still read "fail" purely because of
+    // the (now-retired) holdout. Re-derive the pass from what's LEFT: every runnable non-retired
+    // assertion passing + no remaining blocking = the artifact is not failed by a retired holdout
+    // alone. This override fires ONLY when a retirement occurred, so the no-flag path is byte-for-byte
+    // today's behavior. A genuine FAILED contract assertion keeps the verdict fail (never laundered).
+    const runnableLeft = runnableAssertions(assertions, unrunAssertionIds);
+    const retirementClears =
+      hasRetirement && runnableLeft.length > 0 && runnableLeft.every((a) => a.pass) && blocking.length === 0;
+    const effectivePass = modelSaidPass || retirementClears;
     verdict = {
       assertions,
       unrunAssertionIds,
       scores: parsed.scores,
       weightedTotal: weighted,
-      verdict: modelSaidPass && meetsThreshold && !isBlocked && !allUnrun ? "pass" : "fail",
+      verdict: effectivePass && meetsThreshold && !isBlocked && !allUnrun ? "pass" : "fail",
       exerciseStatus: finalStatus,
-      blocking: Array.isArray(parsed.blocking) ? parsed.blocking : [],
+      blocking,
       notes: parsed.notes ?? "",
+      ...(holdoutContradictions.length ? { holdoutContradictions } : {}),
     };
   }
 
@@ -419,6 +546,21 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
       pass: Boolean((a as { pass?: unknown })?.pass),
       evidence: redactHoldout(String((a as { evidence?: unknown })?.evidence ?? ""), holdoutText),
     }));
+    // The retirement records are keyed by holdoutId (no holdout text) but the model-authored reason
+    // could quote holdout — redact both the durable record and the returned contradiction entries
+    // (whose `holdout` field IS holdout text) so nothing reaches the conductor/generator unredacted.
+    retiredRecords = retiredRecords.map((r) => ({
+      holdoutId: r.holdoutId,
+      contractClause: redactHoldout(r.contractClause, holdoutText),
+      reason: redactHoldout(r.reason, holdoutText),
+    }));
+    if (verdict.holdoutContradictions) {
+      verdict.holdoutContradictions = verdict.holdoutContradictions.map((c) => ({
+        holdout: redactHoldout(c.holdout, holdoutText),
+        contractClause: redactHoldout(c.contractClause, holdoutText),
+        reason: redactHoldout(c.reason, holdoutText),
+      }));
+    }
   }
   const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(resultText, holdoutText) : resultText;
 
@@ -427,9 +569,12 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
   const failedAssertions = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
   const unrunAssertions = verdict.assertions.filter((a) => unrun.has(a.id));
   const runnableCount = verdict.assertions.length - unrunAssertions.length;
+  // Durable, holdout-SAFE retirement section (keyed by holdoutId, names the cited clause) — the
+  // channel later rounds thread from (`readPriorRetirements`), mirroring the ACCEPTED-BLOCKING file.
+  const retirementSection = retiredRecords.length ? `\n\n${renderRetiredHoldouts(retiredRecords)}` : "";
   await writeText(
     ctx.paths.verdictFile(item.id, round, args.runId),
-    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
+    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
   );
 
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);

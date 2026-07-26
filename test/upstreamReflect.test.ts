@@ -327,7 +327,12 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // requires an exit-status assertion to END in a `test` carrying the status), evaluator (a
     // BLOCKING item must be satisfiable WITHIN the contract's declared scope; an out-of-scope gap
     // is a non-blocking NOTE, not a FAIL). Three existing prompts edited; no new prompt.
-    expect(h.digest("hex")).toBe("55429015d791abb1d8a4c60f0309cb584f269bb4a3502e2257d93cfbb15f4016");
+    // Regenerated 2026-07-26 (U3 holdout retirement): the EVALUATOR prompt's OUTPUT JSON block gained
+    // the `holdoutContradictions` field plus the cited-direct-contradiction standard (flag ONLY a
+    // direct logical contradiction with the agreed contract; `contractClause` quotes the clause
+    // verbatim; a flag is neither an artifact pass nor fail; "inconvenient" never qualifies). One
+    // existing prompt edited; no new prompt.
+    expect(h.digest("hex")).toBe("6613a85f1cc61e73f165293889907a17e1028c67185e8cfff04765094c718ea4");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
