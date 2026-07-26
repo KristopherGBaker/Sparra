@@ -372,6 +372,18 @@ export interface RoleRunRequest {
    *  silent skip. Meaningful only for `evaluator`; supplying it to any other role kind is a hard
    *  error. Absent/empty → today's behavior, byte-for-byte. */
   priorBlockingPaths?: string[];
+  /** Evaluator-only: a path to the GENERATOR's completion report for the artifact under grade. The
+   *  RUNNER — trusted, unlike the role — reads the file itself (so a `.sparra/`-resident report works
+   *  even though the evaluator's own readscope excludes it), applies the SAME holdout scrub used for
+   *  verdict persistence (`redactHoldout`), and inlines the scrubbed content into the evaluator task
+   *  under a generator-report label — mirroring how the build loop threads reports between roles. This
+   *  is the DURABLE channel a contract clause like "X ran, or a deviation note explains why" is
+   *  satisfied through: the interactive evaluator otherwise never sees the generator's report JSON.
+   *  Meaningful ONLY for `evaluator` — supplying it to any other role kind is a hard error, rejected
+   *  at the shared runner choke point before any backend call. A missing/unreadable path FAILS CLOSED
+   *  (throws, naming it) before any backend call, consistent with `priorBlockingPaths`. Absent →
+   *  today's behavior, byte-for-byte. */
+  reportPath?: string;
   /** Holdout file (evaluator-only). Defaults to the project holdout. Pass a PATH, never contents.
    *  If given and missing, the run FAILS CLOSED (throws) rather than silently running without it. */
   holdoutPath?: string;
@@ -594,6 +606,12 @@ export interface RoleRunResult {
    *  Null/absent when self-verify IS enabled, the contract references no verify command, or
    *  `verifyCommands` is empty. */
   verifyGateWarning?: string;
+  /** F1 telemetry: the count of `.sparra`→marker neutralizations `remapBriefForWorkspaceCounted`
+   *  made on the conductor-authored brief for THIS run (code spans are exempt, so a QUOTED `.sparra`
+   *  reference is preserved and not counted). Present (>0) only when a substitution occurred on a
+   *  worktree remap; absent/zero for an in-place run (workspace == root) or a brief with no `.sparra`
+   *  prose. Informational — lets a conductor see a brief was neutralized without reading logs. */
+  remapCount?: number;
 }
 
 /** True when `text` carries a parseable GENERATOR completion report — a JSON block with a
@@ -763,6 +781,40 @@ async function resolvePriorBlockingBlock(req: RoleRunRequest): Promise<string> {
     labeled.push(`--- Accepted blocking ${i + 1} ---\n${text}`);
   }
   return `${ACCEPTED_BLOCKING_INSTRUCTION}\n\nPRIOR ACCEPTED BLOCKINGS (verify each remains resolved):\n${labeled.join("\n\n")}\n\n`;
+}
+
+/** Instruction + label for the generator report inlined into an EVALUATOR task via `reportPath`.
+ *  Mirrors the build loop's report-threading and the priorCritique/priorBlocking labeling
+ *  convention: the report is a CLAIM to verify against the artifact, not ground truth. */
+const GENERATOR_REPORT_INSTRUCTION =
+  `GENERATOR REPORT: the artifact's author supplied the self-report below (what was implemented, how it was exercised, and any deviations). Treat it as a CLAIM to VERIFY against the artifact, never as ground truth — a contract clause satisfiable by "X ran, or a deviation note explains why" is satisfied through THIS channel.`;
+
+/**
+ * Compose the generator-report block an `evaluator` run inlines AHEAD of the contract text — the
+ * durable channel the interactive evaluator receives the generator's report through (it otherwise
+ * never sees the report JSON: F2). The RUNNER (trusted) reads the file itself, so a `.sparra/`-
+ * resident report works even though the evaluator's own readscope excludes it, and applies the SAME
+ * holdout scrub used for verdict persistence (`redactHoldout`) before inlining — so a report quoting
+ * holdout can't smuggle it back out. "" when no path was supplied (today's behavior, byte-for-byte).
+ *
+ * Fail-closed: a missing/unreadable path throws (naming it) BEFORE any backend call, and the option
+ * is meaningful ONLY for `evaluator` — supplying it to any other role kind is a hard error (already
+ * rejected at the `runRole` choke point; re-checked here as defense-in-depth).
+ */
+async function resolveReportBlock(req: RoleRunRequest, holdoutText: string): Promise<string> {
+  const p = req.reportPath;
+  if (!p) return "";
+  if (req.roleKind !== "evaluator") {
+    throw new Error(
+      `reportPath is the generator-report channel for an evaluator run only; rejected for "${req.roleKind}". Drop it, or run an evaluator role.`
+    );
+  }
+  const text = await readText(p);
+  if (text == null) {
+    throw new Error(`generator-report path not found or unreadable: ${p} (refusing to grade without the report it names).`);
+  }
+  const scrubbed = holdoutLines(holdoutText).length ? redactHoldout(text, holdoutText) : text;
+  return `${GENERATOR_REPORT_INSTRUCTION}\n\n--- Generator report ---\n${scrubbed}\n\n`;
 }
 
 /** Resolve holdout text. Explicit path FAILS CLOSED if missing; else the project holdout (may be ""). */
@@ -939,6 +991,23 @@ export function validateBaselineCommand(req: RoleRunRequest): void {
   }
 }
 
+/**
+ * VALIDATE `reportPath` for its pre-launch THROW side-effect ONLY — no session, no tokens, no file
+ * read. Called by the SHARED `runRole` choke point (so EVERY entry point / wrapper is covered) AND by
+ * the interactive surfaces (`cmdRoleRun`/`validateRoleRunFlags`, MCP `run_role`) so a non-evaluator
+ * `--report`/`reportPath` aborts with ZERO model tokens. Enforces evaluator-only. Does NOT check file
+ * existence here — that is a fail-closed read at task-assembly time (before any backend call),
+ * consistent with `priorBlockingPaths`. A no-op when `reportPath` is absent.
+ */
+export function validateReportPath(req: RoleRunRequest): void {
+  if (!req.reportPath) return;
+  if (req.roleKind !== "evaluator") {
+    throw new Error(
+      `reportPath is the generator-report channel for an evaluator run only; rejected for "${req.roleKind}". Drop --report, or run an evaluator role.`
+    );
+  }
+}
+
 /** Neutral marker that replaces `.sparra/…` references in a conductor-authored brief — a short
  *  note that the agreed contract is already inlined in the prompt; contains no `.sparra` path. */
 export const BRIEF_SPARRA_MARKER = "[the agreed contract is inlined in this prompt]";
@@ -956,13 +1025,115 @@ export const BRIEF_SPARRA_MARKER = "[the agreed contract is inlined in this prom
  *   phrase noting the contract is inlined; contains no `.sparra` path — no holdout-bearing
  *   `.sparra` content is tracked by the allowlist `.sparra/.gitignore`, so it is absent in the worktree).
  *
- * Idempotent; safe on a brief with no paths; only rewrites PATH tokens, never other prose.
+ * F1 (code-span exemption): fenced code blocks (```` ``` … ``` ````) and inline code spans
+ * (`` ` … ` ``) are treated as VERBATIM QUOTES and left byte-identical — a brief that legitimately
+ * QUOTES a `.sparra/…` string (e.g. citing a tool description that mentions the harness state dir)
+ * is no longer corrupted in transit. Only text OUTSIDE code spans keeps the neutralize/re-root
+ * behavior. `substitutions` counts the ACTUAL marker neutralizations that occurred (re-rooting is
+ * not a marker substitution, so it is not counted) — the runner surfaces it.
+ *
+ * Idempotent; safe on a brief with no paths; only rewrites PATH tokens in prose, never code spans.
  */
-export function remapBriefForWorkspace(brief: string, root: string, workspace: string): string {
-  if (!workspace) return brief;
+export interface BriefRemapResult {
+  /** The remapped brief. */
+  text: string;
+  /** Count of `.sparra`→marker neutralizations that occurred (0 when in-place or no `.sparra` prose). */
+  substitutions: number;
+}
+
+/** A CommonMark fenced-code OPENER on a single line: up to 3 leading spaces, then a run of ≥3
+ *  backticks OR ≥3 tildes. Returns the fence char + length, or null. For a BACKTICK fence the info
+ *  string (rest of the line) must not contain a backtick (CommonMark) — otherwise it is inline code,
+ *  not a fence. CRLF-tolerant: a trailing CR (lines split on LF retain their CR) is accepted and the
+ *  info string excludes it, so a CRLF-delimited fence is recognized without touching the CR byte. */
+function fenceOpener(line: string): { ch: "`" | "~"; len: number } | null {
+  const m = /^ {0,3}(`{3,}|~{3,})([^\r]*)\r?$/.exec(line);
+  if (!m) return null;
+  const seq = m[1]!;
+  const ch = seq[0] as "`" | "~";
+  if (ch === "`" && m[2]!.includes("`")) return null; // info string with a backtick → not a fence
+  return { ch, len: seq.length };
+}
+
+/** A CommonMark closing fence for an opener of char `ch`/length `len`: up to 3 leading spaces, then
+ *  a run of the SAME char AT LEAST `len` long, then only trailing whitespace. CRLF-tolerant: an
+ *  optional trailing CR is accepted (the CR byte itself is preserved by the byte-exact reassembly). */
+function isFenceCloser(line: string, ch: "`" | "~", len: number): boolean {
+  const c = ch === "`" ? "`" : "~";
+  return new RegExp(`^ {0,3}${c}{${len},}[ \\t]*\\r?$`).test(line);
+}
+
+/** Apply `fn` to the plain-text gaps of a NON-FENCED region, leaving INLINE code spans (a run of N
+ *  backticks … matching N backticks) verbatim. Fenced blocks are handled by the caller — this runs
+ *  only on regions already known to be outside a fence. */
+function transformNonFenced(text: string, fn: (plain: string) => string): string {
+  const inlineRx = /(`+)((?:(?!\1)[\s\S])*)\1/g;
+  let out = "";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = inlineRx.exec(text)) !== null) {
+    out += fn(text.slice(last, m.index)); // plain gap → transform
+    out += m[0]; // inline code span → preserved byte-identical
+    last = m.index + m[0].length;
+    if (m[0].length === 0) inlineRx.lastIndex++; // guard against a zero-width match stalling the loop
+  }
+  out += fn(text.slice(last));
+  return out;
+}
+
+/** Split `input` into code segments (CommonMark FENCED blocks + INLINE spans, left VERBATIM) and
+ *  plain-text gaps, applying `fn` to each gap only. Code segments are preserved byte-identical (F1).
+ *
+ *  Fenced blocks follow CommonMark: a fence opens on a run of ≥3 backticks OR ≥3 tildes (up to 3
+ *  leading spaces) and closes ONLY on a fence of the SAME character at least as long as the opener —
+ *  so a tilde fence, a 4-backtick fence whose body contains a shorter ``` line, and any longer fence
+ *  are all preserved whole. An unterminated fence runs to end-of-input. Line scanning is byte-exact:
+ *  every adjacent line pair (within a segment or across a boundary) is rejoined by exactly one "\n",
+ *  so a no-op input round-trips unchanged. */
+function mapNonCodeSegments(input: string, fn: (plain: string) => string): string {
+  const lines = input.split("\n");
+  // Mark each line that is part of a fenced block (opener..closer inclusive; to EOF if unterminated).
+  const isCode = new Array<boolean>(lines.length).fill(false);
+  let i = 0;
+  while (i < lines.length) {
+    const opener = fenceOpener(lines[i]!);
+    if (opener) {
+      let j = i + 1;
+      let closed = false;
+      for (; j < lines.length; j++) {
+        if (isFenceCloser(lines[j]!, opener.ch, opener.len)) {
+          closed = true;
+          break;
+        }
+      }
+      const end = closed ? j : lines.length - 1; // unterminated fence extends to end-of-input
+      for (let k = i; k <= end; k++) isCode[k] = true;
+      i = end + 1;
+    } else {
+      i++;
+    }
+  }
+  // Group consecutive same-kind lines; transform text groups (inline-span-aware), preserve code groups.
+  const segs: string[] = [];
+  let g = 0;
+  while (g < lines.length) {
+    const code = isCode[g]!;
+    let h = g;
+    while (h < lines.length && isCode[h] === code) h++;
+    const segText = lines.slice(g, h).join("\n");
+    segs.push(code ? segText : transformNonFenced(segText, fn));
+    g = h;
+  }
+  return segs.join("\n");
+}
+
+/** Counting variant of {@link remapBriefForWorkspace} — surfaces how many `.sparra`→marker
+ *  neutralizations occurred so the runner can warn + carry an informational envelope field. */
+export function remapBriefForWorkspaceCounted(brief: string, root: string, workspace: string): BriefRemapResult {
+  if (!workspace) return { text: brief, substitutions: 0 };
   const absRoot = path.resolve(root);
   const absWorkspace = path.resolve(workspace);
-  if (absRoot === absWorkspace) return brief;
+  if (absRoot === absWorkspace) return { text: brief, substitutions: 0 };
 
   // Escape a literal string for safe use inside a RegExp pattern.
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -981,34 +1152,54 @@ export function remapBriefForWorkspace(brief: string, root: string, workspace: s
   //                 "foo.sparra/x.md"      — the "o" before ".sparra" is a path char → left alone.
   const leftBoundary = `(?<![a-zA-Z0-9/._\\-~])`;
 
-  // Step 1: neutralize absolute <root>/.sparra/… references BEFORE the general root-rewrite —
-  // no holdout-bearing .sparra content is tracked by the allowlist .gitignore, so it is absent in
-  // the worktree; pointing there is holdout risk / pure noise.
-  // Left boundary guards against non-token occurrences; right pathChar stops at prose punctuation.
   const absSparraRx = new RegExp(`${leftBoundary}${escapedRoot}[/\\\\]\\.sparra(?:[/\\\\]${pathChar}*)?`, "g");
-  let result = brief.replace(absSparraRx, BRIEF_SPARRA_MARKER);
-
-  // Step 2: neutralize bare .sparra/… relative references (e.g. ".sparra/loop-x/u.contract.md").
-  // Left boundary prevents matching "foo.sparra/..." (preceded by "o", a path-interior char).
   const bareSparraRx = new RegExp(`${leftBoundary}\\.sparra\\/${pathChar}*`, "g");
-  result = result.replace(bareSparraRx, BRIEF_SPARRA_MARKER);
 
-  // Step 3: rewrite remaining <root>/<rest> → <workspace>/<rest>. Left boundary prevents matching
-  // root embedded inside a longer path (e.g. /tmp/abs/Sparra/x.ts → "/" before root is path-char).
-  //
   // Idempotency fix (workspace ⊂ root): negative lookahead skips already-workspace-rooted paths
   // on a second pass so there is no double-nesting.
   let rootPrefixRx: RegExp;
   if (absWorkspace.startsWith(absRoot + "/") || absWorkspace.startsWith(absRoot + "\\")) {
-    // workspace ⊂ root: combine left boundary + negative lookahead for full idempotency.
     const workspaceSuffix = esc(absWorkspace.slice(absRoot.length)); // e.g. "/worktrees/u1"
     rootPrefixRx = new RegExp(`${leftBoundary}${escapedRoot}(?!${workspaceSuffix})([/\\\\])`, "g");
   } else {
     rootPrefixRx = new RegExp(`${leftBoundary}${escapedRoot}([/\\\\])`, "g");
   }
-  result = result.replace(rootPrefixRx, `${absWorkspace}$1`);
 
-  return result;
+  let substitutions = 0;
+  const transformPlain = (segment: string): string => {
+    // Step 1: neutralize absolute <root>/.sparra/… references BEFORE the general root-rewrite —
+    // no holdout-bearing .sparra content is tracked by the allowlist .gitignore, so it is absent in
+    // the worktree; pointing there is holdout risk / pure noise. Left boundary guards against
+    // non-token occurrences; right pathChar stops at prose punctuation. Each hit is COUNTED.
+    let s = segment.replace(absSparraRx, () => {
+      substitutions++;
+      return BRIEF_SPARRA_MARKER;
+    });
+    // Step 2: neutralize bare .sparra/… relative references (e.g. ".sparra/loop-x/u.contract.md").
+    // Left boundary prevents matching "foo.sparra/..." (preceded by "o", a path-interior char).
+    s = s.replace(bareSparraRx, () => {
+      substitutions++;
+      return BRIEF_SPARRA_MARKER;
+    });
+    // Step 3: rewrite remaining <root>/<rest> → <workspace>/<rest>. Left boundary prevents matching
+    // root embedded inside a longer path (e.g. /tmp/abs/Sparra/x.ts → "/" before root is path-char).
+    // NOT a marker substitution — not counted.
+    s = s.replace(rootPrefixRx, `${absWorkspace}$1`);
+    return s;
+  };
+
+  // F1: transform only text OUTSIDE code spans; fenced blocks + inline spans are preserved verbatim.
+  const text = mapNonCodeSegments(brief, transformPlain);
+  return { text, substitutions };
+}
+
+/**
+ * String-returning wrapper (byte-identical to the pre-F1 API for existing callers/tests): the
+ * remapped brief only, dropping the substitution count. New callers that need the count use
+ * {@link remapBriefForWorkspaceCounted}.
+ */
+export function remapBriefForWorkspace(brief: string, root: string, workspace: string): string {
+  return remapBriefForWorkspaceCounted(brief, root, workspace).text;
 }
 
 /**
@@ -1024,6 +1215,10 @@ export async function runRole(req: RoleRunRequest): Promise<RoleRunResult> {
   // CLI, MCP). Adapter-level calls to validateBaselineCommand are kept as defense-in-depth; this
   // is the authoritative gate so no programmatic caller can bypass it. A no-op when absent.
   validateBaselineCommand(req);
+  // Pre-launch reportPath guard (evaluator-only) — same authoritative-in-CORE placement as the
+  // baseline guard, so a non-evaluator `reportPath` is rejected before ANY backend call on every
+  // entry/wrapper path. The missing-file check is fail-closed later at task assembly. No-op when absent.
+  validateReportPath(req);
 
   // A `unitWorktree` request (writer-only) routes through the PERSISTENT per-unit worktree wrapper —
   // checked first (even an empty string routes here, so its name-validation fires) and mutually
@@ -1259,7 +1454,16 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Remap conductor-authored brief paths to the run's workspace — rewrite <root>/... tokens to
   // <workspace>/..., and neutralize .sparra/... refs (contract is already inlined in the prompt).
   // Applied BEFORE task assembly and assertNoHoldoutLeak; a no-op for in-place runs (byte-identical).
-  brief = remapBriefForWorkspace(brief, ctx.root, workspace);
+  // F1: fenced/inline code spans are exempt (a QUOTED .sparra reference is preserved byte-identical);
+  // the count of ACTUAL neutralizations is surfaced (warning + envelope field) when > 0.
+  const remap = remapBriefForWorkspaceCounted(brief, ctx.root, workspace);
+  brief = remap.text;
+  const remapCount = remap.substitutions;
+  if (remapCount > 0) {
+    warn(
+      `role-run-${roleKind}: remapped brief — neutralized ${remapCount} .sparra reference(s) to the inlined-contract marker (fenced/inline code spans preserved).`
+    );
+  }
 
   // The runner — not the conductor — is the only context that reads holdout.
   const holdoutText = await resolveHoldout(req);
@@ -1317,9 +1521,13 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Prior accepted blockings (evaluator re-grade) — read RUNNER-side, inlined AHEAD of the contract
   // text. Throws on a bad path / wrong role kind before any backend call.
   const priorBlockingBlock = await resolvePriorBlockingBlock(req);
+  // Generator report (evaluator only, F2) — read RUNNER-side, holdout-scrubbed, inlined AHEAD of the
+  // contract text under a generator-report label. Throws on a bad path / wrong role kind before any
+  // backend call. "" when no reportPath was supplied.
+  const reportBlock = await resolveReportBlock(req, holdoutText);
   const contractBlock = contract.trim() ? `\nAGREED CONTRACT (satisfy/grade against THIS):\n---\n${contract.trim()}\n---\n` : "";
   const environment = roleKind === "generator" ? await environmentNotesSection(ctx.paths) : "";
-  let task = `${revisionLead}${brief.trim()}\n${environment}${provenanceBlock}${midCritiqueBlock}${priorBlockingBlock}${contractBlock}${conventions}${memory}`;
+  let task = `${revisionLead}${brief.trim()}\n${environment}${provenanceBlock}${midCritiqueBlock}${priorBlockingBlock}${reportBlock}${contractBlock}${conventions}${memory}`;
   if (evaluator) {
     task += holdoutSection(holdoutText); // injected ONLY here
   } else {
@@ -1597,6 +1805,9 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // Verify-gate advisory: set when the contract gates on commands but self-verify is off.
     // Surfaced here so the MCP payload and the conductor both see it without reading logs.
     verifyGateWarning: gateWarn ?? undefined,
+    // F1: informational brief-remap neutralization count — present only when > 0 (a worktree remap
+    // that neutralized a .sparra prose reference); absent for an in-place run / no-.sparra brief.
+    remapCount: remapCount > 0 ? remapCount : undefined,
   };
 
   // Classification — a strict top-down matrix, FIRST match wins; at most ONE of the flags

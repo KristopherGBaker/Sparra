@@ -1,5 +1,5 @@
 import { autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { runRole, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { buildRunRolePayload } from "../mcp/runRoleServer.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
@@ -92,6 +92,7 @@ async function runRoleCommand(
   // Not-a-fail signals — the same names/meanings as the MCP payload, so a scripted conductor
   // reading CLI output gets the identical resume-or-accept guidance.
   if (res.filesChanged !== undefined) detail(`filesChanged: ${res.filesChanged}`);
+  if (res.remapCount) detail(`remapCount: ${res.remapCount} (.sparra brief reference(s) neutralized; code spans preserved)`);
   if (res.emptyCompletion)
     warn(`emptyCompletion: true — work LANDED (${res.filesChanged ?? 0} file(s) changed) but the report failed to emit; resume sessionId=${res.sessionId} or accept the landed work — NOT a behavioral fail`);
   if (res.hitBudget) warn(`hitBudget: true — stopped on the per-call budget cap; resume sessionId=${res.sessionId} (backend=${res.backend})`);
@@ -157,11 +158,12 @@ export function validateRoleRunFlags(
       `--prior-critique is only meaningful for a contract-evaluator (re-critique) or contract-generator (revision) run; rejected for "${kind}". Drop it.`
     );
   }
-  // Validate eval-provenance params (and baselineCommand) BEFORE the deferred auto-permission probe
-  // (a live SDK query): a bad `--expected-head`/`--eval-base`/`--baseline-command` must abort with
-  // ZERO model tokens.
+  // Validate eval-provenance params (and baselineCommand/reportPath) BEFORE the deferred
+  // auto-permission probe (a live SDK query): a bad `--expected-head`/`--eval-base`/
+  // `--baseline-command`, or a `--report` on a non-evaluator role, must abort with ZERO model tokens.
   validateEvalProvenance(req);
   validateBaselineCommand(req);
+  validateReportPath(req);
   return req;
 }
 
@@ -207,6 +209,9 @@ export function roleRequestFromFlags(
     // `--prior-blocking <path>` (repeatable) → prior round's accepted blocking files for an
     // evaluator re-grade. Same normalization as --prior-critique.
     priorBlockingPaths: priorCritiquePathsFromFlag(flags["prior-blocking"]),
+    // `--report <path>` (evaluator only) → the generator's report file; the runner reads, holdout-
+    // scrubs, and inlines it under a generator-report label. A string only; a bare/absent flag is dropped.
+    reportPath: typeof flags.report === "string" ? (flags.report as string) : undefined,
     holdoutPath: typeof flags.holdout === "string" ? (flags.holdout as string) : undefined,
     out: typeof flags.out === "string" ? (flags.out as string) : undefined,
     backend: typeof flags.backend === "string" ? (flags.backend as string) : undefined,

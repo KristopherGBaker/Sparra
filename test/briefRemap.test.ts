@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { remapBriefForWorkspace, BRIEF_SPARRA_MARKER } from "../src/build/roleRun.ts";
+import { remapBriefForWorkspace, remapBriefForWorkspaceCounted, BRIEF_SPARRA_MARKER } from "../src/build/roleRun.ts";
 
 /**
  * Unit tests for remapBriefForWorkspace — the pure helper that rewrites conductor-authored
@@ -184,27 +184,25 @@ describe("remapBriefForWorkspace — mixed + idempotency", () => {
     expect(result).toBe(alreadyMapped); // no change — idempotent
   });
 
-  // ── Regression #4: adjacent prose punctuation (backtick, comma) must survive .sparra neutralization ──
-  it("regression #4: backtick-quoted .sparra path — closing backtick and comma survive", () => {
-    // The original defect: "`.sparra/loop/u.contract.md`," had its "`," consumed by [^\s]*
+  // ── F1: inline code spans are VERBATIM QUOTES — a .sparra reference inside them is PRESERVED ──
+  // (Supersedes the pre-F1 "regression #4" tests, which neutralized the marker inside backticks and
+  //  only asserted the trailing punctuation survived; F1 preserves the whole span byte-identical.)
+  it("F1: bare .sparra path inside an inline code span is PRESERVED byte-identical", () => {
     const brief = "Read `.sparra/loop/u.contract.md`, then implement";
     const result = remapBriefForWorkspace(brief, ROOT, WS);
-    expect(result).not.toContain(".sparra");
-    expect(result).toContain(BRIEF_SPARRA_MARKER);
-    // The closing backtick must survive immediately after the marker
-    expect(result).toContain(`${BRIEF_SPARRA_MARKER}\``);
-    // The comma after the closing backtick must also survive
-    expect(result).toContain(`${BRIEF_SPARRA_MARKER}\`,`);
-    // Full exact output check
-    expect(result).toBe(`Read \`${BRIEF_SPARRA_MARKER}\`, then implement`);
+    // The whole span (and its trailing punctuation) survives — no marker substitution inside a span.
+    expect(result).toBe(brief);
+    expect(result).toContain("`.sparra/loop/u.contract.md`");
+    expect(result).not.toContain(BRIEF_SPARRA_MARKER);
   });
 
-  it("regression #4: absolute <root>/.sparra path in backtick span — punctuation preserved", () => {
+  it("F1: absolute <root>/.sparra path inside an inline code span is PRESERVED byte-identical", () => {
     const brief = `Check \`${ROOT}/.sparra/loop/u.md\`, done`;
     const result = remapBriefForWorkspace(brief, ROOT, WS);
-    expect(result).not.toContain(".sparra");
-    expect(result).toContain(`\`${BRIEF_SPARRA_MARKER}\``);
-    expect(result).toContain(", done");
+    expect(result).toBe(brief);
+    // Neither neutralized to a marker nor re-rooted to the workspace — the span is a verbatim quote.
+    expect(result).not.toContain(BRIEF_SPARRA_MARKER);
+    expect(result).not.toContain(`${WS}/.sparra`);
   });
 
   // ── Regression #2 (new): root as mid-token substring must NOT be rewritten ──
@@ -247,5 +245,135 @@ describe("remapBriefForWorkspace — mixed + idempotency", () => {
     expect(result).toContain("1.sparra/path.md"); // untouched
     expect(result).not.toContain(".sparra/contract.md"); // neutralized
     expect(result).toContain(BRIEF_SPARRA_MARKER);
+  });
+});
+
+describe("remapBriefForWorkspace — F1 code-span exemption + count surfacing", () => {
+  const ROOT = "/abs/Sparra";
+  const WS = "/abs/Sparra-unit-u1";
+
+  it("assertion 1: a .sparra ref inside a FENCED code block survives byte-identical (worktree remap)", () => {
+    const brief = "Quoting a tool desc:\n```\nThe runner reads .sparra/loop/u.contract.md itself.\n```\nGo.";
+    const result = remapBriefForWorkspace(brief, ROOT, WS);
+    expect(result).toBe(brief);
+    expect(result).toContain(".sparra/loop/u.contract.md");
+    expect(result).not.toContain(BRIEF_SPARRA_MARKER);
+  });
+
+  it("assertion 1: a .sparra ref inside an INLINE code span survives byte-identical", () => {
+    const brief = "See `.sparra/config.yaml` for the layout.";
+    const result = remapBriefForWorkspace(brief, ROOT, WS);
+    expect(result).toBe(brief);
+    expect(result).not.toContain(BRIEF_SPARRA_MARKER);
+  });
+
+  it("assertion 2: mixed fenced + inline + prose — only the PROSE occurrence is neutralized, count === 1", () => {
+    const brief =
+      "Prose ref .sparra/loop/u.md must go.\n" +
+      "```\nfenced .sparra/loop/u.md stays\n```\n" +
+      "inline `.sparra/loop/u.md` stays too. Also read " + `${ROOT}/src/x.ts.`;
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    // Protected occurrences are byte-identical.
+    expect(text).toContain("```\nfenced .sparra/loop/u.md stays\n```");
+    expect(text).toContain("inline `.sparra/loop/u.md` stays too");
+    // Exactly ONE marker substitution (the prose occurrence).
+    expect(text.split(BRIEF_SPARRA_MARKER).length - 1).toBe(1);
+    expect(substitutions).toBe(1);
+    // The prose <root>/… re-rooting outside code spans STILL occurs (not a marker substitution).
+    expect(text).toContain(`${WS}/src/x.ts`);
+    expect(text).not.toContain(`${ROOT}/src/x.ts`);
+  });
+
+  it("assertion 4-support: substitutions counts EACH prose neutralization (absolute + bare)", () => {
+    const brief = `A: ${ROOT}/.sparra/a.md and B: .sparra/b.md`;
+    const { substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    expect(substitutions).toBe(2);
+  });
+
+  // ── Adversarial fence regressions (fix round): CommonMark fence rules ──
+  it("adversarial: a .sparra ref inside a TILDE (~~~) fenced block is preserved byte-identical, count 0", () => {
+    const brief = "Quote:\n~~~\nThe runner reads .sparra/loop/u.contract.md itself.\n~~~\nDone.";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    expect(text).toBe(brief);
+    expect(text).toContain(".sparra/loop/u.contract.md");
+    expect(substitutions).toBe(0);
+    expect(text).not.toContain(BRIEF_SPARRA_MARKER);
+  });
+
+  it("adversarial: a 4-backtick fence whose body contains a ``` line preserves ALL .sparra refs, count 0", () => {
+    // The inner ``` line is SHORTER than the 4-backtick opener → NOT a closer; the block spans to the
+    // final ```` fence, so every .sparra ref inside (including after the inner ``` line) is preserved.
+    const brief =
+      "Example:\n" +
+      "````\n" +
+      "outer .sparra/loop/a.md\n" +
+      "```\n" +
+      "inner-still-fenced .sparra/loop/b.md\n" +
+      "````\n" +
+      "Tail prose .sparra/loop/c.md goes.";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    // Both fenced .sparra refs preserved byte-identical.
+    expect(text).toContain("outer .sparra/loop/a.md");
+    expect(text).toContain("inner-still-fenced .sparra/loop/b.md");
+    // Only the tail PROSE ref is neutralized (count 1 total for this brief).
+    expect(substitutions).toBe(1);
+    expect(text.split(BRIEF_SPARRA_MARKER).length - 1).toBe(1);
+    // The tail prose ref became the marker; the fenced ones did not.
+    expect(text).toContain("Tail prose " + BRIEF_SPARRA_MARKER + " goes.");
+  });
+
+  it("adversarial: a LONGER (5-backtick) tilde/backtick fence with a shorter fence-like body line is whole-preserved", () => {
+    const brief = "`````\ntop .sparra/x.md\n~~~\nmid .sparra/y.md\n`````\nafter";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    expect(text).toBe(brief);
+    expect(substitutions).toBe(0);
+  });
+
+  // ── CRLF regression (fix round 3): CRLF-delimited fences must be recognized byte-exact ──
+  it("adversarial: a CRLF-delimited ~~~ tilde fence preserves the fenced .sparra ref byte-identical (CR bytes intact)", () => {
+    // Real \r\n line endings — the line scanner splits on \n and each line retains its \r.
+    const brief =
+      "Quote:\r\n" +
+      "~~~\r\n" +
+      "The runner reads .sparra/loop/u.contract.md itself.\r\n" +
+      "~~~\r\n" +
+      "Tail prose .sparra/loop/c.md goes.";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    // Fenced content preserved byte-identical, including the CR bytes and the .sparra ref.
+    expect(text).toContain("~~~\r\nThe runner reads .sparra/loop/u.contract.md itself.\r\n~~~");
+    expect(text).toContain(".sparra/loop/u.contract.md");
+    // ONLY the trailing prose ref is neutralized (count 1); the fenced ref is not counted.
+    expect(substitutions).toBe(1);
+    expect(text.split(BRIEF_SPARRA_MARKER).length - 1).toBe(1);
+    // No newline normalization anywhere — the CRLF sequences survive.
+    expect(text).toContain("Quote:\r\n~~~\r\n");
+  });
+
+  it("adversarial: a CRLF-delimited ``` backtick fence (with an info string) is preserved byte-identical, count 0", () => {
+    const brief =
+      "```yaml\r\n" +
+      "path: .sparra/loop/u.contract.md\r\n" +
+      "```\r\n" +
+      "done";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    expect(text).toBe(brief); // whole input is fence + trailing prose with no .sparra ref → byte-identical
+    expect(substitutions).toBe(0);
+    expect(text).toContain(".sparra/loop/u.contract.md");
+    expect(text).not.toContain(BRIEF_SPARRA_MARKER);
+  });
+
+  it("assertion 3: in-place run (workspace == root) is a byte-identical no-op with zero substitutions", () => {
+    const brief = "prose .sparra/x.md and `.sparra/y.md` and ```\n.sparra/z.md\n```";
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, ROOT);
+    expect(text).toBe(brief);
+    expect(substitutions).toBe(0);
+  });
+
+  it("zero substitutions when a worktree brief has no .sparra prose (count 0)", () => {
+    const brief = `Build ${ROOT}/src/x.ts and quote \`.sparra/only-in-a-span.md\``;
+    const { text, substitutions } = remapBriefForWorkspaceCounted(brief, ROOT, WS);
+    expect(substitutions).toBe(0);
+    expect(text).toContain(`${WS}/src/x.ts`); // re-rooting still happens, but it's not a substitution
+    expect(text).toContain("`.sparra/only-in-a-span.md`"); // span preserved
   });
 });

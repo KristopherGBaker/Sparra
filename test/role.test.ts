@@ -7,7 +7,7 @@ import { Paths } from "../src/paths.ts";
 import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
-import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags, parseMaxTurns } from "../src/phases/role.ts";
+import { cmdRoleRun, cmdRoleRemoveWorktree, roleRequestFromFlags, evalAliasFlags, parseMaxTurns } from "../src/phases/role.ts";
 import { buildRunRolePayload } from "../src/mcp/runRoleServer.ts";
 import type { RoleRunResult } from "../src/build/roleRun.ts";
 
@@ -228,6 +228,34 @@ describe("roleRequestFromFlags — --prior-blocking → priorBlockingPaths (U4)"
     const { ctx, dir } = await makeCtx();
     expect(roleRequestFromFlags(ctx, "evaluator", {}, {}).priorBlockingPaths).toBeUndefined();
     expect(roleRequestFromFlags(ctx, "evaluator", { "prior-blocking": true }, {}).priorBlockingPaths).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// U2 F2: `--report <path>` → reportPath, for BOTH `role run` and the `eval` alias (assertion 5).
+describe("roleRequestFromFlags — --report → reportPath (U2 F2)", () => {
+  it("role run: --report <path> maps to reportPath", async () => {
+    const { ctx, dir } = await makeCtx();
+    const req = roleRequestFromFlags(ctx, "evaluator", { report: "/tmp/gen-report.md" }, {});
+    expect(req.reportPath).toBe("/tmp/gen-report.md");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("eval alias: --report survives evalAliasFlags → roleRequestFromFlags as reportPath", async () => {
+    const { ctx, dir } = await makeCtx();
+    // `eval <dir> --report r.md` → the alias maps positionals/flags, then request-building reads report.
+    const flags = evalAliasFlags(["eval", "/proj"], { report: "/tmp/r.md" });
+    const req = roleRequestFromFlags(ctx, "evaluator", { report: flags.report as string }, {});
+    expect(req.reportPath).toBe("/tmp/r.md");
+    // The alias itself preserves the flag unchanged (it doesn't drop --report).
+    expect(flags.report).toBe("/tmp/r.md");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("absent → undefined; a value-less boolean --report contributes no path", async () => {
+    const { ctx, dir } = await makeCtx();
+    expect(roleRequestFromFlags(ctx, "evaluator", {}, {}).reportPath).toBeUndefined();
+    expect(roleRequestFromFlags(ctx, "evaluator", { report: true }, {}).reportPath).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

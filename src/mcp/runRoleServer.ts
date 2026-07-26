@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, validateBaselineCommand, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { runRole, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
@@ -26,6 +26,9 @@ export interface RunRoleToolArgs {
   priorCritiquePaths?: string[];
   /** Artifact-evaluator re-grade ONLY: paths to the prior round's ACCEPTED blocking items. */
   priorBlockingPaths?: string[];
+  /** Evaluator ONLY: path to the generator's completion report; the runner reads, holdout-scrubs,
+   *  and inlines it under a generator-report label (contents never returned). */
+  reportPath?: string;
   workspace?: string;
   holdoutPath?: string;
   backend?: string;
@@ -70,6 +73,7 @@ export function toRunRoleRequest(ctx: Ctx, args: RunRoleToolArgs): RoleRunReques
     contractPath: args.contractPath,
     priorCritiquePaths: args.priorCritiquePaths,
     priorBlockingPaths: args.priorBlockingPaths,
+    reportPath: args.reportPath,
     workspace: args.workspace,
     holdoutPath: args.holdoutPath,
     backend: args.backend,
@@ -150,6 +154,9 @@ export function buildRunRolePayload(
         // evaluator identity matches the crossModelBaseline (the generator). Signals the cross-model
         // gate collapsed. undefined when crossModelBaseline was not supplied.
         sameModelGrade: r.sameModelGrade,
+        // F1: brief-remap neutralization count (>0 → a .sparra prose ref was neutralized on a
+        // worktree remap; code spans exempt). Holdout-safe. Absent for an in-place / no-.sparra brief.
+        remapCount: r.remapCount,
         errors: r.errors,
       }
     : {
@@ -186,6 +193,9 @@ export function buildRunRolePayload(
         // Fallback provenance: present when the run fell back from the requested backend/model.
         // backend/model above already carry the ACTUAL post-fallback identity — do not rename.
         fallbackFrom: r.fallbackFrom, // {backend, model?} of the requested role that hit a limit
+        // F1: brief-remap neutralization count (>0 → a .sparra prose ref was neutralized; code spans
+        // exempt). Holdout-safe. Absent for an in-place / no-.sparra brief.
+        remapCount: r.remapCount,
         errors: r.errors,
       };
 }
@@ -250,6 +260,12 @@ export async function startRunRoleServer(root: string): Promise<void> {
         .optional()
         .describe(
           "artifact-evaluator re-grade ONLY: paths to the prior round's ACCEPTED blocking items, in document order. The runner reads them itself and inlines them (labeled by entry, prefixed with the ACCEPTED-BLOCKING instruction) ahead of the contract — so a fresh evaluator re-grade sees that the conductor accepted prior blockings (including any out-of-scope carve-out) and does not whipsaw-bounce an already-accepted fix. Paths under .sparra/ work (the runner's read isn't subject to the role's readscope). A missing path fails the run; supplying it to another role is an error."
+        ),
+      reportPath: z
+        .string()
+        .optional()
+        .describe(
+          "evaluator ONLY: path to the generator's completion report for the artifact under grade. The runner reads it itself (so a .sparra/ path works despite the evaluator's readscope), applies the SAME holdout scrub used for verdict persistence, and inlines the scrubbed content into the evaluator task under a generator-report label — the durable channel a 'X ran, or a deviation note explains why' clause is satisfied through (the interactive evaluator otherwise never sees the report JSON). Contents are NEVER returned. Supplying it to a non-evaluator role is rejected before any backend call; a missing path fails the run before any backend call."
         ),
       workspace: z.string().optional().describe("Working dir / artifact dir (default: project root)."),
       holdoutPath: z.string().optional().describe("Holdout file PATH (evaluator-only). Contents are never returned."),
@@ -324,6 +340,7 @@ export async function startRunRoleServer(root: string): Promise<void> {
         const req = toRunRoleRequest(ctx, args);
         validateEvalProvenance(req);
         validateBaselineCommand(req);
+        validateReportPath(req);
         await autoProbeCtx(ctx);
         const r = await runRole(req);
         // Surface a newer-default (`stale`) / conflicting prompt to the /sparra-loop conductor, so

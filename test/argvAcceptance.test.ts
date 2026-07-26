@@ -157,6 +157,34 @@ describe("seam — eval alias normalization shared with cli.ts (assertion 4)", (
   });
 });
 
+describe("seam — U2 F2 `--report` (evaluator-only) (assertion 8)", () => {
+  const reportPath = path.join(os.tmpdir(), "argv-report.md"); // existence not checked at validation
+
+  it("`role run --kind evaluator … --report <p>` is ACCEPTED by the real parser + validator", () => {
+    const res = acceptArgv(
+      ["role", "run", "--kind", "evaluator", "--contract", contractPath, "--report", reportPath, "--json"],
+      { root: tmp },
+    );
+    expect(res.accepted, `evaluator --report should be accepted: ${res.reason}`).toBe(true);
+    expect(res.kind).toBe("evaluator");
+  });
+
+  it("`eval … --report <p>` (alias) is ACCEPTED", () => {
+    const res = acceptArgv(["eval", tmp, "--report", reportPath, "--json"], { root: tmp });
+    expect(res.accepted, `eval --report should be accepted: ${res.reason}`).toBe(true);
+    expect(res.kind).toBe("evaluator");
+  });
+
+  it("the SAME `--report` on `--kind generator` is REJECTED (evaluator-only), naming the rule", () => {
+    const res = acceptArgv(
+      ["role", "run", "--kind", "generator", "--brief-text", "build it", "--report", reportPath, "--json"],
+      { root: tmp },
+    );
+    expect(res.accepted).toBe(false);
+    expect(res.reason).toMatch(/reportPath is the generator-report channel for an evaluator run only/i);
+  });
+});
+
 describe("roleSpecs.ts — every builder variant accepted (assertion 6)", () => {
   let specs: ReturnType<typeof buildUnitRoleSpecs>;
   beforeAll(() => {

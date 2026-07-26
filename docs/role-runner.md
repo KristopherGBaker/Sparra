@@ -196,8 +196,23 @@ session never launches on a mismatch), on both the `worktree` and in-place paths
   bundles another unit's uncommitted WIP and scope assertions FAIL on files that aren't the unit's.
   An unresolvable ref aborts pre-launch. Both are rejected on a writer / contract-generator.
 
-**Verified baseline (`baselineCommand`, evaluator-only, opt-in).** When a generator's report
-claims "N tests are pre-existing failures", the eval brief forwards that prose and the evaluator
+**Generator report (`reportPath`, evaluator-only).** On an interactive `run_role` evaluation the
+evaluator sees only the brief + contract + artifact — the generator's report JSON never reaches it,
+so a contract clause of the form *"X ran, or a deviation note explains why"* can't be satisfied
+through the designed deviations channel unless the report is durable in the artifact tree. `reportPath`
+closes that: pass the generator's report FILE and the **runner** (trusted, unlike the role) reads it
+itself — so a report under `.sparra/` works even though the evaluator's own readscope excludes it —
+applies the **same holdout scrub used for verdict persistence** (`redactHoldout`), and inlines the
+scrubbed content into the evaluator's task **under a generator-report label**, mirroring how the build
+loop threads reports between roles. The report is presented as a **claim to verify** against the
+artifact, never ground truth, and its contents are **never returned** to the conductor. It is
+**evaluator-only** — supplying it to any other role is rejected at the shared runner choke point
+**before any backend call**; a missing/unreadable path likewise fails **before any backend call**
+(consistent with `priorBlockingPaths`). CLI: `--report <file>` on `role run --kind evaluator` and
+`eval`. MCP: the `reportPath` field.
+
+**Verified baseline (`baselineCommand`, evaluator-only, opt-in).** When a generator's report (surfaced
+to the evaluator via `reportPath`, above) claims "N tests are pre-existing failures", the evaluator
 may waive them — with no way to verify. `baselineCommand` closes this: together with `evalBaseRef`,
 it makes the **runner** (not the generator) produce a `[VERIFIED BASELINE]` block by running the
 command at the base ref's SHA in a throwaway DETACHED worktree and injecting the runner-owned result
@@ -437,7 +452,11 @@ evaluator only — the CLI form of the `priorBlockingPaths` MCP arg: inlines the
 ACCEPTED blocking items into the evaluator re-grade task, prefixed with the ACCEPTED-BLOCKING
 instruction, so a fresh evaluator sees that the conductor accepted those blockings and does not
 whipsaw-bounce an already-accepted fix or reverse an accepted out-of-scope carve-out; files under
-`.sparra/` work).
+`.sparra/` work), and `--report <file>` (evaluator only — the CLI form of the `reportPath` MCP arg:
+the RUNNER reads the generator's report, applies the verdict-persistence holdout scrub, and inlines it
+into the evaluator task under a generator-report label so a *"X ran, or a deviation note explains why"*
+clause is satisfiable through this durable channel; contents are never returned, files under `.sparra/`
+work, and a non-evaluator role or a missing path is rejected before any backend call).
 
 **Standalone WIP eval** has a shortcut — `sparra eval [dir] --contract contract.md
 [--backend codex] [--holdout .sparra/HOLDOUT.md] [--out v.md] [--budget <usd>] [--max-turns <n>]

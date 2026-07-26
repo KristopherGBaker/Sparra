@@ -27,6 +27,7 @@ hitMaxTurns: boolean?
 emptyCompletion: boolean?
 noProgress: boolean?
 verifyGateWarning: string?
+remapCount: number?
 unitWorktree: object?
 promptDrift: object?
 errors: string[]?
@@ -45,4 +46,7 @@ full verdict dump, evaluator trace, or holdout text.
 Use `backend`/`model` as the actual identity, `sessionId` for resume, totals and blocking fields
 for decisions, paths for runner-owned artifacts only, `filesChanged` to detect landed writer work,
 recovery flags according to [recovery.md](recovery.md), `promptDrift` as an informational prompt
-sync notice, and `tokens`/`costUsd` for budget decisions.
+sync notice, and `tokens`/`costUsd` for budget decisions. `remapCount` is informational telemetry:
+how many `.sparra` references in the conductor-authored brief the runner neutralized to the
+inlined-contract marker on a worktree remap — fenced/inline code spans are exempt, so a QUOTED
+`.sparra` reference is preserved byte-identical and not counted; present only when > 0.

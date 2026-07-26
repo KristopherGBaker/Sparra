@@ -41,6 +41,13 @@ changed-file judgments to `<base>..HEAD` plus WIP. These controls are not replac
 re-grade, pass accepted prior redacted verdict files, including `verdictPath`, in
 `priorBlockingPaths` so settled blocking ground is verified rather than re-litigated.
 
+Pass the generator's report through `reportPath` (a FILE path) rather than hand-inlining it into the
+brief. The runner reads it, applies the verdict-persistence holdout scrub, and inlines it under a
+generator-report label — the durable channel that lets a *"X ran, or a deviation note explains why"*
+contract clause be satisfied through the deviations report (the evaluator otherwise never sees the
+report JSON). It is evaluator-only; a non-evaluator role or a missing path is rejected before any
+backend call, and its contents are never returned.
+
 ## Decide
 
 - PASS with an independent grade: accept; optionally review with `roleKind: "reviewer"`.

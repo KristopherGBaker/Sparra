@@ -18,6 +18,7 @@ function fullEnvelope(): RunRolePayload & { secretExtra?: string } {
     failedAssertions: [],
     verdictPath: "/x/verdict.md",
     filesChanged: 2,
+    remapCount: 3,
     errors: [],
     tokens: 100,
     costUsd: 0.5,
@@ -38,6 +39,8 @@ describe("toParentSummary (the holdout wall)", () => {
     expect(s.verdictPath).toBe("/x/verdict.md");
     expect(s.backend).toBe("claude");
     expect(s.ok).toBe(true);
+    // F1: the informational remap-count field is threaded through the parent-summary allowlist.
+    expect(s.remapCount).toBe(3);
   });
 
   it("drops holdout-bearing fields and the canary", () => {

@@ -47,6 +47,11 @@ export interface RunRolePayload {
   emptyCompletion?: boolean;
   noProgress?: boolean;
   verifyGateWarning?: string;
+  /** F1 telemetry: how many `.sparra` references in the conductor-authored brief were neutralized to
+   *  the inlined-contract marker on a worktree remap (fenced/inline code spans are exempt, so a QUOTED
+   *  `.sparra` reference is preserved and NOT counted). Present (>0) only when a substitution
+   *  occurred; absent for an in-place run or a brief with no `.sparra` prose. Holdout-safe (a count). */
+  remapCount?: number;
   /** `contract-evaluator` role only: true when the critique carried {@link CONTRACT_AGREED_MARKER}
    *  (the contract is agreed), false when it did not, absent for every other role. Lets a conductor
    *  detect agreement from a structured field instead of the holdout-dropped `resultText`. */

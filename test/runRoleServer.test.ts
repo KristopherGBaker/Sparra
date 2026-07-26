@@ -32,7 +32,7 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       outPath: true, verdictPath: true, traceDir: true, sessionId: true, costUsd: true,
       tokens: true, errors: true, limitHit: true, noProgress: true, hitMaxTurns: true,
       emptyCompletion: true, filesChanged: true, hitBudget: true, unitWorktree: true,
-      fallbackFrom: true, sameModelGrade: true, verifyGateWarning: true,
+      fallbackFrom: true, sameModelGrade: true, verifyGateWarning: true, remapCount: true,
     };
     const full = baseResult({
       roleKind: "evaluator", backend: "codex", model: "gpt-complete", resultText: "raw",
@@ -42,16 +42,17 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       noProgress: true, hitMaxTurns: true, emptyCompletion: true, filesChanged: 4, hitBudget: true,
       unitWorktree: { name: "u", dir: "/u", branch: "sparra/u", created: true },
       fallbackFrom: { backend: "claude", model: "opus" }, sameModelGrade: true,
-      verifyGateWarning: "run npm test",
+      verifyGateWarning: "run npm test", remapCount: 2,
     });
     const directWorkerFields = [
       "ok", "roleKind", "backend", "model", "resultText", "outPath", "traceDir", "sessionId",
       "costUsd", "tokens", "errors", "limitHit", "noProgress", "hitMaxTurns", "emptyCompletion",
-      "filesChanged", "hitBudget", "unitWorktree", "fallbackFrom", "verifyGateWarning",
+      "filesChanged", "hitBudget", "unitWorktree", "fallbackFrom", "verifyGateWarning", "remapCount",
     ] as const satisfies readonly (keyof RoleRunResult)[];
     const directEvaluatorFields = [
       "ok", "roleKind", "backend", "model", "outPath", "verdictPath", "sessionId", "costUsd",
       "tokens", "errors", "limitHit", "hitMaxTurns", "hitBudget", "fallbackFrom", "sameModelGrade",
+      "remapCount",
     ] as const satisfies readonly (keyof RoleRunResult)[];
 
     const workerResult = { ...full, roleKind: "generator" as const, verdict: undefined };
@@ -284,6 +285,19 @@ describe("toRunRoleRequest — MCP arg forwarding", () => {
   it("leaves priorBlockingPaths undefined when not supplied", () => {
     const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
     expect(req.priorBlockingPaths).toBeUndefined();
+  });
+
+  it("forwards reportPath unchanged to the runner request (evaluator; .sparra/ paths OK) — U2 F2 assertion 5", () => {
+    const req = toRunRoleRequest(ctx, {
+      roleKind: "evaluator",
+      reportPath: ".sparra/runs/u2/report.md",
+    });
+    expect(req.reportPath).toBe(".sparra/runs/u2/report.md");
+  });
+
+  it("leaves reportPath undefined when not supplied", () => {
+    const req = toRunRoleRequest(ctx, { roleKind: "evaluator" });
+    expect(req.reportPath).toBeUndefined();
   });
 
   it("forwards a valid (positive integer) maxTurns override", () => {

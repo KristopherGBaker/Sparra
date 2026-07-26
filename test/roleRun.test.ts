@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
+import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, validateReportPath, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
 import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
@@ -3638,6 +3638,115 @@ describe("runRole — brief remap to workspace (U-BR)", () => {
     // The .sparra reference is also preserved (holdout check happens separately — no .sparra content here)
     expect(prompt).toContain(".sparra/loop/u.md");
 
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — F1 remap-count surfacing (assertion 4)", () => {
+  it("a worktree remap that neutralizes a .sparra PROSE ref warns with the count AND sets remapCount; a code-span ref is exempt", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rr-f1-"));
+    // Prose ref → neutralized (counted); inline-span ref → preserved byte-identical (exempt).
+    const brief = "Grade it. Prose ref .sparra/loop/u.md must neutralize; but `.sparra/loop/keep.md` stays.";
+
+    const rec = recorder();
+    const cap = captureStdout();
+    let res;
+    try {
+      res = await runRole({
+        ctx,
+        roleKind: "evaluator",
+        workspace,
+        brief,
+        isLinkedWorktreeFn: () => false, // path-only remap; no git worktree
+        runSessionFn: rec.fn,
+      });
+    } finally {
+      cap.restore();
+    }
+
+    // Envelope field surfaced (exactly one prose neutralization).
+    expect(res.remapCount).toBe(1);
+    // Visible warning names the count.
+    expect(cap.lines()).toContain("neutralized 1 .sparra reference");
+    // The captured prompt: prose ref neutralized, code-span ref preserved verbatim.
+    const prompt = rec.calls[0]!.prompt;
+    expect(prompt).toContain(BRIEF_SPARRA_MARKER);
+    expect(prompt).toContain("`.sparra/loop/keep.md`");
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("zero substitutions → NO warning and remapCount absent (in-place run)", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const rec = recorder();
+    const cap = captureStdout();
+    let res;
+    try {
+      // In-place (workspace defaults to ctx.root) → remap is a byte-identical no-op.
+      res = await runRole({ ctx, roleKind: "evaluator", brief: "Grade the artifact.", runSessionFn: rec.fn });
+    } finally {
+      cap.restore();
+    }
+    expect(res.remapCount).toBeUndefined();
+    expect(cap.lines()).not.toContain("neutralized");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runRole — F2 reportPath (generator-report channel)", () => {
+  it("assertion 6: inlines the report under a generator-report label after the verdict holdout scrub", async () => {
+    const { ctx, dir } = await makeCtx(); // project holdout carries HOLDOUT_LINE
+    const reportPath = path.join(dir, "gen-report.md");
+    const SENTINEL = "UNIQUE_REPORT_SENTINEL_4242";
+    // The report carries a unique sentinel AND a verbatim holdout line (the "holdout marker line").
+    fs.writeFileSync(reportPath, `# Generator self-report\n\n${SENTINEL}\n\nClaim: ${HOLDOUT_LINE}\n`);
+
+    const rec = recorder();
+    await runRole({ ctx, roleKind: "evaluator", brief: "Grade it.", reportPath, runSessionFn: rec.fn });
+    const prompt = rec.calls[0]!.prompt;
+
+    // The report is inlined under a generator-report label.
+    expect(prompt).toContain("Generator report");
+    // Isolate the REPORT BLOCK (the evaluator ALSO legitimately sees the raw holdout in its own
+    // holdout-acceptance section, so the scrub is asserted on the report block itself).
+    const afterLabel = prompt.split("--- Generator report ---")[1] ?? "";
+    const reportBlock = afterLabel.split("HOLDOUT ACCEPTANCE CHECKS")[0]!;
+    // CONTAINS the sentinel under the report label.
+    expect(reportBlock).toContain(SENTINEL);
+    // DOES NOT contain the literal holdout text (scrubbed via redactHoldout).
+    expect(reportBlock).not.toContain(HOLDOUT_LINE);
+    // CONTAINS the scrub replacement marker (same scrub as verdict persistence).
+    expect(reportBlock).toContain("[redacted: holdout]");
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 7: reportPath on a NON-evaluator role is rejected at the shared runner choke point (no backend call)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const reportPath = path.join(dir, "r.md");
+    fs.writeFileSync(reportPath, "some report");
+    const rec = recorder();
+    // Shared choke point (runRole → validateReportPath) throws before any wrapper/backend call.
+    await expect(
+      runRole({ ctx, roleKind: "generator", brief: "Build it.", reportPath, runSessionFn: rec.fn })
+    ).rejects.toThrow(/reportPath is the generator-report channel for an evaluator run only/i);
+    expect(rec.calls).toHaveLength(0);
+    // The CLI-shared validator rejects it too (same message), independent of the runRole path.
+    expect(() =>
+      validateReportPath({ ctx, roleKind: "reviewer", reportPath } as any)
+    ).toThrow(/evaluator run only/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("assertion 7: a missing reportPath fails BEFORE any backend call (evaluator, fail-closed)", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    await expect(
+      runRole({ ctx, roleKind: "evaluator", brief: "Grade it.", reportPath: path.join(dir, "nope.md"), runSessionFn: rec.fn })
+    ).rejects.toThrow(/generator-report path not found/i);
+    expect(rec.calls).toHaveLength(0);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
