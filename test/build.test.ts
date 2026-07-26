@@ -16,6 +16,7 @@ import { TECHNIQUE_MARKER } from "../src/memory.ts";
 import type { Ctx } from "../src/context.ts";
 import type { WorkItem, Verdict } from "../src/build/types.ts";
 import { generateItem, type GenerateOutput } from "../src/build/generate.ts";
+import { readAttemptLedger, buildAttemptLedgerPath } from "../src/build/attemptLedger.ts";
 import type { EvalOutput } from "../src/build/evaluate.ts";
 import type { CommandExecutor, ExecOutcome } from "../src/build/exec.ts";
 import type { RunResult, RunSessionParams } from "../src/sdk/session.ts";
@@ -33,7 +34,7 @@ function makeVerdict(pass: boolean, scores: Partial<Verdict["scores"]> = {}): Ve
 }
 
 function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {
-  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001, tokens: 100, ...over };
+  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, hitBudget: false, costUsd: 0.001, tokens: 100, ...over };
 }
 function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100, ...over };
@@ -239,6 +240,253 @@ describe("cmdBuild — per-item budget guard (CHANGE 1)", () => {
     expect(res.budgetExceeded).toBe(0);
     expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
     expect(out.lines()).not.toMatch(/zero or unknown/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("cmdBuild — budget-death short-circuit (U1)", () => {
+  const one: WorkItem[] = [{ id: "item-001", title: "only", summary: "", dependsOn: [], rationale: "" }];
+  const failCraft = (): EvalOutput => evalOut(false, { verdict: makeVerdict(false, { craft: 10 }) });
+  const ledgerFor = (ctx: Ctx) =>
+    readAttemptLedger(buildAttemptLedgerPath(ctx.paths, ctx.store.data.build.runId!, "item-001"));
+
+  it("(A3/A9) budget death with headroom → NO evaluator that round; the dead session's spend still accrues; resumes and passes", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 4, escalateAfterRounds: 0 });
+    let genCalls = 0;
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => {
+        genCalls++;
+        // Round 1 dies on the per-role cap (headroom remains); round 2 completes cleanly.
+        return genCalls === 1
+          ? genOut({ hitBudget: true, costUsd: 0.5, tokens: 1000, sessionId: "dead-1" })
+          : genOut({ costUsd: 0.1, tokens: 100, sessionId: "live-2" });
+      },
+      evaluateItem: async () => {
+        evalCalls++;
+        return evalOut(true, { costUsd: 0, tokens: 0 }); // zero-cost eval so the spend assertion is exact
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(genCalls).toBe(2);
+    expect(evalCalls).toBe(1); // the budget-dead round was NEVER graded
+    expect(st.status).toBe("passed");
+    // Truthful spend: the dead session's cost/tokens still accrued to the item.
+    expect(st.costUsd).toBeCloseTo(0.6);
+    expect(st.tokensUsed).toBe(1100);
+    // A budget bounce never advances the fail streaks.
+    expect(st.criterionFailStreak).toEqual({});
+    expect(st.assertionFailStreak ?? {}).toEqual({});
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A8) the headroom bounce writes NO ledger record — the reused round number stays free for the later genuine decision", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 4, escalateAfterRounds: 0 });
+    let genCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => {
+        genCalls++;
+        return genCalls === 1
+          ? genOut({ hitBudget: true, costUsd: 0.5, sessionId: "dead-1" })
+          : genOut({ costUsd: 0.1, sessionId: "live-2" });
+      },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const ledger = ledgerFor(ctx);
+    // Exactly ONE record — the round-1 accept. No phantom budget-bounce record occupies round 1,
+    // and the accept reuses that same round number (proving the slot was freed).
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.decision).toBe("accept");
+    expect(ledger[0]!.round).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A4a) after a budget-dead round the NEXT generation resumes the SAME session (resumeSessionId) on the same backend", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 4, escalateAfterRounds: 0 });
+    let genCalls = 0;
+    const resumeIds: (string | undefined)[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async (args) => {
+        genCalls++;
+        resumeIds.push(args.resumeSessionId);
+        return genCalls === 1
+          ? genOut({ hitBudget: true, costUsd: 0.5, sessionId: "dead-1" })
+          : genOut({ sessionId: "live-2" });
+      },
+      evaluateItem: async () => evalOut(true),
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(resumeIds[0]).toBeUndefined(); // round 1 started fresh
+    expect(resumeIds[1]).toBe("dead-1"); // round 2 resumes the budget-dead session
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A4b) budget death DURING a fresh pivot → next generation resumes with fresh:false; the pivot reset runs exactly once", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 5, escalateAfterRounds: 0 });
+    let resetInvoked = 0;
+    let evalCalls = 0;
+    const genFlags: { fresh: boolean; resume: string | undefined }[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      maybeResetWorkspace: () => {
+        resetInvoked++;
+        return { reset: true };
+      },
+      generateItem: async (args) => {
+        genFlags.push({ fresh: !!args.fresh, resume: args.resumeSessionId });
+        // The fresh (pivot) generation dies on budget; every other generation is clean.
+        return args.fresh
+          ? genOut({ hitBudget: true, costUsd: 0.3, sessionId: "dead-pivot" })
+          : genOut({ costUsd: 0.1, sessionId: `s${genFlags.length}` });
+      },
+      evaluateItem: async () => {
+        evalCalls++;
+        // Rounds 1-3 fail the SAME criterion → GAN pivot at round 3; after the pivot, pass.
+        return evalCalls <= 3 ? failCraft() : evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.pivots).toBeGreaterThanOrEqual(1);
+    // The fresh pivot generation (index 3) died on budget; the very next generation resumes the
+    // SAME dead session with fresh:false — so the pivot reset is NOT repeated on the bounce.
+    const deadIdx = genFlags.findIndex((g) => g.fresh);
+    expect(deadIdx).toBeGreaterThanOrEqual(0);
+    expect(genFlags[deadIdx + 1]).toEqual({ fresh: false, resume: "dead-pivot" });
+    expect(resetInvoked).toBe(1); // the pivot reset ran exactly once, never again on the bounce
+    expect(st.status).toBe("passed");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A5) budget death whose accrued cost crosses the cap → budget_exceeded via the halt path; evaluator never called", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 0.5, maxRoundsPerItem: 4, escalateAfterRounds: 0 });
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ hitBudget: true, costUsd: 5, tokens: 1000 }), // one death blows the $0.5 cap
+      evaluateItem: async () => {
+        evalCalls++;
+        return evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("budget_exceeded");
+    expect(evalCalls).toBe(0);
+    const ledger = ledgerFor(ctx);
+    const halt = ledger.find((r) => r.decision === "budget-halt");
+    expect(halt).toBeDefined();
+    // A pre-evaluation halt carries null eval fields — never fabricated.
+    expect(halt!.score).toBeNull();
+    expect(halt!.verdict).toBeNull();
+    expect(halt!.verdictPath).toBeNull();
+    // budget_exceeded learning was recorded.
+    expect(fs.readFileSync(ctx.paths.memory, "utf8")).toMatch(/budget_exceeded/i);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A6) a generator that ALWAYS dies on budget (nonzero cost) terminates ONLY via budget_exceeded — never rounds-exhausted failed; round slot restored, no failed streak", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 3, escalateAfterRounds: 0 });
+    let genCalls = 0;
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => {
+        genCalls++;
+        return genOut({ hitBudget: true, costUsd: 1, tokens: 100 });
+      },
+      evaluateItem: async () => {
+        evalCalls++;
+        return evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.status).toBe("budget_exceeded"); // cost crossed the $5 cap, never rounds-exhausted
+    expect(evalCalls).toBe(0);
+    // Round restitution: MORE generations ran than maxRoundsPerItem (3) — each bounce gave the slot
+    // back. Without the give-back the item would have terminalized "failed" at 3 rounds.
+    expect(genCalls).toBeGreaterThan(3);
+    expect(st.failedRounds ?? 0).toBe(0);
+    expect(st.criterionFailStreak).toEqual({});
+    const ledger = ledgerFor(ctx);
+    expect(ledger.some((r) => r.decision === "terminal-fail")).toBe(false);
+    expect(ledger.some((r) => r.decision === "budget-halt")).toBe(true);
+    const mem = fs.readFileSync(ctx.paths.memory, "utf8");
+    expect(mem).toMatch(/budget_exceeded/i);
+    expect(mem).not.toMatch(/did not pass in/); // no behavioral-failure learning
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A6 pivot-entry) always-budget-dead AFTER a pivot still terminates via budget_exceeded; bounces stay fresh:false and the reset runs at most once", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 5, escalateAfterRounds: 0 });
+    let resetInvoked = 0;
+    let evalCalls = 0;
+    let sawFreshBudgetDeath = false;
+    const genFreshFlags: boolean[] = [];
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      maybeResetWorkspace: () => {
+        resetInvoked++;
+        return { reset: true };
+      },
+      generateItem: async (args) => {
+        // Rounds 1-3 are clean (so the evaluator can drive a pivot); from the fresh pivot on, every
+        // generation dies on budget with nonzero cost.
+        genFreshFlags.push(!!args.fresh);
+        if (args.fresh) sawFreshBudgetDeath = true;
+        return sawFreshBudgetDeath
+          ? genOut({ hitBudget: true, costUsd: 1, tokens: 100, sessionId: "dead-pivot" })
+          : genOut({ costUsd: 0.1, sessionId: "clean" });
+      },
+      evaluateItem: async () => {
+        evalCalls++;
+        return failCraft(); // fail the same criterion every graded round → pivot at round 3
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    const st = ctx.store.data.build.items["item-001"]!;
+    expect(st.pivots).toBeGreaterThanOrEqual(1);
+    expect(st.status).toBe("budget_exceeded"); // cost crossed the cap, never rounds-exhausted "failed"
+    expect(resetInvoked).toBe(1); // the pivot reset ran once; the budget bounces never re-reset
+    // Exactly one fresh (pivot) generation; every generation after it resumed fresh:false.
+    const firstFresh = genFreshFlags.indexOf(true);
+    expect(firstFresh).toBeGreaterThanOrEqual(0);
+    expect(genFreshFlags.filter((f) => f).length).toBe(1);
+    expect(genFreshFlags.slice(firstFresh + 1).every((f) => f === false)).toBe(true);
+    const ledger = ledgerFor(ctx);
+    expect(ledger.some((r) => r.decision === "terminal-fail")).toBe(false);
+    expect(ledger.some((r) => r.decision === "budget-halt")).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A7 contrast) an otherwise-identical run with hitBudget:false is graded as today", async () => {
+    const { ctx, dir } = await makeCtx({ maxBudgetUsdPerItem: 5, maxRoundsPerItem: 4, escalateAfterRounds: 0 });
+    let evalCalls = 0;
+    const deps: Partial<BuildDeps> = {
+      ...baseDeps(),
+      decompose: async () => one,
+      generateItem: async () => genOut({ hitBudget: false, costUsd: 0.5, sessionId: "live" }),
+      evaluateItem: async () => {
+        evalCalls++;
+        return evalOut(true);
+      },
+    };
+    await cmdBuild(ctx, { workspaceOverride: dir }, deps);
+    expect(evalCalls).toBe(1); // the evaluator DID run — no degenerate "never evaluate"
+    expect(ctx.store.data.build.items["item-001"]!.status).toBe("passed");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

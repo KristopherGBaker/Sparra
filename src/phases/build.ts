@@ -969,6 +969,33 @@ export async function cmdBuild(
       if (gl === "halt") { stopRun = true; break; }
       if (gl === "retry") continue;
 
+      // ── Budget-death short-circuit (U1). The generator session died on OUR per-role USD budget
+      // cap (`error_max_budget_usd`): the SDK enforces the cap only at turn boundaries, so a
+      // high-effort turn can overshoot before it trips, killing the session mid-work with an
+      // admittedly-incomplete artifact. NEVER hand that tree to the evaluator this round — mirror
+      // the interactive conductor's "unfinished, resume" classification. The dead session's spend
+      // already accrued above (truthful telemetry, never laundered), so:
+      //   • item budget exhausted → the existing haltOnBudget path (status budget_exceeded).
+      //   • headroom remains → give the round slot back (like onLimit) and RESUME the SAME session
+      //     next generation via resumeFor(genKey) — its id/backend were recorded above. Not a
+      //     behavioral FAIL: no failedRounds/streak bump, and NO ledger record (a bounce reusing
+      //     this round number must leave it free for the later genuine decision). A budget death on
+      //     a fresh pivot must not re-run the pivot's workspace reset, so clear `fresh` — the reset
+      //     already ran this round and the next generation resumes with fresh:false.
+      if (gen.hitBudget) {
+        if (overBudget(st)) {
+          await haltOnBudget("generate");
+          break;
+        }
+        st.round = Math.max(0, st.round - 1); // a budget death isn't a failed attempt — give the round back
+        fresh = false;
+        await ctx.store.save();
+        warn(
+          `${item.id}: generator hit its per-session budget cap in round ${st.round + 1} with per-item budget remaining — resuming the same session next round; NOT grading this incomplete artifact.`
+        );
+        continue;
+      }
+
       // Sandbox-first backstop: whatever scoped the writes (Claude hooks / Codex
       // sandbox), verify nothing escaped the work scope into the repo. Harness-managed
       // paths are allowed; anything else is a real escape.

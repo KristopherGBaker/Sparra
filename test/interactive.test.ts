@@ -23,7 +23,7 @@ function makeVerdict(pass: boolean): Verdict {
     notes: "n",
   };
 }
-const genOut = (over: Partial<GenerateOutput> = {}): GenerateOutput => ({ report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001, tokens: 100, ...over });
+const genOut = (over: Partial<GenerateOutput> = {}): GenerateOutput => ({ report: "", deviations: [], sessionId: "g", hitMaxTurns: false, hitBudget: false, costUsd: 0.001, tokens: 100, ...over });
 const evalOut = (pass: boolean): EvalOutput => ({ verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0.001, tokens: 100 });
 
 async function makeCtx(buildOver: Partial<SparraConfig["build"]> = {}): Promise<{ ctx: Ctx; dir: string }> {

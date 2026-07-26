@@ -169,7 +169,7 @@ function makeVerdict(pass: boolean, over: Partial<Verdict> = {}): Verdict {
   };
 }
 function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {
-  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001, tokens: 100, ...over };
+  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, hitBudget: false, costUsd: 0.001, tokens: 100, ...over };
 }
 function evalOut(verdict: Verdict, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict, raw: "", sessionId: "e", costUsd: 0.001, tokens: 100, ...over };

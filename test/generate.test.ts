@@ -445,6 +445,81 @@ describe("generateItem — turn-cap report recovery (U-D)", () => {
   });
 });
 
+describe("generateItem — budget-death surfaced + aggregated (U1)", () => {
+  const REPORT_JSON = '```json\n{"report":"recovered","deviations":[]}\n```';
+  const base: RunResult = {
+    ok: true, subtype: "success", resultText: "", sessionId: "bud-sess",
+    costUsd: 0, tokens: 1, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+  };
+  function capSession(results: Partial<RunResult>[]) {
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      const shape = results[Math.min(calls.length, results.length - 1)]!;
+      calls.push(p);
+      return { ...base, ...shape };
+    };
+    return { calls, fn };
+  }
+  /** A budget-cap death: the session died on OUR per-role USD cap mid-work (error_max_budget_usd). */
+  const BUDGET_DEATH = (resultText: string): Partial<RunResult> => ({
+    ok: false, subtype: "error_max_budget_usd", resultText, hitBudget: true, sessionId: "bud-sess", errors: ["error_max_budget_usd"],
+  });
+
+  it("(A1) surfaces hitBudget:true from the session result (budget death that still emitted a report → no re-ask)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([BUDGET_DEATH(REPORT_JSON)]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1, runSessionFn: rec.fn,
+    });
+    expect(rec.calls).toHaveLength(1); // a parseable report → no re-ask
+    expect(out.hitBudget).toBe(true);
+    expect(out.report).toBe("recovered"); // NOT laundered — the death surfaces alongside the parsed report
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A2a) initial budget death + no parseable report → re-ask recovers report; hitBudget STAYS true and re-ask cost/tokens are included", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([
+      { ...BUDGET_DEATH("ran out of budget mid-edit — no report block"), costUsd: 0.1, tokens: 100 },
+      { resultText: REPORT_JSON, sessionId: "bud-sess", costUsd: 0.05, tokens: 20, hitBudget: false },
+    ]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1, runSessionFn: rec.fn,
+    });
+    expect(rec.calls).toHaveLength(2); // the re-ask fired to recover the forfeited report
+    expect(out.hitBudget).toBe(true); // a recovered report never launders the budget death
+    expect(out.report).toBe("recovered");
+    expect(out.costUsd).toBeCloseTo(0.15); // BOTH calls' cost accrued
+    expect(out.tokens).toBe(120); // BOTH calls' tokens accrued
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(A2b) initial run clears budget but the RE-ASK dies on budget → hitBudget:true (aggregated across calls)", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([
+      { resultText: "prose, no json at all", costUsd: 0.1, tokens: 100, hitBudget: false },
+      { ...BUDGET_DEATH(REPORT_JSON), costUsd: 0.05, tokens: 20 },
+    ]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1, runSessionFn: rec.fn,
+    });
+    expect(rec.calls).toHaveLength(2);
+    expect(out.hitBudget).toBe(true); // surfaced from the RE-ASK, not the first call
+    expect(out.report).toBe("recovered");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(contrast) a clean run never sets hitBudget", async () => {
+    const { ctx, dir } = await ctxFor("cli");
+    const rec = capSession([{ resultText: REPORT_JSON }]);
+    const out = await generateItem({
+      ctx, item, contractText: "c", workspaceDir: dir, traceDir: dir, traceSeq: 1, runSessionFn: rec.fn,
+    });
+    expect(out.hitBudget).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("generateItem — build read scope (extraReadDirs)", () => {
   it("adds absolute, ~, and repo-relative extra dirs to additionalDirectories", async () => {
     const { ctx, dir } = await ctxFor("cli");

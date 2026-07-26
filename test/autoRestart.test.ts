@@ -24,7 +24,7 @@ function makeVerdict(pass: boolean): Verdict {
   };
 }
 function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {
-  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0, tokens: 10, ...over };
+  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, hitBudget: false, costUsd: 0, tokens: 10, ...over };
 }
 function evalOut(pass: boolean, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict: makeVerdict(pass), raw: "", sessionId: "e", costUsd: 0, tokens: 10, ...over };

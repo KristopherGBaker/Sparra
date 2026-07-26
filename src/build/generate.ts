@@ -37,6 +37,14 @@ export interface GenerateOutput {
   assertionsClaimed?: AssertionClaim[];
   sessionId: string;
   hitMaxTurns: boolean;
+  /** Set when the session died on OUR per-role USD budget cap (`error_max_budget_usd`). The SDK
+   *  enforces the cap only at turn boundaries, so a high-effort turn can overshoot before it trips,
+   *  killing the session mid-work with an admittedly-incomplete artifact. The autonomous round loop
+   *  (phases/build.ts) treats this as "unfinished — resume or halt", NEVER as gradable work. Mirrors
+   *  the interactive `roleRun.ts` classification matrix. AGGREGATED across every session call in this
+   *  invocation (initial run + any report re-ask): true if ANY call hit budget, and NEVER laundered —
+   *  it stays true even when a report parsed or a re-ask recovered one. */
+  hitBudget: boolean;
   /** Set when the session failed on a provider rate/usage limit — the build loop waits + retries. */
   limitHit?: LimitHit;
   costUsd: number;
@@ -154,6 +162,10 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
   const res = await run(baseReq);
   let costUsd = costUsdOrZero(res.costUsd);
   let tokens = res.tokens;
+  // Budget-death telemetry, AGGREGATED across the initial run + any re-ask below (`||=`) and never
+  // laundered: once ANY session call died on the per-role USD cap this stays true even when a report
+  // parsed / the re-ask recovered one. The round loop uses it to short-circuit before the evaluator.
+  let hitBudget = res.hitBudget;
 
   type Report = { report?: string; deviations?: Deviation[]; assertionsClaimed?: AssertionClaim[] };
   const isReport = (v: any) => v && typeof v === "object" && ("report" in v || "deviations" in v);
@@ -187,6 +199,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     });
     costUsd += costUsdOrZero(retry.costUsd);
     tokens += retry.tokens;
+    hitBudget ||= retry.hitBudget; // a re-ask that ALSO dies on budget still surfaces the death
     parsed = extractJsonWhere<Report>(retry.resultText, isReport);
   }
 
@@ -198,6 +211,7 @@ ${map ? `CODEBASE_MAP (conform to these conventions; do not regress existing beh
     assertionsClaimed: Array.isArray(p.assertionsClaimed) ? p.assertionsClaimed : undefined,
     sessionId: res.sessionId,
     hitMaxTurns: res.hitMaxTurns,
+    hitBudget,
     limitHit: res.limitHit,
     costUsd,
     tokens,

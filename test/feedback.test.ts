@@ -239,7 +239,7 @@ describe("renderPatchFeedback — escalation register (U2, assertion 7 & 8)", ()
 // ── Wiring: the build loop threads helper-rendered feedback into the NEXT generator round ──
 
 function genOut(over: Partial<GenerateOutput> = {}): GenerateOutput {
-  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, costUsd: 0.001, tokens: 100, ...over };
+  return { report: "", deviations: [], sessionId: "g", hitMaxTurns: false, hitBudget: false, costUsd: 0.001, tokens: 100, ...over };
 }
 function evalOut(verdict: Verdict, over: Partial<EvalOutput> = {}): EvalOutput {
   return { verdict, raw: "", sessionId: "e", costUsd: 0.001, tokens: 100, ...over };
