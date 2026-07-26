@@ -171,7 +171,11 @@ subprocess **vitest-SKIPS visibly** (counted as pending, never silently filtered
 shared helper `test/helpers/judgeEnv.ts` — the suites are identified by *behavior* (they spawn a real
 `bin/*.mjs` / tsx subprocess), not a hardcoded name list. Because those socket-dependent suites now
 SKIP instead of EPERM-failing, the **full suite is EXPECTED green** under the judge, so a **nonzero
-full-suite exit is a REAL artifact signal** again — no longer auto-classified UN-RUN / "mixed".
+full-suite exit is a REAL artifact signal** again — no longer auto-classified UN-RUN / "mixed" —
+**EXCEPT** the runner's own worker/reporter-RPC-timeout signature (whole files aborting on
+`Timeout calling "onTaskUpdate"`/`onCollected` with **zero** individual failing assertions), which is
+runner CPU saturation → **environment / UN-RUN** (confirm by re-running the aborted file(s) in
+isolation), never an artifact FAIL. See the [KNOWN RUNNER LIMITS](#known-runner-limits-cpu-saturation-flake) note below.
 
 Because the harness process runs **outside** the judge's sandbox, a **live harness-side probe cannot
 confirm** the judge's capabilities; so Sparra ships a **KNOWN-capability matrix**
@@ -180,8 +184,23 @@ scratch enabled)* and injects it into every sandboxed judge's task up front (eva
 artifact evaluator, and contract-negotiation judge). It states the `SPARRA_JUDGE_SANDBOX=1` behavior
 above and, for any OTHER gate that fails ONLY on a listed denied capability, instructs **classify,
 don't re-prove**: that one is **environment-blocked / UN-RUN** (never an artifact FAIL), at most **one**
-confirming probe spent. A **Claude** judge has no OS sandbox, so it gets **no** notes; a
-`danger-full-access` sandbox (gated to a worktree/branch) restores socket listen.
+confirming probe spent. A **Claude** judge has no OS sandbox, so it gets no sandbox-policy rows — but
+it still receives the KNOWN RUNNER LIMITS note below; a `danger-full-access` sandbox (gated to a
+worktree/branch) restores socket listen (still with the runner-limits note).
+
+#### KNOWN RUNNER LIMITS (CPU-saturation flake)
+
+Rendered into the **same injected block** for **every** judge that runs the suite — including a
+no-OS-sandbox **Claude** judge (it is a runner LOAD limit, not a sandbox-policy deny, so it is
+backend/sandbox-independent). Under CPU saturation (a constrained few-core eval worktree, or other
+concurrent load on the machine) vitest's OWN worker/reporter RPC times out: whole test FILES
+abort with `Timeout calling "onTaskUpdate"`/`onCollected` and **zero** individual failing assertions.
+The decisive signature is whole-file aborts + that worker/reporter-RPC-timeout error + zero failing
+ASSERTIONS → classify **runner CPU saturation → environment / UN-RUN**, never an artifact FAIL. Confirm
+by **re-running the aborted file(s) in isolation**; the UN-RUN carve-out holds only on the complete
+signature AND a passing isolation rerun — an isolation rerun with a real assertion failure / nonzero
+result does NOT satisfy it and remains an artifact signal. Concurrent-probe alignment: put the
+concurrent-load repetition on the **focused / diff-touched** suites, not a second simultaneous full suite.
 
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when

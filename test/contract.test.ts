@@ -633,16 +633,19 @@ describe("negotiateContract — sandbox capability-notes injection (U-K)", () =>
     expect(evalCall.prompt).toContain("unix-domain-socket-listen");
     expect(evalCall.prompt).toContain("UN-RUN");
     expect(evalCall.prompt.toLowerCase()).toMatch(/do not re-prove/);
+    expect(evalCall.prompt).toContain('Timeout calling "onTaskUpdate"');
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(wt, { recursive: true, force: true });
 
-    // Claude contract-evaluator (default backend) → NO notes.
+    // Claude contract-evaluator (default backend) → NO sandbox-policy rows, but STILL the runner-limits note.
     const c = await makeCtx();
     const session2 = fakeSession(() => "npm test");
     await negotiateContract(c.ctx, item, c.wt, 1, "", c.wt, session2.fn);
     const evalCall2 = session2.calls.find((cc) => cc.role === "contract-evaluator")!;
     expect(evalCall2.prompt).not.toContain("unix-domain-socket-listen");
     expect(evalCall2.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    expect(evalCall2.prompt).toContain("KNOWN RUNNER LIMITS");
+    expect(evalCall2.prompt).toContain('Timeout calling "onTaskUpdate"');
     fs.rmSync(c.root, { recursive: true, force: true });
     fs.rmSync(c.wt, { recursive: true, force: true });
   });

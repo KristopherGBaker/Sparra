@@ -109,7 +109,9 @@ export const JUDGE_SANDBOX_FLAG = "SPARRA_JUDGE_SANDBOX";
  * Layer `SPARRA_JUDGE_SANDBOX=1` onto an evaluator/judge session env. Under this flag every suite
  * that spawns the real CLI / a tsx subprocess (Unix-socket-dependent — denied by the sandbox policy)
  * SKIPS visibly instead of EPERM-failing, so the full suite is EXPECTED green and a nonzero full-suite
- * exit is a REAL artifact signal. Applied ONLY to sandboxed-judge sessions (evaluator +
+ * exit is a REAL artifact signal — EXCEPT the runner worker/reporter-RPC-timeout signature carved out
+ * in `runnerLimitations` (whole-file aborts on onTaskUpdate/onCollected with zero failing assertions =
+ * CPU saturation → UN-RUN). Applied ONLY to sandboxed-judge sessions (evaluator +
  * contract-evaluator) — never the generator, whose self-verify must keep running everything it can.
  */
 export function withJudgeSandboxFlag(env: Record<string, string>): Record<string, string> {
@@ -154,8 +156,11 @@ export interface DeniedCapability {
  * Pure: the KNOWN-denied capabilities for a judge, keyed on (backend OS-sandbox, sandbox mode,
  * scratch enabled). No probing, exec, or fs access — a static matrix.
  *
- *   - No OS sandbox (Claude judges, `hasOsSandbox: false`) → NO notes (nothing is policy-denied).
- *   - A fully-lifted sandbox (`danger-full-access`, gated to a worktree/branch) → NO notes.
+ *   - No OS sandbox (Claude judges, `hasOsSandbox: false`) → no sandbox-policy rows (nothing is
+ *     policy-denied); the LOAD-based runner-limitation note still renders via
+ *     `sandboxCapabilityNotesText`, so a Claude judge is NOT left without an injected block.
+ *   - A fully-lifted sandbox (`danger-full-access`, gated to a worktree/branch) → no sandbox-policy
+ *     rows (the runner-limitation note still renders).
  *   - `read-only` AND `workspace-write` (Codex judges) → unix-domain-socket LISTEN is denied by
  *     seatbelt policy, INDEPENDENT of `scratchEnabled`/TMPDIR writability (see the file-level note).
  *
@@ -194,33 +199,100 @@ export function sandboxCapabilityNotes(args: {
   return caps;
 }
 
+// ── KNOWN runner (test-runner) LOAD limitations (surfaced to EVERY judge that runs the suite) ─────
+//
+// Distinct from the sandbox-policy matrix above: this is a CPU/LOAD limitation of the vitest RUNNER
+// itself, not a seatbelt POLICY deny. Under CPU saturation (a constrained few-core eval worktree, or
+// other concurrent load on the machine) vitest's OWN worker/reporter RPC times out — whole
+// FILES abort with `Timeout calling "onTaskUpdate"`/`onCollected` and ZERO individual failing
+// assertions. Because it is load, not policy, it hits EVERY judge that runs the suite — including a
+// no-OS-sandbox Claude judge that has no sandbox-policy rows — so it is surfaced through the same
+// injected block, independent of backend/sandbox mode. (Prompt-side rule: src/prompts.ts.)
+
+/** One KNOWN test-runner LOAD limitation surfaced to every judge that runs the suite (backend- and
+ *  sandbox-independent — a runner CPU-saturation flake, NOT a sandbox-policy deny). */
+export interface RunnerLimitation {
+  /** Stable id, e.g. `vitest-worker-rpc-timeout`. */
+  id: string;
+  /** Signature + required UN-RUN classification + isolation-rerun confirmation + probe alignment. */
+  detail: string;
+}
+
 /**
- * Render the known-capability matrix into a short prompt block for the judge's task. Empty string
- * when there are no known denials (so Claude judges get nothing). The instruction is CLASSIFY, don't
- * re-prove: a gate failing ONLY on a listed denied capability is environment-blocked / UN-RUN (cite
- * the error as evidence), never an artifact FAIL; spend at MOST ONE confirming probe — no multi-round
- * re-proving of a known limitation.
+ * Pure: the KNOWN test-runner LOAD limitations surfaced to EVERY judge that runs the suite (including
+ * a no-OS-sandbox Claude judge). Independent of backend / sandbox mode — a runner CPU-saturation
+ * flake, not a sandbox-policy deny. No probing, exec, or fs access — a static list.
+ */
+export function runnerLimitations(): RunnerLimitation[] {
+  return [
+    {
+      id: "vitest-worker-rpc-timeout",
+      detail:
+        `Under CPU saturation (a constrained few-core eval worktree, or other concurrent load on the ` +
+        `machine) vitest's OWN worker/reporter RPC times out: whole test FILES abort with ` +
+        `\`Timeout calling "onTaskUpdate"\` (or \`onCollected\`) and ZERO individual failing assertions. ` +
+        `Decisive signature: whole-file aborts + that worker/reporter-RPC-timeout error + ZERO failing ` +
+        `test ASSERTIONS. Required classification: runner CPU saturation → environment / UN-RUN — this ` +
+        `is NEVER an artifact FAIL. Confirm by RE-RUNNING the aborted file(s) IN ISOLATION: green ⇒ the ` +
+        `gate is SATISFIED. The UN-RUN carve-out holds ONLY on the COMPLETE signature (RPC timeout + ` +
+        `whole-file abort + zero individual assertion failures) AND a PASSING isolation rerun; an ` +
+        `isolation rerun that produces a REAL assertion failure / nonzero result does NOT satisfy the ` +
+        `carve-out and REMAINS an artifact signal. Concurrent-probe alignment: when this documented ` +
+        `flake applies, put the concurrent-load repetition on the FOCUSED / diff-touched suites, NOT a ` +
+        `second simultaneous FULL suite (which manufactures exactly this saturation).`,
+    },
+  ];
+}
+
+/**
+ * Render the KNOWN runner LOAD-limitation list into a prompt block. Always non-empty — every judge
+ * that runs the suite receives it (a no-OS-sandbox Claude judge included), because the flake is
+ * runner CPU saturation, not a sandbox-policy deny that could be absent.
+ */
+export function runnerLimitationsText(): string {
+  const lines = runnerLimitations()
+    .map((l) => `- ${l.id}: ${l.detail}`)
+    .join("\n");
+  return (
+    `\nKNOWN RUNNER LIMITS (test-runner CPU/LOAD limits — apply to EVERY judge that runs the suite, ` +
+    `including a no-OS-sandbox Claude judge; NOT sandbox-policy denies):\n${lines}\n`
+  );
+}
+
+/**
+ * Render the known-capability matrix into a short prompt block for the judge's task. The
+ * sandbox-policy section is present only for a judge with policy denies; the KNOWN RUNNER LIMITS
+ * section (runner CPU-saturation flake) is ALWAYS appended, so a no-OS-sandbox Claude judge still
+ * receives an injected block. The instruction is CLASSIFY, don't re-prove: a gate failing ONLY on a
+ * listed denied capability is environment-blocked / UN-RUN (cite the error as evidence), never an
+ * artifact FAIL; spend at MOST ONE confirming probe — no multi-round re-proving of a known limitation.
  */
 export function sandboxCapabilityNotesText(caps: DeniedCapability[]): string {
-  if (caps.length === 0) return "";
-  const lines = caps.map((c) => `- ${c.capability}: ${c.detail}`).join("\n");
-  return (
-    `\nKNOWN SANDBOX CAPABILITY LIMITS (policy denies, independent of path/TMPDIR writability — do NOT re-prove):\n${lines}\n\n` +
-    `This session runs the test suite with SPARRA_JUDGE_SANDBOX=1: every socket-dependent real-bin/tsx ` +
-    `suite vitest-SKIPS visibly under that flag, so the FULL suite is EXPECTED green here. A NONZERO ` +
-    `full-suite exit is therefore a REAL artifact signal — NOT auto-classifiable as UN-RUN / ` +
-    `environment-blocked / "mixed" — investigate the actual failing test.\n\n` +
-    `If some OTHER gate fails ONLY because of a listed denied capability, classify THAT one ` +
-    `environment-blocked / UN-RUN (cite the exact error as evidence) — it is NOT an artifact FAIL. Spend ` +
-    `AT MOST ONE confirming probe; do not re-prove a known limitation across multiple rounds. A live ` +
-    `harness-side probe is impossible (the harness runs OUTSIDE your sandbox), so this matrix is the source of truth.\n`
-  );
+  const sandboxBlock =
+    caps.length === 0
+      ? ""
+      : `\nKNOWN SANDBOX CAPABILITY LIMITS (policy denies, independent of path/TMPDIR writability — do NOT re-prove):\n` +
+        `${caps.map((c) => `- ${c.capability}: ${c.detail}`).join("\n")}\n\n` +
+        `This session runs the test suite with SPARRA_JUDGE_SANDBOX=1: every socket-dependent real-bin/tsx ` +
+        `suite vitest-SKIPS visibly under that flag, so the FULL suite is EXPECTED green here. A NONZERO ` +
+        `full-suite exit is therefore a REAL artifact signal — NOT auto-classifiable as UN-RUN / ` +
+        `environment-blocked / "mixed" — investigate the actual failing test. EXCEPTION: the ` +
+        `worker/reporter-RPC-timeout signature in KNOWN RUNNER LIMITS below (whole files aborting on ` +
+        `\`Timeout calling "onTaskUpdate"\`/\`onCollected\` with zero failing assertions) is runner CPU ` +
+        `saturation, so it does NOT count as that REAL artifact signal — classify it UN-RUN per that entry.\n\n` +
+        `If some OTHER gate fails ONLY because of a listed denied capability, classify THAT one ` +
+        `environment-blocked / UN-RUN (cite the exact error as evidence) — it is NOT an artifact FAIL. Spend ` +
+        `AT MOST ONE confirming probe; do not re-prove a known limitation across multiple rounds. A live ` +
+        `harness-side probe is impossible (the harness runs OUTSIDE your sandbox), so this matrix is the source of truth.\n`;
+  return sandboxBlock + runnerLimitationsText();
 }
 
 /**
  * Convenience for the injection sites: the capability-notes block for a judge on `backendId` with a
  * given sandbox mode + scratch state. `hasOsSandbox` is resolved by the caller from the backend
- * registry (keeps THIS module free of an sdk import). Returns "" when nothing is denied.
+ * registry (keeps THIS module free of an sdk import). Always returns the KNOWN RUNNER LIMITS block
+ * (the runner CPU-saturation flake) — so even a no-OS-sandbox Claude judge with no sandbox-policy
+ * rows receives an injected block; a policy-denied judge additionally gets the sandbox-limits block.
  */
 export function judgeCapabilityNotesText(args: {
   backendId: string;

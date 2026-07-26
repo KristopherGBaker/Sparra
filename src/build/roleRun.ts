@@ -1692,10 +1692,12 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           onLinkedWorktree // U-2: same boundary signal for per-attempt re-assembly
         )
       : system;
-    // KNOWN sandbox-capability matrix for a sandboxed JUDGE on THIS attempt's backend (empty for a
-    // no-OS-sandbox Claude backend, and for non-judge roles). Recomputed per attempt so a Claude→Codex
-    // fallback gets the notes and a Codex→Claude fallback drops them. Tells the judge that e.g.
-    // unix-domain-socket LISTEN is policy-denied even with a writable scratch TMPDIR → UN-RUN, not FAIL.
+    // KNOWN-limits block for a JUDGE on THIS attempt's backend (skipped for non-judge roles). A
+    // no-OS-sandbox Claude backend gets no sandbox-policy rows but still receives the KNOWN RUNNER
+    // LIMITS note (the vitest worker/reporter-RPC CPU-saturation flake). Recomputed per attempt so a
+    // Claude→Codex fallback additionally gets the sandbox-policy rows and a Codex→Claude fallback drops
+    // them. Tells a sandboxed judge unix-domain-socket LISTEN is policy-denied even with a writable
+    // scratch TMPDIR → UN-RUN, not FAIL.
     const attemptTask = isSandboxedJudge(roleKind)
       ? task +
         judgeCapabilityNotesText({

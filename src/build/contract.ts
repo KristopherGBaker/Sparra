@@ -113,10 +113,11 @@ export async function negotiateContract(
   const genSystem = fill(await loadPrompt(ctx.paths, "contract-generator"), vars);
   const evalSystem = fill(await loadPrompt(ctx.paths, "contract-evaluator"), vars);
 
-  // KNOWN sandbox-capability matrix for the contract-evaluator (empty for a no-OS-sandbox Claude
-  // backend). The contract-evaluator runs read-only — so a sandboxed Codex judge is told up front
-  // that e.g. unix-domain-socket LISTEN is policy-denied even with a writable TMPDIR, so any verify
-  // command it dry-checks that needs a socket listener is classified UN-RUN, not re-proved.
+  // KNOWN-limits block for the contract-evaluator. A no-OS-sandbox Claude backend gets no
+  // sandbox-policy rows but still receives the KNOWN RUNNER LIMITS note (the vitest worker/reporter-RPC
+  // CPU-saturation flake). The contract-evaluator runs read-only — so a sandboxed Codex judge is
+  // additionally told up front that e.g. unix-domain-socket LISTEN is policy-denied even with a
+  // writable TMPDIR, so any verify command it dry-checks that needs a socket listener is UN-RUN, not re-proved.
   const evalCapabilityNotes =
     judgeCapabilityNotesText({
       backendId: evalRole.backend ?? "claude",

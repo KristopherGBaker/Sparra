@@ -408,22 +408,26 @@ describe("runRole — safety intent + wiring", () => {
     expect(codexEv.calls[0]!.prompt).toContain("unix-domain-socket-listen");
     expect(codexEv.calls[0]!.prompt).toContain("UN-RUN");
     expect(codexEv.calls[0]!.prompt.toLowerCase()).toMatch(/do not re-prove/);
+    expect(codexEv.calls[0]!.prompt).toContain('Timeout calling "onTaskUpdate"');
 
     // Codex contract-evaluator (the other sandboxed judge kind) → notes present too.
     const codexCe = recorder();
     await runRole({ ctx, roleKind: "contract-evaluator", contract: "- works", backend: "codex", runSessionFn: codexCe.fn });
     expect(codexCe.calls[0]!.prompt).toContain("unix-domain-socket-listen");
 
-    // Claude evaluator (no OS sandbox) → NO notes.
+    // Claude evaluator (no OS sandbox) → NO sandbox-policy rows, but STILL the runner-limits flake note.
     const claudeEv = recorder();
     await runRole({ ctx, roleKind: "evaluator", brief: "grade", backend: "claude", runSessionFn: claudeEv.fn });
     expect(claudeEv.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
     expect(claudeEv.calls[0]!.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    expect(claudeEv.calls[0]!.prompt).toContain("KNOWN RUNNER LIMITS");
+    expect(claudeEv.calls[0]!.prompt).toContain('Timeout calling "onTaskUpdate"');
 
     // A non-judge role (generator) never gets the notes even on Codex.
     const codexGen = recorder();
     await runRole({ ctx, roleKind: "generator", brief: "build", backend: "codex", runSessionFn: codexGen.fn });
     expect(codexGen.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
+    expect(codexGen.calls[0]!.prompt).not.toContain('Timeout calling "onTaskUpdate"');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

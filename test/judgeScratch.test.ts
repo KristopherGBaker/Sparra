@@ -11,6 +11,8 @@ import {
   sandboxCapabilityNotes,
   sandboxCapabilityNotesText,
   judgeCapabilityNotesText,
+  runnerLimitations,
+  runnerLimitationsText,
   type JudgeSandboxMode,
 } from "../src/build/judgeScratch.ts";
 
@@ -138,11 +140,20 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
     expect(text.toLowerCase()).toMatch(/harness runs outside your sandbox|live harness-side probe is impossible/);
   });
 
-  it("renders EMPTY text when nothing is denied (Claude judge)", () => {
-    expect(sandboxCapabilityNotesText([])).toBe("");
-    expect(
-      judgeCapabilityNotesText({ backendId: "claude", hasOsSandbox: false, sandboxMode: "read-only", scratchEnabled: false })
-    ).toBe("");
+  it("renders NO sandbox-policy section when nothing is policy-denied, but still the runner-limits block (Claude judge)", () => {
+    // The runner CPU-saturation flake is LOAD, not a sandbox-policy deny, so it renders even with []
+    // caps — a no-OS-sandbox Claude judge is NOT left with an empty injected block.
+    const emptyCaps = sandboxCapabilityNotesText([]);
+    expect(emptyCaps).not.toBe("");
+    expect(emptyCaps).not.toMatch(/KNOWN SANDBOX CAPABILITY LIMITS/); // no policy section
+    expect(emptyCaps).toMatch(/KNOWN RUNNER LIMITS/); // runner-limits section present
+    const claude = judgeCapabilityNotesText({
+      backendId: "claude",
+      hasOsSandbox: false,
+      sandboxMode: "read-only",
+      scratchEnabled: false,
+    });
+    expect(claude).toBe(emptyCaps); // Claude judge == the []-caps render
   });
 
   it("judgeCapabilityNotesText composes matrix + render for a sandboxed judge", () => {
@@ -214,5 +225,86 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
       // UDS entry is still present for workspace-write.
       expect(text).toMatch(/unix-domain-socket-listen/);
     });
+  });
+});
+
+describe("runnerLimitations — vitest worker/reporter-RPC CPU-saturation flake (pure)", () => {
+  const render = (args: { hasOsSandbox: boolean; sandboxMode: JudgeSandboxMode; backendId?: string }) =>
+    judgeCapabilityNotesText({
+      backendId: args.backendId ?? (args.hasOsSandbox ? "codex" : "claude"),
+      hasOsSandbox: args.hasOsSandbox,
+      sandboxMode: args.sandboxMode,
+      scratchEnabled: args.sandboxMode === "workspace-write",
+    });
+
+  it("(matrix) exposes the vitest-worker-rpc-timeout entry, backend/sandbox-independent", () => {
+    const ids = runnerLimitations().map((l) => l.id);
+    expect(ids).toContain("vitest-worker-rpc-timeout");
+    // Pure + deterministic: same call → same strings (assertion 8), no env/fs setup.
+    expect(runnerLimitations()).toEqual(runnerLimitations());
+    expect(runnerLimitationsText()).toBe(runnerLimitationsText());
+  });
+
+  // Assertion 1: the Claude (no-OS-sandbox) rendered block is NON-empty and carries the full note.
+  it("(assertion 1) Claude judge block is non-empty and carries the complete flake note", () => {
+    const text = render({ hasOsSandbox: false, sandboxMode: "read-only" });
+    expect(text).not.toBe("");
+    expect(text).toContain('Timeout calling "onTaskUpdate"');
+    expect(text).toContain("onCollected");
+    // zero-failing-assertions signature clause
+    expect(text).toMatch(/ZERO (individual failing assertions|failing test ASSERTIONS)/);
+    // CPU-saturation attribution
+    expect(text).toMatch(/CPU saturation/);
+    // environment / UN-RUN classification, conditioned on the COMPLETE signature + passing isolation rerun
+    expect(text).toMatch(/environment \/ UN-RUN/);
+    expect(text).toMatch(/COMPLETE signature[\s\S]*PASSING isolation rerun/);
+    // never/not an artifact FAIL
+    expect(text).toMatch(/NEVER an artifact FAIL|not an artifact FAIL/i);
+    // re-run-in-isolation confirmation step
+    expect(text).toMatch(/RE-RUNNING the aborted file\(s\) IN ISOLATION/);
+  });
+
+  // Assertion 15: negative clause — a failing isolation rerun does NOT satisfy the carve-out.
+  it("(assertion 15) states the negative: a failing isolation rerun remains an artifact signal", () => {
+    const text = render({ hasOsSandbox: false, sandboxMode: "read-only" });
+    expect(text).toMatch(
+      /isolation rerun that produces a REAL assertion failure \/ nonzero result does NOT satisfy the carve-out and REMAINS an artifact signal/
+    );
+  });
+
+  // Assertion 6: concurrent-probe alignment.
+  it("(assertion 6) aligns the concurrent-load probe onto focused/diff-touched suites", () => {
+    const text = render({ hasOsSandbox: false, sandboxMode: "read-only" });
+    expect(text).toMatch(/FOCUSED \/ diff-touched suites/);
+    expect(text).toMatch(/NOT a second simultaneous FULL suite/i);
+  });
+
+  // Assertion 2: contrast — the Claude block has NO sandbox-policy rows.
+  it("(assertion 2) Claude judge block has neither sandbox-policy row", () => {
+    const text = render({ hasOsSandbox: false, sandboxMode: "read-only" });
+    expect(text).not.toContain("unix-domain-socket-listen");
+    expect(text).not.toContain("vitest-vite-temp-write");
+  });
+
+  // Assertion 3: the flake entry reaches every OS-sandboxed shape alongside the UDS row.
+  it("(assertion 3) codex read-only + workspace-write carry BOTH the flake and the UDS row; danger-full-access carries the flake", () => {
+    for (const mode of ["read-only", "workspace-write"] as const) {
+      const text = render({ hasOsSandbox: true, sandboxMode: mode });
+      expect(text).toContain("vitest-worker-rpc-timeout");
+      expect(text).toContain("unix-domain-socket-listen");
+    }
+    const danger = render({ hasOsSandbox: true, sandboxMode: "danger-full-access" });
+    expect(danger).toContain("vitest-worker-rpc-timeout");
+    expect(danger).not.toContain("unix-domain-socket-listen"); // fully-lifted → no policy rows
+  });
+
+  // Assertion 5: the block-level "REAL artifact signal" sentence is explicitly scoped, and the
+  // exception clause co-renders in the SAME block as the byte-frozen UDS row for an OS-sandboxed judge.
+  it("(assertion 5) scopes the REAL-artifact-signal sentence with an RPC-timeout EXCEPTION in the same block as the UDS row", () => {
+    const text = render({ hasOsSandbox: true, sandboxMode: "read-only" });
+    // The UDS row (byte-frozen real-signal sentence) co-renders with the exception clause.
+    expect(text).toContain("unix-domain-socket-listen");
+    // regex spanning "REAL artifact signal" → EXCEPTION → the signature.
+    expect(text).toMatch(/REAL artifact signal[\s\S]*EXCEPTION[\s\S]*Timeout calling "onTaskUpdate"/);
   });
 });

@@ -170,12 +170,16 @@ scratch writes (EPERM on `node_modules/.vite-temp` etc.). **Judge-env skip flag 
 judge role env — `evaluator` or `contract-evaluator` — sets **`SPARRA_JUDGE_SANDBOX=1`** (never the
 generator), so every suite that spawns the real CLI / a `--import tsx` subprocess **vitest-SKIPS
 visibly** via the shared `test/helpers/judgeEnv.ts` instead of a socket-`listen` EPERM; the full suite
-is then EXPECTED green and a nonzero full-suite exit is a REAL signal. A Codex (OS-sandboxed) judge
+is then EXPECTED green and a nonzero full-suite exit is a REAL signal — **except** the runner's own
+worker/reporter-RPC-timeout signature (whole files aborting on `Timeout calling "onTaskUpdate"`/
+`onCollected` with **zero** failing assertions), which is runner CPU saturation → UN-RUN (confirm by
+re-running the aborted file(s) in isolation), never an artifact FAIL. A Codex (OS-sandboxed) judge
 also has a **known-capability matrix** injected up front (`sandboxCapabilityNotes`,
 `src/build/judgeScratch.ts`) stating that behavior; for any OTHER gate that fails only because
 unix-domain-socket `listen(2)` is denied by sandbox **policy** (even with a writable scratch `TMPDIR`),
 it's classified **UN-RUN** (environment-blocked, not an artifact FAIL) with at most one confirming
-probe — no re-proving it every round. A Claude judge (no OS sandbox) gets no notes. See
+probe — no re-proving it every round. A Claude judge (no OS sandbox) gets no sandbox-policy rows, but
+still receives the KNOWN RUNNER LIMITS note (the worker/reporter-RPC CPU-saturation flake). See
 [backends → known-capability matrix](backends.md#known-sandbox-capability-matrix-surfaced-to-the-judge).
 
 **Eval provenance (`expectedHead` / `evalBaseRef`, judge roles only).** Two controls that make a

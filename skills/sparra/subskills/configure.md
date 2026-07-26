@@ -192,9 +192,13 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   the sandbox still denies unix-socket `listen(2)` as **policy**. So every judge/evaluator session env
   ALSO sets **`SPARRA_JUDGE_SANDBOX=1`** (never the generator): under it every suite that spawns the
   real CLI / a tsx subprocess **vitest-SKIPS visibly** (shared `test/helpers/judgeEnv.ts`), so the full
-  suite is EXPECTED green and a nonzero full-suite exit is a REAL signal (no longer UN-RUN / mixed). That
-  behavior + the residual capability matrix are surfaced up front via the injected
-  **known-capability matrix** (`sandboxCapabilityNotes`). The contract-evaluator additionally
+  suite is EXPECTED green and a nonzero full-suite exit is a REAL signal (no longer UN-RUN / mixed) —
+  EXCEPT the runner's own worker/reporter-RPC-timeout signature (whole files aborting on
+  `Timeout calling "onTaskUpdate"`/`onCollected` with zero failing assertions = runner CPU saturation →
+  UN-RUN, confirmed by an isolation re-run, never an artifact FAIL). That
+  behavior + the residual capability matrix + a **KNOWN RUNNER LIMITS** note (rendered for every judge
+  that runs the suite, including a no-OS-sandbox Claude judge) are surfaced up front via the injected
+  **known-limits block** (`sandboxCapabilityNotes` + `runnerLimitations`). The contract-evaluator additionally
   relaxes to `workspace-write` (network off, integrity-guarded) on an isolated checkout so it can
   prove the contract's verify commands run; `--worktree` now accepts it. The read-only proposer roles
   (reviewer, contract-generator) keep the plain merged `build.env`. See

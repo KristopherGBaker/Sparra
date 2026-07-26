@@ -158,9 +158,10 @@ export async function evaluateItem(args: {
   const holdoutText = await readHoldout(ctx);
   const holdout = holdoutSection(holdoutText);
 
-  // KNOWN sandbox-capability matrix for THIS judge (empty for a no-OS-sandbox Claude backend). A
-  // sandboxed Codex judge is told up front that e.g. unix-domain-socket LISTEN is policy-denied even
-  // with a writable scratch TMPDIR, so a socket-dependent gate is classified UN-RUN, not re-proved.
+  // KNOWN-limits block for THIS judge. A no-OS-sandbox Claude backend gets no sandbox-policy rows but
+  // still receives the KNOWN RUNNER LIMITS note (the vitest worker/reporter-RPC CPU-saturation flake).
+  // A sandboxed Codex judge additionally is told up front that e.g. unix-domain-socket LISTEN is
+  // policy-denied even with a writable scratch TMPDIR, so a socket-dependent gate is UN-RUN, not re-proved.
   const capabilityNotes = judgeCapabilityNotesText({
     backendId: role.backend ?? "claude",
     hasOsSandbox: getBackend(role.backend).capabilities.sandbox,
@@ -198,7 +199,9 @@ ${holdout}${memory}${capabilityNotes}Exercise the artifact for real, check every
     // DURABLE worktree-local cache the provisioning prewarm filled, so an offline `swift build`
     // reuses it. NB: PATH writability only — the sandbox still denies unix-socket LISTEN as policy.
     // SPARRA_JUDGE_SANDBOX=1 (judge-only) makes the socket-dependent real-bin/tsx suites vitest-SKIP
-    // under this evaluator, so the full suite is expected green and a nonzero exit is a real signal.
+    // under this evaluator, so the full suite is expected green and a nonzero exit is a real signal —
+    // EXCEPT the runner worker/reporter-RPC-timeout signature (whole-file aborts on onTaskUpdate with
+    // zero failing assertions = CPU saturation → UN-RUN), which the injected KNOWN RUNNER LIMITS carves out.
     env: withJudgeSandboxFlag(createSandboxSessionEnv(ctx.config, workspaceDir)),
     skills: skillsForRole(ctx, "evaluator"),
     // Attach the in-process exercise server ONLY to a backend that can host it; a Codex evaluator

@@ -525,6 +525,8 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     expect(codexPrompt).toContain("UN-RUN");
     expect(codexPrompt).toMatch(/AT MOST ONE/);
     expect(codexPrompt.toLowerCase()).toMatch(/do not re-prove/);
+    // The runner-limits flake note co-renders in the same injected block.
+    expect(codexPrompt).toContain('Timeout calling "onTaskUpdate"');
 
     const claude = recorder();
     await evaluateItem({
@@ -532,9 +534,13 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
       traceDir: path.join(dir, "trace"), traceSeq: 1, runSessionFn: claude.fn,
       integrityDeps: cleanIntegrityDeps, role: { backend: "claude", model: "opus" },
     });
-    // A no-OS-sandbox Claude judge gets NO capability notes (nothing is policy-denied).
-    expect(claude.calls[0]!.prompt).not.toContain("unix-domain-socket-listen");
-    expect(claude.calls[0]!.prompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    // A no-OS-sandbox Claude judge gets NO sandbox-policy rows (nothing is policy-denied)…
+    const claudePrompt = claude.calls[0]!.prompt;
+    expect(claudePrompt).not.toContain("unix-domain-socket-listen");
+    expect(claudePrompt).not.toContain("KNOWN SANDBOX CAPABILITY LIMITS");
+    // …but STILL receives the KNOWN RUNNER LIMITS flake note (the vitest worker/reporter-RPC flake).
+    expect(claudePrompt).toContain("KNOWN RUNNER LIMITS");
+    expect(claudePrompt).toContain('Timeout calling "onTaskUpdate"');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
