@@ -319,7 +319,15 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // sorted non-reflector prompts changed. Every rule's MEANING and every harness-parsed format
     // (JSON blocks, `CONTRACT: AGREED` sentinels, placeholders) is preserved. To regenerate after a
     // future edit: run the suite; the received hash in the failure IS the correct new value.
-    expect(h.digest("hex")).toBe("382ec178e8243998858ae9e911d85eaabfc96576c920c699e9b7748dca8e9f92");
+    // Regenerated 2026-07-26 (U3 four-finding prompt fold): folded four recurring findings into
+    // DEFAULT_PROMPTS — contract-evaluator (SATISFIABILITY extends the harness-owned carve-out to
+    // post-merge HOST-ONLY steps; VERIFY drops the "count ≥ N" floor form for same-env zero/no-NEW
+    // failure gating + REJECT absolute pass-count thresholds), contract-generator (matching
+    // host-only + same-env suite-health clauses; verify-command guidance prefers rg over grep and
+    // requires an exit-status assertion to END in a `test` carrying the status), evaluator (a
+    // BLOCKING item must be satisfiable WITHIN the contract's declared scope; an out-of-scope gap
+    // is a non-blocking NOTE, not a FAIL). Three existing prompts edited; no new prompt.
+    expect(h.digest("hex")).toBe("55429015d791abb1d8a4c60f0309cb584f269bb4a3502e2257d93cfbb15f4016");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

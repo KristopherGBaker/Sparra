@@ -110,6 +110,54 @@ describe("git-lifecycle state is harness-owned — contracts gate on worktree CO
   });
 });
 
+describe("U3 four-finding folds — present exactly once in the corresponding role string", () => {
+  const cg = DEFAULT_PROMPTS["contract-generator"]!;
+  const ce = DEFAULT_PROMPTS["contract-evaluator"]!;
+  const ev = DEFAULT_PROMPTS.evaluator!;
+  const once = (s: string, re: RegExp) => (s.match(re) ?? []).length;
+
+  it("fold 1 — host-only post-merge carve-out lands in BOTH contract-evaluator and contract-generator, once each", () => {
+    const clause = /Post-merge HOST-ONLY steps \(main-checkout-only registration, a sync needing untracked harness state\)/g;
+    // contract-evaluator: rejects an assertion demanding worktree evidence for such a step.
+    expect(ce).toMatch(clause);
+    expect(ce).toContain("REJECT an assertion demanding worktree evidence");
+    expect(once(ce, clause)).toBe(1);
+    // contract-generator: conductor-owned post-merge, deviation note at most.
+    expect(cg).toMatch(clause);
+    expect(cg).toContain("conductor-owned post-merge too");
+    expect(once(cg, clause)).toBe(1);
+  });
+
+  it("fold 2 — same-env suite-health / REJECT absolute pass-count, once each; the old count-floor form is GONE", () => {
+    // contract-evaluator: rejects absolute pass-count thresholds; env-dependent counts.
+    const ceClause = /REJECT any absolute pass-count threshold/g;
+    expect(ce).toMatch(ceClause);
+    expect(once(ce, ceClause)).toBe(1);
+    // The removed floor form must not survive on either role (env-gated skips lower the judge's count).
+    expect(ce).not.toContain("count ≥ N");
+    expect(ce).not.toContain("count >= N");
+    // contract-generator: same-env zero/no-NEW failure form, never an absolute pass-count.
+    const cgClause = /Suite-health assertions gate on zero \/ no-NEW failures vs a SAME-environment baseline, never an absolute pass-count/g;
+    expect(cg).toMatch(cgClause);
+    expect(once(cg, cgClause)).toBe(1);
+  });
+
+  it("fold 3 — verify-command form (rg over grep; exit-status ends in a `test`) in contract-generator, once", () => {
+    const clause = /an exit-status assertion must END in a `test` carrying the status/g;
+    expect(cg).toMatch(clause);
+    expect(cg).toContain("Prefer `rg` over `grep` for doc/long-line sweeps");
+    expect(cg).toContain("a trailing `; echo $?` always exits 0 and voids the gate");
+    expect(once(cg, clause)).toBe(1);
+  });
+
+  it("fold 4 — evaluator scope rule (blocking item must be in-scope; out-of-scope gap is a NOTE) in evaluator, once", () => {
+    const clause = /A BLOCKING item must itself be satisfiable WITHIN the contract's declared scope/g;
+    expect(ev).toMatch(clause);
+    expect(ev).toContain("non-blocking NOTE/finding, not a FAIL");
+    expect(once(ev, clause)).toBe(1);
+  });
+});
+
 describe("prompt-auditor / reflector — audit for readability, not just terseness", () => {
   it("prompt-auditor scores READABILITY alongside low redundancy and won't cram into a denser wall", () => {
     const pa = DEFAULT_PROMPTS["prompt-auditor"]!;
