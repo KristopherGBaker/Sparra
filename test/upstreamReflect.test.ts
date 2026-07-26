@@ -312,7 +312,14 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // SIDE-EFFECTS bullet now generalizes that a doc enumerating the repo's modules/phases/commands
     // (e.g. a repo-map/architecture overview) is itself a doc layer, made stale by an add/rename of
     // what it enumerates. One existing prompt edited; no new prompt.
-    expect(h.digest("hex")).toBe("7a7e4684c76f523532833f642c18123127f182ec9b22db049436b08cb8ec66ce");
+    // Regenerated 2026-07-26 (U1 generalize build-loop role prompts): the four heavy build-loop
+    // prompts — contract-generator, contract-evaluator, generator, evaluator — were rewritten
+    // materially shorter (near-duplicate enumerated failure families collapsed into generalized
+    // principles, the DEFEAT/FLAKY paragraph-walls split into bullets), so the digest over the
+    // sorted non-reflector prompts changed. Every rule's MEANING and every harness-parsed format
+    // (JSON blocks, `CONTRACT: AGREED` sentinels, placeholders) is preserved. To regenerate after a
+    // future edit: run the suite; the received hash in the failure IS the correct new value.
+    expect(h.digest("hex")).toBe("382ec178e8243998858ae9e911d85eaabfc96576c920c699e9b7748dca8e9f92");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");
