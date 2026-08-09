@@ -33,10 +33,26 @@ export interface IntegrityDeps {
    *  supply it — absent ⇒ treated as "not a symlink" (unchanged non-symlink behavior). Used to
    *  classify a symlinked top-level `node_modules` as scratch. Real impl: `fs.lstatSync(...).isSymbolicLink()`. */
   isSymlink?: (absPath: string) => boolean;
+  /** Read a symlink's TARGET, or null if it isn't a symlink / doesn't exist. Optional for the same
+   *  reason as `isSymlink`. Real impl: `fs.readlinkSync(...)`. */
+  readLink?: (absPath: string) => string | null;
+  /** Recreate a symlink pointing at `target` (restore). Real impl: unlink-then-`fs.symlinkSync`. */
+  writeLink?: (absPath: string, target: string) => void;
 }
 
 export interface SourceSnapshot {
   files: Map<string /*relpath*/, Buffer /*bytes*/>;
+  /** TRACKED symlinks, snapshotted by link TARGET rather than by content.
+   *
+   *  A symlink has no readable bytes of its own: `readFile` FOLLOWS it, so a symlink-to-directory
+   *  yields EISDIR → null → it never enters `files`. Enforce would then see a path git lists but the
+   *  snapshot lacks, classify it as evaluator-injected, and DELETE it — destroying a tracked symlink
+   *  on every exercise and reporting that destruction as "(reverted)". Snapshotting the target keeps
+   *  the integrity guarantee (tampering is still detected and undone) without the guard itself being
+   *  the thing that mutates the artifact surface.
+   *
+   *  Optional so a snapshot built by an in-memory fake without link deps still type-checks. */
+  links?: Map<string /*relpath*/, string /*link target*/>;
 }
 
 /**
@@ -98,11 +114,22 @@ function artifactSurface(workspace: string, deps: IntegrityDeps): string[] {
 /** Capture the artifact surface before an exercise that may write. */
 export function snapshotArtifact(workspace: string, deps: IntegrityDeps): SourceSnapshot {
   const files = new Map<string, Buffer>();
+  const links = new Map<string, string>();
   for (const rel of artifactSurface(workspace, deps)) {
-    const content = deps.readFile(path.resolve(workspace, rel));
+    const abs = path.resolve(workspace, rel);
+    // Symlinks first: `readFile` follows the link, so a symlink-to-dir would read as EISDIR → null
+    // and silently fall out of the snapshot. Record the target instead.
+    if (deps.isSymlink?.(abs)) {
+      const target = deps.readLink?.(abs) ?? null;
+      if (target !== null) {
+        links.set(rel, target);
+        continue;
+      }
+    }
+    const content = deps.readFile(abs);
     if (content !== null) files.set(rel, content);
   }
-  return { files };
+  return { files, links };
 }
 
 /** After the exercise: detect + REVERT any change to the artifact surface (modified content,
@@ -122,9 +149,23 @@ export function enforceArtifactIntegrity(workspace: string, before: SourceSnapsh
     }
   }
 
+  // Restore any snapshotted SYMLINK whose target changed or which vanished. Compared by target,
+  // not bytes — see `SourceSnapshot.links`.
+  const links = before.links ?? new Map<string, string>();
+  for (const [rel, target] of links) {
+    const abs = path.resolve(workspace, rel);
+    const now = deps.isSymlink?.(abs) ? (deps.readLink?.(abs) ?? null) : null;
+    if (now !== target) {
+      deps.writeLink?.(abs, target); // recreate (missing/replaced) or repoint (retargeted)
+      mutated.add(rel);
+    }
+  }
+
   // Remove any non-ignored file the evaluator injected (present now, absent from the snapshot).
+  // A path snapshotted as a symlink is NOT injected — without this exemption the guard deletes
+  // every tracked symlink on the surface, which is exactly the bug the `links` map exists to fix.
   for (const rel of current) {
-    if (!before.files.has(rel)) {
+    if (!before.files.has(rel) && !links.has(rel)) {
       deps.removeFile(path.resolve(workspace, rel));
       mutated.add(rel);
     }
@@ -160,6 +201,24 @@ export function realIntegrityDeps(): IntegrityDeps {
       } catch {
         return false;
       }
+    },
+    readLink: (absPath) => {
+      try {
+        return fs.readlinkSync(absPath); // the link's own target — never follows to the destination
+      } catch {
+        return null;
+      }
+    },
+    writeLink: (absPath, target) => {
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      // Clear whatever is in the way first: symlinkSync fails EEXIST, and the evaluator may have
+      // replaced the link with a regular file or a real directory.
+      try {
+        fs.rmSync(absPath, { force: true, recursive: true });
+      } catch {
+        // best-effort; the symlinkSync below surfaces a genuine failure
+      }
+      fs.symlinkSync(target, absPath);
     },
     writeFile: (absPath, content) => {
       fs.mkdirSync(path.dirname(absPath), { recursive: true });

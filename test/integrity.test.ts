@@ -400,3 +400,107 @@ describe("symlinked top-level node_modules — real git repo + real symlink + re
     }
   });
 });
+
+describe("TRACKED symlink on the artifact surface (regression: Sumi's Apps/Sumi/Resources/KanjiVG)", () => {
+  const g = (dir: string, args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+
+  /** A repo with a COMMITTED symlink (git mode 120000) pointing at a directory outside it — the
+   *  shape of Sumi's `Apps/Sumi/Resources/KanjiVG`. Unlike the node_modules case this one is
+   *  TRACKED, so no scratch exclusion applies and it lands squarely on the artifact surface. */
+  function tmpRepo(): { ws: string; parent: string; linkRel: string; target: string } {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-integ-tracked-symlink-"));
+    const ws = path.join(parent, "repo");
+    const target = path.join(parent, "assets"); // OUTSIDE the repo
+    fs.mkdirSync(ws);
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, "0f9a8.svg"), "<svg/>\n");
+    g(ws, ["init", "-q"]);
+    g(ws, ["config", "user.email", "t@t"]);
+    g(ws, ["config", "user.name", "t"]);
+    fs.mkdirSync(path.join(ws, "Resources"), { recursive: true });
+    const linkRel = "Resources/KanjiVG";
+    fs.symlinkSync(target, path.join(ws, linkRel));
+    fs.writeFileSync(path.join(ws, "src.ts"), "export const x = 1;\n");
+    g(ws, ["add", "-A"]);
+    g(ws, ["commit", "-q", "-m", "item-start"]);
+    return { ws, parent, linkRel, target };
+  }
+  const cleanup = (parent: string) => fs.rmSync(parent, { recursive: true, force: true });
+
+  it("fixture precondition: the symlink is tracked at mode 120000 and on the artifact surface", () => {
+    const { ws, parent, linkRel } = tmpRepo();
+    try {
+      expect(g(ws, ["ls-files", "-s", linkRel])).toMatch(/^120000 /);
+      const listed = g(ws, ["ls-files", "--cached", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+      expect(listed).toContain(linkRel);
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("no writes ⇒ no violation, and the symlink SURVIVES (pre-fix: guard deleted it and reported '(reverted)')", () => {
+    const { ws, parent, linkRel, target } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const before = snapshotArtifact(ws, deps);
+      // Snapshotted by TARGET, not bytes — readFile would follow the link and hit EISDIR.
+      expect(before.links?.get(linkRel)).toBe(target);
+      expect(before.files.has(linkRel)).toBe(false);
+
+      expect(enforceArtifactIntegrity(ws, before, deps)).toEqual([]);
+
+      expect(fs.lstatSync(path.join(ws, linkRel)).isSymbolicLink()).toBe(true);
+      expect(g(ws, ["status", "--porcelain", "--", linkRel]).trim()).toBe("");
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("an evaluator DELETING the symlink is detected and the symlink is restored", () => {
+    const { ws, parent, linkRel, target } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const before = snapshotArtifact(ws, deps);
+      fs.rmSync(path.join(ws, linkRel)); // evaluator clobbers it
+
+      expect(enforceArtifactIntegrity(ws, before, deps)).toEqual([linkRel]);
+      expect(fs.readlinkSync(path.join(ws, linkRel))).toBe(target);
+      expect(g(ws, ["status", "--porcelain", "--", linkRel]).trim()).toBe("");
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("an evaluator REPLACING the symlink with a regular file is detected and the symlink is restored", () => {
+    const { ws, parent, linkRel, target } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const before = snapshotArtifact(ws, deps);
+      fs.rmSync(path.join(ws, linkRel));
+      fs.writeFileSync(path.join(ws, linkRel), "not a symlink\n"); // materialized
+
+      expect(enforceArtifactIntegrity(ws, before, deps)).toEqual([linkRel]);
+      expect(fs.lstatSync(path.join(ws, linkRel)).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(path.join(ws, linkRel))).toBe(target);
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  it("an evaluator REPOINTING the symlink elsewhere is detected and the original target is restored", () => {
+    const { ws, parent, linkRel, target } = tmpRepo();
+    try {
+      const deps = realIntegrityDeps();
+      const before = snapshotArtifact(ws, deps);
+      const decoy = path.join(parent, "decoy");
+      fs.mkdirSync(decoy);
+      fs.rmSync(path.join(ws, linkRel));
+      fs.symlinkSync(decoy, path.join(ws, linkRel));
+
+      expect(enforceArtifactIntegrity(ws, before, deps)).toEqual([linkRel]);
+      expect(fs.readlinkSync(path.join(ws, linkRel))).toBe(target);
+    } finally {
+      cleanup(parent);
+    }
+  });
+});
