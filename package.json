@@ -40,6 +40,6 @@
     "vitest": "^3.0.0"
   },
   "optionalDependencies": {
-    "@openai/codex-sdk": "^0.144.1"
+    "@openai/codex-sdk": "^0.154.0"
   }
 }
