@@ -173,11 +173,16 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   sessions, evaluator `run_command` spawns, and verify/measure command spawns. Use this for
   per-project tool cache/user dirs (for example `HOME: /private/tmp` under a sandbox). Optional
   `.sparra/environment.md` carries concise environment notes for writer prompts.
-- **`exercise.sandbox`** — `workspace-write` (default) | `read-only`. The sandbox a **Codex**
-  evaluator's exercise runs under on a worktree boundary: `workspace-write` lets `npm test`/`tsc`
-  write the scratch they need (network off; a source-integrity guard reverts+fails any
-  artifact-source write). `read-only` is the strict pre-fix behavior. The Claude evaluator
-  exercises via the in-process runner regardless.
+- **`exercise.sandbox`** — `workspace-write` (default) | `read-only` | `danger-full-access`. The
+  sandbox a **Codex** evaluator's exercise runs under on a worktree boundary: `workspace-write` lets
+  `npm test`/`tsc` write the scratch they need (network off; a source-integrity guard reverts+fails
+  any artifact-source write). `read-only` is the strict pre-fix behavior. `danger-full-access` is the
+  opt-in for a gate Seatbelt denies OUTRIGHT rather than starving of scratch — an **iOS/macOS**
+  exercise needs CoreSimulatorService XPC, which scratch can't grant, so a `workspace-write` judge
+  marks those gates UN-RUN; it lifts the sandbox (guard still armed, network no longer withholdable)
+  and, like `roles.*.sandbox`, is honored only on an isolated checkout — denied, you get a loud
+  warning, not a silent read-only judge. The Claude evaluator exercises via the in-process runner
+  regardless.
 - **default writable-scratch env layer (all sandboxed build sessions)** — the **evaluator**,
   **contract-evaluator**, the **generator/writer**, AND the **contract-negotiation** sessions get a
   default env layer (`src/build/judgeScratch.ts`, `createSandboxSessionEnv`) that redirects `TMPDIR`,

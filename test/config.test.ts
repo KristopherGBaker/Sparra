@@ -46,6 +46,11 @@ describe("exercise.sandbox knob", () => {
     expect(merged.exercise.mechanism).toBe("cli");
     expect(merged.exercise.runExistingTests).toBe(true);
   });
+
+  it("accepts the opt-in danger-full-access exercise sandbox (the iOS/CoreSimulatorService mode)", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { exercise: { sandbox: "danger-full-access" } });
+    expect(merged.exercise.sandbox).toBe("danger-full-access");
+  });
 });
 
 describe("build.distillTechnique knob", () => {

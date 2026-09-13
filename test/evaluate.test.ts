@@ -94,6 +94,42 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("carries the opt-in danger-full-access exercise sandbox through to the request on a branch boundary", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "danger-full-access";
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    // readOnly intent + the scratch carve-out still hold; `sandbox` selects WHICH relaxed mode, so a
+    // Codex judge gets a lifted sandbox (CoreSimulatorService XPC) rather than workspace-write.
+    expect(rec.calls[0]!.readOnly).toBe(true);
+    expect(rec.calls[0]!.exerciseScratch).toBe(true);
+    expect(rec.calls[0]!.sandbox).toBe("danger-full-access");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves the default workspace-write request shape untouched — no `sandbox` field", async () => {
+    const { ctx, dir } = await makeCtx();
+    ctx.store.data.build.branch = "sparra/x";
+    ctx.config.exercise.sandbox = "workspace-write";
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    expect(rec.calls[0]!.exerciseScratch).toBe(true);
+    expect(rec.calls[0]!.sandbox).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("GATES full access on the isolated checkout: no branch ⇒ neither scratch nor a lifted sandbox", async () => {
+    const { ctx, dir } = await makeCtx(); // no branch, not a worktree
+    ctx.config.exercise.sandbox = "danger-full-access";
+    const rec = recorder();
+    await run(ctx, dir, rec, cleanIntegrityDeps);
+    expect(rec.calls[0]!.readOnly).toBe(true);
+    expect(rec.calls[0]!.exerciseScratch).toBeUndefined();
+    expect(rec.calls[0]!.sandbox).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("does NOT carry exerciseScratch with no branch, or when sandbox=read-only", async () => {
     const { ctx, dir } = await makeCtx();
     ctx.config.exercise.sandbox = "workspace-write";

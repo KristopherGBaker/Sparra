@@ -20,6 +20,11 @@ Two platforms, set by **`exercise.ios.platform`**:
 ```yaml
 exercise:
   mechanism: ios
+  # Codex evaluators only: CoreSimulatorService XPC is denied by Seatbelt under workspace-write, so
+  # simctl boot/install/launch (and xcodebuild) report UN-RUN. Lift the judge's sandbox to run them.
+  # Gated to a worktree/branch boundary; the source-integrity guard stays armed, but network can no
+  # longer be withheld. A Claude evaluator exercises in-process and ignores this.
+  sandbox: danger-full-access
   ios:
     cli: xcodebuildmcp     # default; "" → raw xcrun/xcodebuild
     scheme: ""             # "" → the evaluator discovers it

@@ -133,6 +133,20 @@ describe("codex backend", () => {
       expect(codexSandboxMode({ exerciseScratch: true })).toBe("workspace-write");
       expect(codexSandboxMode({ sandbox: "danger-full-access", exerciseScratch: true })).toBe("danger-full-access");
     });
+
+    it("the carve-out grants the REQUESTED mode: an opt-in full-access exercise is not flattened to workspace-write", () => {
+      // The iOS case: CoreSimulatorService XPC is denied by Seatbelt POLICY, so writable scratch is
+      // not enough — the judge must actually receive danger-full-access.
+      expect(codexSandboxMode({ readOnly: true, exerciseScratch: true, sandbox: "danger-full-access" })).toBe(
+        "danger-full-access"
+      );
+      // Without the exercise carve-out, readOnly still wins over the sandbox knob.
+      expect(codexSandboxMode({ readOnly: true, sandbox: "danger-full-access" })).toBe("read-only");
+      // An unset sandbox keeps the historical default.
+      expect(codexSandboxMode({ readOnly: true, exerciseScratch: true, sandbox: "workspace-write" })).toBe(
+        "workspace-write"
+      );
+    });
   });
 
   // U-A #6: when scratch flips a read-only judge (evaluator OR contract-evaluator) to
@@ -164,6 +178,15 @@ describe("codex backend", () => {
         expect(codexCapture.threadOptions.networkAccessEnabled).toBe(false);
       }
     );
+
+    it("a full-access exercise reaches Codex as danger-full-access, with no unenforceable network flag", async () => {
+      codexCapture.threadOptions = undefined;
+      await codexBackend.runTask(judgeReq("evaluator", { sandbox: "danger-full-access" }));
+      expect(codexCapture.threadOptions.sandboxMode).toBe("danger-full-access");
+      // The OS sandbox is lifted, so `networkAccessEnabled:false` would claim an intent nothing can
+      // enforce — it is deliberately NOT sent.
+      expect(codexCapture.threadOptions.networkAccessEnabled).toBeUndefined();
+    });
 
     it("a plain read-only judge (no scratch) stays read-only, no network relaxation flag", async () => {
       codexCapture.threadOptions = undefined;

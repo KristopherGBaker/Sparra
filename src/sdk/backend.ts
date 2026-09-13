@@ -108,17 +108,20 @@ export interface AgentRequest {
   /** No writes at all — evaluator / plan-only roles (Claude → plan mode, Codex → read-only). */
   readOnly?: boolean;
   /**
-   * Write-role sandbox scope for a backend with a native OS sandbox (Codex → ThreadOptions
-   * .sandboxMode). `readOnly` ALWAYS wins; unset → "workspace-write". "danger-full-access"
-   * lifts the sandbox for native toolchains and MUST be gated to a git worktree/branch
-   * boundary by the caller. A backend without an OS sandbox (Claude) ignores it.
+   * Native-OS-sandbox scope for a backend that has one (Codex → ThreadOptions.sandboxMode).
+   * Unset → "workspace-write". "danger-full-access" lifts the sandbox for native toolchains and
+   * MUST be gated to a git worktree/branch boundary by the caller. `readOnly` wins over it —
+   * EXCEPT alongside `exerciseScratch`, where this picks WHICH relaxed mode the exercising judge
+   * gets. A backend without an OS sandbox (Claude) ignores it.
    */
   sandbox?: "workspace-write" | "danger-full-access";
-  /** This read-only role EXERCISES the artifact and needs writable scratch for test/build tools.
-   *  A backend with an OS sandbox (Codex) relaxes from "read-only" to "workspace-write" (network
-   *  off) so e.g. `npm test` can write node_modules/.vite-temp; `readOnly` otherwise still holds
-   *  (no source-mutation tools). A backend without an OS sandbox (Claude) ignores it. The runner
-   *  pairs this with a source-integrity guard that reverts any artifact write. */
+  /** This read-only role EXERCISES the artifact and needs a relaxed sandbox for test/build tools.
+   *  A backend with an OS sandbox (Codex) relaxes from "read-only" to the `sandbox` mode above —
+   *  "workspace-write" (network off) so e.g. `npm test` can write node_modules/.vite-temp, or
+   *  "danger-full-access" for a gate Seatbelt denies outright (an iOS exercise's
+   *  CoreSimulatorService XPC), where network can no longer be withheld. `readOnly` otherwise still
+   *  holds (no source-mutation tools). A backend without an OS sandbox (Claude) ignores it. The
+   *  runner pairs this with a source-integrity guard that reverts any artifact write. */
   exerciseScratch?: boolean;
   /** Bash substrings always denied. */
   denyBashContains?: string[];

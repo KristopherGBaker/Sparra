@@ -7,7 +7,7 @@ import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser, exerciseRunInstruction, type Exerciser } from "../sdk/exercise.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
-import { exerciseScratchEnabled } from "./exerciseScratch.ts";
+import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { budgetExceeded, costUsdOrZero } from "./budget.ts";
@@ -202,15 +202,24 @@ export async function evaluateItem(args: {
   // never attach the phantom tool. Resolve via the SAME registry `runSession` uses (no hardcoded id).
   const inProcessMcp = getBackend(role.backend).capabilities.inProcessMcp;
   const exerciser = (args.buildExerciserFn ?? buildExerciser)(ctx.config, workspaceDir, { inProcessMcp });
-  // Only relax the Codex exercise sandbox to workspace-write on an isolated-checkout boundary — a
-  // Sparra build branch OR a linked git worktree (the integrity guard needs git to revert). Carries
+  // Only relax the Codex exercise sandbox on an isolated-checkout boundary — a Sparra build branch
+  // OR a linked git worktree (the integrity guard needs git to revert). The relaxed mode is the one
+  // `exercise.sandbox` requests: workspace-write (default) or the opt-in danger-full-access for a
+  // gate Seatbelt denies outright (iOS/CoreSimulatorService). Either way the request carries
   // `exerciseScratch` + arms the source-integrity guard. `isLinkedWorktree` is computed lazily.
-  const exerciseScratch = exerciseScratchEnabled({
+  const exerciseMode = exerciseSandboxMode({
     judge: true,
     sandbox: ctx.config.exercise.sandbox,
     hasBranch: !!ctx.store.data.build.branch,
     isWorktree: () => isLinkedWorktree(workspaceDir),
   });
+  const exerciseScratch = exerciseMode !== "read-only";
+  const refusal = fullAccessRefusalWarning({
+    requested: ctx.config.exercise.sandbox,
+    mode: exerciseMode,
+    roleLabel: `evaluator-${item.id}`,
+  });
+  if (refusal) warn(refusal);
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {
@@ -237,7 +246,7 @@ export async function evaluateItem(args: {
   const capabilityNotes = judgeCapabilityNotesText({
     backendId: role.backend ?? "claude",
     hasOsSandbox: getBackend(role.backend).capabilities.sandbox,
-    sandboxMode: exerciseScratch ? "workspace-write" : "read-only",
+    sandboxMode: exerciseMode,
     scratchEnabled: exerciseScratch,
   });
 
@@ -281,6 +290,9 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
     ...(inProcessMcp ? { allowedTools: exerciser.allowedTools, mcpServers: exerciser.mcpServers } : {}),
     readOnly: true,
     ...(exerciseScratch ? { exerciseScratch: true } : {}),
+    // Picks WHICH relaxed mode the scratch carve-out grants (see `codexSandboxMode`); omitted for
+    // workspace-write so the default request shape is byte-identical to before the knob existed.
+    ...(exerciseMode === "danger-full-access" ? { sandbox: "danger-full-access" as const } : {}),
     ...evaluatorGuard(ctx),
     maxTurns: ctx.config.build.maxTurnsPerSession,
     maxBudgetUsd: args.maxBudgetUsd ?? ctx.config.build.maxBudgetUsdPerItem,

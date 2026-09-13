@@ -362,6 +362,28 @@ describe("runRole — --worktree dispatch + writer rejection (Item D)", () => {
     expect(fs.existsSync(call.cwd!)).toBe(false); // torn down
   });
 
+  it("a worktree'd evaluator with exercise.sandbox=danger-full-access carries the lifted sandbox (roleRun path)", GIT_IT, async () => {
+    const rec = recorder();
+    ctxRepo.config.exercise.sandbox = "danger-full-access";
+    try {
+      const res = await runRole({
+        ctx: ctxRepo,
+        roleKind: "evaluator",
+        brief: "grade",
+        useWorktree: true,
+        runSessionFn: rec.fn,
+        provisionFn: fakeProvision(),
+      });
+      expect(res.ok).toBe(true);
+      const call = rec.calls[0]!;
+      expect(call.readOnly).toBe(true);
+      expect(call.exerciseScratch).toBe(true);
+      expect(call.sandbox).toBe("danger-full-access"); // the linked worktree IS the isolated checkout
+    } finally {
+      ctxRepo.config.exercise.sandbox = "workspace-write";
+    }
+  });
+
   it("in-place runRole WITHOUT useWorktree is unchanged: cwd = workspace, no scratch, no provisioning", GIT_IT, async () => {
     const rec = recorder();
     const provisionFn = fakeProvision();

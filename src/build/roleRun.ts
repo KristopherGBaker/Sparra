@@ -29,7 +29,7 @@ import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
 import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
-import { exerciseScratchEnabled } from "./exerciseScratch.ts";
+import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
 import { reaskBudgetUsd, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
@@ -1587,16 +1587,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // signal as the guard and the warning predicate (3rd / final call site).
   const system = await roleSystemPrompt(ctx, roleKind, exerciser?.guidance ?? "", req.allowVerify, true, onLinkedWorktree);
 
-  // The exercising evaluator (only) gets writable scratch on an isolated-checkout boundary (a Sparra
+  // The exercising judges (only) get a relaxed sandbox on an isolated-checkout boundary (a Sparra
   // build branch OR a linked git worktree) so a Codex exercise can write node_modules/.vite-temp etc.;
-  // the source-integrity guard reverts any artifact write it makes. Other read-only roles (reviewer,
-  // contract-*) never get it. `onLinkedWorktree` was probed once above (git-free for in-place runs).
-  const exerciseScratch = exerciseScratchEnabled({
+  // the source-integrity guard reverts any artifact write it makes. `exercise.sandbox` picks the mode:
+  // workspace-write (default) or the opt-in danger-full-access for a gate Seatbelt denies outright
+  // (iOS/CoreSimulatorService). Other read-only roles (reviewer, contract-generator) never get it.
+  // `onLinkedWorktree` was probed once above (git-free for in-place runs).
+  const exerciseMode = exerciseSandboxMode({
     judge: isSandboxedJudge(roleKind),
     sandbox: ctx.config.exercise.sandbox,
     hasBranch: !!ctx.store.data.build.branch,
     isWorktree: onLinkedWorktree,
   });
+  const exerciseScratch = exerciseMode !== "read-only";
+  const refusal = fullAccessRefusalWarning({
+    requested: ctx.config.exercise.sandbox,
+    mode: exerciseMode,
+    roleLabel: `role-run-${roleKind}`,
+  });
+  if (refusal) warn(refusal);
   const integrityDeps = req.integrityDeps ?? realIntegrityDeps();
 
   // Writable-scratch env layer for the sandboxed BUILD sessions — the two judge roles (evaluator +
@@ -1744,7 +1753,13 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
             roleLabel: `role-run-${roleKind}`,
           }),
         }
-      : { readOnly: true, ...(exerciseScratch ? { exerciseScratch: true } : {}) }),
+      : {
+          readOnly: true,
+          ...(exerciseScratch ? { exerciseScratch: true } : {}),
+          // Picks WHICH relaxed mode the scratch carve-out grants (see `codexSandboxMode`); omitted
+          // for workspace-write so the default request shape is unchanged.
+          ...(exerciseMode === "danger-full-access" ? { sandbox: "danger-full-access" as const } : {}),
+        }),
     // NB: the exercise `mcpServers`/`allowedTools` are NOT attached here — they're gated per attempt
     // on the attempt backend's `inProcessMcp` capability (a fallback may switch backends), so a
     // no-in-process-MCP backend (Codex) never gets a server that would be silently dropped.
@@ -1815,7 +1830,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
         judgeCapabilityNotesText({
           backendId: be,
           hasOsSandbox: getBackend(be).capabilities.sandbox,
-          sandboxMode: exerciseScratch ? "workspace-write" : "read-only",
+          sandboxMode: exerciseMode,
           scratchEnabled: exerciseScratch,
         }) +
         // A hooks-capable contract-evaluator on the isolated-worktree boundary has the verify-Bash

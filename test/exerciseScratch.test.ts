@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { exerciseScratchEnabled } from "../src/build/exerciseScratch.ts";
+import {
+  exerciseSandboxMode,
+  exerciseScratchEnabled,
+  fullAccessRefusalWarning,
+} from "../src/build/exerciseScratch.ts";
 
 describe("exerciseScratchEnabled — truth table", () => {
   it("in-place (judge, ws-write, no branch, no worktree) ⇒ false", () => {
@@ -50,5 +54,80 @@ describe("exerciseScratchEnabled — truth table", () => {
       true
     );
     expect(called).toBe(1);
+  });
+});
+
+describe("exerciseSandboxMode — the danger-full-access carve-out", () => {
+  const judgeOn = { judge: true, hasBranch: true, isWorktree: false } as const;
+
+  it("grants the REQUESTED writable mode on an isolated checkout (branch OR worktree)", () => {
+    expect(exerciseSandboxMode({ ...judgeOn, sandbox: "workspace-write" })).toBe("workspace-write");
+    expect(exerciseSandboxMode({ ...judgeOn, sandbox: "danger-full-access" })).toBe("danger-full-access");
+    // The worktree branch of the gate grants full access too (a standalone `sparra eval` on a worktree).
+    expect(
+      exerciseSandboxMode({ judge: true, sandbox: "danger-full-access", hasBranch: false, isWorktree: true })
+    ).toBe("danger-full-access");
+  });
+
+  it("GATES full access on the isolated checkout — no branch, no worktree ⇒ read-only, never granted", () => {
+    expect(
+      exerciseSandboxMode({ judge: true, sandbox: "danger-full-access", hasBranch: false, isWorktree: false })
+    ).toBe("read-only");
+  });
+
+  it("never grants full access to a NON-judge role, even on a branch + worktree", () => {
+    expect(
+      exerciseSandboxMode({ judge: false, sandbox: "danger-full-access", hasBranch: true, isWorktree: true })
+    ).toBe("read-only");
+  });
+
+  it("an unrecognized sandbox string is read-only (no accidental relaxation)", () => {
+    expect(exerciseSandboxMode({ ...judgeOn, sandbox: "read-only" })).toBe("read-only");
+    expect(exerciseSandboxMode({ ...judgeOn, sandbox: "workspace-read" })).toBe("read-only");
+  });
+
+  it("scratch is enabled for EVERY relaxed mode (both writable modes write + need the guard armed)", () => {
+    expect(exerciseScratchEnabled({ ...judgeOn, sandbox: "danger-full-access" })).toBe(true);
+    expect(exerciseScratchEnabled({ ...judgeOn, sandbox: "workspace-write" })).toBe(true);
+    expect(exerciseScratchEnabled({ ...judgeOn, sandbox: "read-only" })).toBe(false);
+  });
+
+  it("keeps the worktree probe LAZY on the full-access path too", () => {
+    let called = 0;
+    const thunk = () => {
+      called++;
+      return true;
+    };
+    expect(exerciseSandboxMode({ judge: false, sandbox: "danger-full-access", hasBranch: false, isWorktree: thunk })).toBe(
+      "read-only"
+    );
+    expect(exerciseSandboxMode({ judge: true, sandbox: "danger-full-access", hasBranch: true, isWorktree: thunk })).toBe(
+      "danger-full-access"
+    );
+    expect(called).toBe(0);
+    expect(exerciseSandboxMode({ judge: true, sandbox: "danger-full-access", hasBranch: false, isWorktree: thunk })).toBe(
+      "danger-full-access"
+    );
+    expect(called).toBe(1);
+  });
+});
+
+describe("fullAccessRefusalWarning", () => {
+  it("warns LOUDLY only when full access was asked for and DENIED", () => {
+    const w = fullAccessRefusalWarning({ requested: "danger-full-access", mode: "read-only", roleLabel: "evaluator-1" });
+    expect(w).toContain("Refusing 'danger-full-access'");
+    expect(w).toContain("evaluator-1");
+    expect(w).toContain("UN-RUN");
+  });
+
+  it("is silent when full access was GRANTED", () => {
+    expect(
+      fullAccessRefusalWarning({ requested: "danger-full-access", mode: "danger-full-access", roleLabel: "r" })
+    ).toBeUndefined();
+  });
+
+  it("is silent on the everyday workspace-write fallback (in-place runs must not spam)", () => {
+    expect(fullAccessRefusalWarning({ requested: "workspace-write", mode: "read-only", roleLabel: "r" })).toBeUndefined();
+    expect(fullAccessRefusalWarning({ requested: "read-only", mode: "read-only", roleLabel: "r" })).toBeUndefined();
   });
 });

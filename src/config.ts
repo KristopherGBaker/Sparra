@@ -469,10 +469,14 @@ export interface SparraConfig {
      *  runner-level source-integrity guard reverts + FAILS any write the evaluator makes to the
      *  artifact surface, and network stays off — so the evaluator still cannot mutate the code it
      *  grades or reach the network. "read-only" forces Codex's strict no-write sandbox (the pre-fix
-     *  behavior; exercising tools that need scratch will EPERM). Only relaxed on a worktree/branch
-     *  boundary (the integrity guard needs git to revert); in-place runs stay read-only. The Claude
-     *  evaluator exercises via the in-process runner regardless of this. */
-    sandbox: "read-only" | "workspace-write";
+     *  behavior; exercising tools that need scratch will EPERM). "danger-full-access" lifts the OS
+     *  sandbox for a gate Seatbelt blocks OUTRIGHT rather than merely starving of scratch — an
+     *  iOS/macOS exercise needs CoreSimulatorService XPC, which writable scratch cannot grant; the
+     *  integrity guard still reverts artifact writes, but network can NO LONGER be withheld, so the
+     *  isolated checkout is the only boundary. Only relaxed on a worktree/branch boundary (the
+     *  integrity guard needs git to revert); in-place runs stay read-only. The Claude evaluator
+     *  exercises via the in-process runner regardless of this. */
+    sandbox: "read-only" | "workspace-write" | "danger-full-access";
     /** Command Sparra runs to detect/run the existing suite (auto-detected if empty). */
     existingTestCommand: string;
     /** For mechanism: custom — a shell recipe the evaluator may invoke. */

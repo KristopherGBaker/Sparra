@@ -119,6 +119,25 @@ naming the mutated files. Set `exercise.sandbox: read-only` to keep the strict p
 (scratch-needing tools will `EPERM`). The **Claude** evaluator exercises via an in-process runner
 and is unaffected.
 
+#### `exercise.sandbox: danger-full-access` — when writable scratch isn't the problem
+
+Some gates aren't starved of scratch, they're **denied by policy**: an **iOS/macOS** exercise talks to
+**CoreSimulatorService** over XPC (`simctl boot`/`install`/`launch`, and `xcodebuild` needs that *and*
+writes), which Seatbelt refuses under `workspace-write` no matter how writable the workspace is. Such a
+judge doesn't fail loudly — it classifies the gate **UN-RUN**, so an iOS artifact gets graded on
+everything *except* whether it runs. `exercise.sandbox: danger-full-access` lifts the OS sandbox for
+the **judge's exercise** (the evaluator + contract-evaluator), the same way `roles.*.sandbox` does for a
+**write** role. The source-integrity guard is still armed and still reverts + fails any artifact write,
+but with no sandbox left there is **no way to withhold the network** — Sparra therefore does not send an
+unenforceable `networkAccessEnabled: false`, and the isolated checkout is the only remaining boundary.
+
+**Same safety gate as the write-role knob:** full access is honored **only on an isolated checkout** — a
+Sparra build branch **or** a linked git worktree. Denied, the exercise stays `read-only` and Sparra emits
+a **loud warning** naming the consequence (the gate will be UN-RUN, not graded) rather than quietly
+handing back a read-only judge. The **Claude** judge has no OS sandbox and ignores the knob. The judge's
+injected **KNOWN-capability matrix** tracks the granted mode, so a full-access judge is no longer told
+that unix-domain-socket `listen(2)` is denied — it isn't.
+
 A **symlinked top-level `node_modules`** (a dep dir linked in from outside the repo) is a special
 case: `.gitignore`'s `node_modules/` is a **dir-only** pattern, so it does **not** match a symlink,
 and `git ls-files --others` surfaces the symlink as an untracked entry. The guard **canonicalizes**
@@ -186,7 +205,8 @@ above and, for any OTHER gate that fails ONLY on a listed denied capability, ins
 don't re-prove**: that one is **environment-blocked / UN-RUN** (never an artifact FAIL), at most **one**
 confirming probe spent. A **Claude** judge has no OS sandbox, so it gets no sandbox-policy rows — but
 it still receives the KNOWN RUNNER LIMITS note below; a `danger-full-access` sandbox (gated to a
-worktree/branch) restores socket listen (still with the runner-limits note).
+worktree/branch — `roles.*.sandbox` for a write role, `exercise.sandbox` for the judge's exercise)
+restores socket listen (still with the runner-limits note).
 
 #### KNOWN RUNNER LIMITS (CPU-saturation flake)
 
