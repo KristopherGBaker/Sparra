@@ -220,9 +220,9 @@ restores socket listen (still with the runner-limits note).
 
 #### KNOWN RUNNER LIMITS (CPU-saturation flake)
 
-Rendered into the **same injected block** for **every** judge that runs the suite — including a
-no-OS-sandbox **Claude** judge (it is a runner LOAD limit, not a sandbox-policy deny, so it is
-backend/sandbox-independent). Under CPU saturation (a constrained few-core eval worktree, or other
+**Stack-conditional** (see below): rendered into the **same injected block** for every judge that runs
+a **vitest** suite — including a no-OS-sandbox **Claude** judge, since it is a runner LOAD limit, not
+a sandbox-policy deny. Under CPU saturation (a constrained few-core eval worktree, or other
 concurrent load on the machine) vitest's OWN worker/reporter RPC times out: whole test FILES
 abort with `Timeout calling "onTaskUpdate"`/`onCollected` and **zero** individual failing assertions.
 The decisive signature is whole-file aborts + that worker/reporter-RPC-timeout error + zero failing
@@ -231,6 +231,32 @@ by **re-running the aborted file(s) in isolation**; the UN-RUN carve-out holds o
 signature AND a passing isolation rerun — an isolation rerun with a real assertion failure / nonzero
 result does NOT satisfy it and remains an artifact signal. Concurrent-probe alignment: put the
 concurrent-load repetition on the **focused / diff-touched** suites, not a second simultaneous full suite.
+
+#### These notes are conditional on the graded project's stack
+
+The blocks above describe the **Node/vitest** ecosystem — `net.createServer().listen()`, a
+tsx-launched CLI smoke over a `.pipe`, vitest's `Timeout calling "onTaskUpdate"`, and what
+`SPARRA_JUDGE_SANDBOX=1` makes a vitest suite do. A Swift/iOS project whose gates are `make verify`,
+`xcodebuild` and `swift test` was being handed all of it. That is not just wasted tokens: it told the
+judge the full suite was "EXPECTED green" under a flag the project never reads, and pre-authorized an
+UN-RUN classification keyed to a runner it would never invoke — aimed straight at the gates it had to
+grade.
+
+`detectJudgeStack(workspaceDir)` (`src/build/judgeScratch.ts`) reads the graded tree — `package.json`,
+a `vitest.config.*`, and whether anything actually consumes `SPARRA_JUDGE_SANDBOX` — and each claim is
+emitted only where it is TRUE:
+
+| Claim | Emitted when |
+|---|---|
+| unix-domain-socket `listen(2)` is policy-denied | any sandboxed judge (a sandbox fact, not a Node one) — the Node *examples* only for a Node project |
+| "full suite EXPECTED green under `SPARRA_JUDGE_SANDBOX=1`" | the project actually wires that flag |
+| `vitest-vite-temp-write` EPERM | a vitest project, read-only sandbox |
+| KNOWN RUNNER LIMITS (worker/reporter RPC) | a vitest project |
+
+A Swift project on Codex gets the socket-policy row alone; on Claude (no OS sandbox, no vitest) it
+gets **nothing injected**. All three injection sites are covered — the interactive judges
+(`roleRun.ts`), the autonomous artifact evaluator (`evaluate.ts`), and the contract-evaluator
+(`contract.ts`).
 
 **Safety gate.** Codex runs `hooks: false` + `approvalPolicy: "never"`, so the git
 worktree/branch is the *only* boundary. `danger-full-access` is therefore honored **only when

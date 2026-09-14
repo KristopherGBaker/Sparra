@@ -1888,6 +1888,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
           hasOsSandbox: getBackend(be).capabilities.sandbox,
           sandboxMode: exerciseMode,
           scratchEnabled: exerciseScratch,
+          workspaceDir: workspace,
         }) +
         // A hooks-capable contract-evaluator on the isolated-worktree boundary has the verify-Bash
         // allow-hook wired (see the `contractEvaluatorGuard` call above) — told, not inferred, so the

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { defaultConfig } from "../src/config.ts";
 import {
+  detectJudgeStack,
+  UNKNOWN_JUDGE_STACK,
   JUDGE_SCRATCH_ENV_KEYS,
   judgeScratchEnvLayer,
   judgeSandboxEnv,
@@ -15,6 +17,23 @@ import {
   runnerLimitationsText,
   type JudgeSandboxMode,
 } from "../src/build/judgeScratch.ts";
+
+/**
+ * The existing matrix assertions describe a Node/vitest project's judge — that is what the notes are
+ * ABOUT. Stack detection now decides which of them are emitted, so the fixture has to say so; a
+ * Swift/iOS project gets none of it (see the stack-conditioning describe at the end of this file).
+ */
+const VITEST_STACK = { node: true, vitest: true, judgeSandboxSeam: true } as const;
+
+/** An on-disk Node/vitest workspace, so `judgeCapabilityNotesText` DETECTS the stack rather than
+ *  being told — the detection is the thing under test for the stack-conditioning cases below. */
+const NODE_WS = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-judgestack-node-"));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+  fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
+  return dir;
+})();
 
 describe("judgeScratch — default writable-scratch env layer", () => {
   it("redirects TMPDIR, clang, and SwiftPM caches all UNDER the scratch root", () => {
@@ -96,7 +115,7 @@ describe("judgeScratch — default writable-scratch env layer", () => {
 
 describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", () => {
   const codex = (mode: JudgeSandboxMode, scratchEnabled = mode === "workspace-write") =>
-    sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: mode, scratchEnabled });
+    sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: mode, scratchEnabled , stack: VITEST_STACK });
 
   it("Codex read-only AND workspace-write both deny unix-domain-socket LISTEN", () => {
     for (const mode of ["read-only", "workspace-write"] as const) {
@@ -120,7 +139,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
   it("a no-OS-sandbox backend (Claude judge) gets NO notes", () => {
     for (const mode of ["read-only", "workspace-write", "danger-full-access"] as const) {
       expect(
-        sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: mode, scratchEnabled: false })
+        sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: mode, scratchEnabled: false , stack: VITEST_STACK })
       ).toEqual([]);
     }
   });
@@ -130,7 +149,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
   });
 
   it("renders CLASSIFY-don't-reprove text with UN-RUN / one-probe / no-multi-round instruction", () => {
-    const text = sandboxCapabilityNotesText(codex("read-only"));
+    const text = sandboxCapabilityNotesText(codex("read-only"), VITEST_STACK);
     expect(text).toMatch(/unix-domain-socket-listen/);
     expect(text).toMatch(/environment-blocked \/ UN-RUN/);
     expect(text.toLowerCase()).toMatch(/not an? artifact fail|it is not an artifact fail/i);
@@ -143,7 +162,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
   it("renders NO sandbox-policy section when nothing is policy-denied, but still the runner-limits block (Claude judge)", () => {
     // The runner CPU-saturation flake is LOAD, not a sandbox-policy deny, so it renders even with []
     // caps — a no-OS-sandbox Claude judge is NOT left with an empty injected block.
-    const emptyCaps = sandboxCapabilityNotesText([]);
+    const emptyCaps = sandboxCapabilityNotesText([], VITEST_STACK);
     expect(emptyCaps).not.toBe("");
     expect(emptyCaps).not.toMatch(/KNOWN SANDBOX CAPABILITY LIMITS/); // no policy section
     expect(emptyCaps).toMatch(/KNOWN RUNNER LIMITS/); // runner-limits section present
@@ -152,6 +171,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
       hasOsSandbox: false,
       sandboxMode: "read-only",
       scratchEnabled: false,
+      workspaceDir: NODE_WS,
     });
     expect(claude).toBe(emptyCaps); // Claude judge == the []-caps render
   });
@@ -162,6 +182,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
       hasOsSandbox: true,
       sandboxMode: "workspace-write",
       scratchEnabled: true,
+      workspaceDir: NODE_WS,
     });
     expect(text).toMatch(/unix-domain-socket-listen/);
     expect(text).toMatch(/UN-RUN/);
@@ -174,18 +195,19 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
       hasOsSandbox: true,
       sandboxMode: "workspace-write",
       scratchEnabled: true,
+      workspaceDir: NODE_WS,
     });
     expect(text).toContain("SPARRA_JUDGE_SANDBOX=1");
     expect(text.toUpperCase()).toMatch(/EXPECTED green/i);
     expect(text.toUpperCase()).toMatch(/REAL (ARTIFACT )?SIGNAL/);
     // The same forward-looking note reaches a read-only judge too (the flag applies to the full suite).
-    expect(sandboxCapabilityNotesText(codex("read-only"))).toContain("SPARRA_JUDGE_SANDBOX=1");
+    expect(sandboxCapabilityNotesText(codex("read-only"), VITEST_STACK)).toContain("SPARRA_JUDGE_SANDBOX=1");
   });
 
   describe("vitest-vite-temp-write entry", () => {
     it("is PRESENT for read-only + hasOsSandbox=true, regardless of scratchEnabled", () => {
       for (const scratchEnabled of [true, false]) {
-        const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled });
+        const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled , stack: VITEST_STACK });
         expect(caps.map((c) => c.capability)).toContain("vitest-vite-temp-write");
         const entry = caps.find((c) => c.capability === "vitest-vite-temp-write")!;
         // Detail must cite the concrete path so a presence-only stub cannot pass.
@@ -197,22 +219,22 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
     });
 
     it("is ABSENT for workspace-write (writes to checkout are allowed)", () => {
-      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true });
+      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true , stack: VITEST_STACK });
       expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
     });
 
     it("is ABSENT with no OS sandbox (Claude judge)", () => {
-      const caps = sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: "read-only", scratchEnabled: false });
+      const caps = sandboxCapabilityNotes({ backendId: "claude", hasOsSandbox: false, sandboxMode: "read-only", scratchEnabled: false , stack: VITEST_STACK });
       expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
     });
 
     it("is ABSENT for danger-full-access", () => {
-      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "danger-full-access", scratchEnabled: true });
+      const caps = sandboxCapabilityNotes({ backendId: "codex", hasOsSandbox: true, sandboxMode: "danger-full-access", scratchEnabled: true , stack: VITEST_STACK });
       expect(caps.map((c) => c.capability)).not.toContain("vitest-vite-temp-write");
     });
 
     it("appears in rendered text for read-only judge under the same header", () => {
-      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled: false });
+      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled: false , workspaceDir: NODE_WS });
       expect(text).toMatch(/vitest-vite-temp-write/);
       expect(text).toMatch(/node_modules\/.vite-temp/);
       // Rendered under the same KNOWN SANDBOX CAPABILITY LIMITS header.
@@ -220,7 +242,7 @@ describe("sandboxCapabilityNotes — KNOWN sandbox-capability matrix (pure)", ()
     });
 
     it("does NOT appear in rendered text for workspace-write judge", () => {
-      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true });
+      const text = judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "workspace-write", scratchEnabled: true , workspaceDir: NODE_WS });
       expect(text).not.toMatch(/vitest-vite-temp-write/);
       // UDS entry is still present for workspace-write.
       expect(text).toMatch(/unix-domain-socket-listen/);
@@ -235,14 +257,15 @@ describe("runnerLimitations — vitest worker/reporter-RPC CPU-saturation flake 
       hasOsSandbox: args.hasOsSandbox,
       sandboxMode: args.sandboxMode,
       scratchEnabled: args.sandboxMode === "workspace-write",
+      workspaceDir: NODE_WS,
     });
 
   it("(matrix) exposes the vitest-worker-rpc-timeout entry, backend/sandbox-independent", () => {
-    const ids = runnerLimitations().map((l) => l.id);
+    const ids = runnerLimitations(VITEST_STACK).map((l) => l.id);
     expect(ids).toContain("vitest-worker-rpc-timeout");
     // Pure + deterministic: same call → same strings (assertion 8), no env/fs setup.
-    expect(runnerLimitations()).toEqual(runnerLimitations());
-    expect(runnerLimitationsText()).toBe(runnerLimitationsText());
+    expect(runnerLimitations(VITEST_STACK)).toEqual(runnerLimitations(VITEST_STACK));
+    expect(runnerLimitationsText(VITEST_STACK)).toBe(runnerLimitationsText(VITEST_STACK));
   });
 
   // Assertion 1: the Claude (no-OS-sandbox) rendered block is NON-empty and carries the full note.
@@ -306,5 +329,83 @@ describe("runnerLimitations — vitest worker/reporter-RPC CPU-saturation flake 
     expect(text).toContain("unix-domain-socket-listen");
     // regex spanning "REAL artifact signal" → EXCEPTION → the signature.
     expect(text).toMatch(/REAL artifact signal[\s\S]*EXCEPTION[\s\S]*Timeout calling "onTaskUpdate"/);
+  });
+});
+
+// ── Field report 2026-09-14 (Sarukani, Swift/iOS): the contract-evaluator prompt carried a block
+// about `net.createServer().listen()`, "a tsx-launched CLI smoke that IPCs over a .pipe", vitest's
+// `Timeout calling "onTaskUpdate"`, and what SPARRA_JUDGE_SANDBOX=1 makes vitest do. That project has
+// no Node, no vitest and no tsx; its gates are `make verify`, `xcodebuild` and `swift test`. ────────
+describe("judge capability notes — conditional on the graded project's stack", () => {
+  function project(files: Record<string, string>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-stack-"));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    return dir;
+  }
+  const NODE_TERMS = ["vitest", "tsx", "onTaskUpdate", "SPARRA_JUDGE_SANDBOX", ".pipe", "node_modules"];
+  const notes = (workspaceDir: string, backendId = "codex") =>
+    judgeCapabilityNotesText({
+      backendId,
+      hasOsSandbox: backendId === "codex",
+      sandboxMode: "workspace-write",
+      scratchEnabled: true,
+      workspaceDir,
+    });
+
+  it("emits NO Node-ecosystem instructions for a Swift project", () => {
+    const swift = project({
+      "Package.swift": "// swift-tools-version:6.0\n",
+      "Makefile": "verify:\n\tswift test\n",
+    });
+    const text = notes(swift);
+    for (const term of NODE_TERMS) expect(text).not.toContain(term);
+    // The socket-policy deny is a SANDBOX fact, not a Node one, so a sandboxed judge still gets it —
+    // phrased for any stack, and without the "full suite is EXPECTED green" promise, which would be
+    // a false statement about a suite that never reads the flag.
+    expect(text).toContain("unix-domain-socket-listen");
+    expect(text).toContain("UN-RUN");
+    expect(text).not.toMatch(/KNOWN RUNNER LIMITS/);
+    fs.rmSync(swift, { recursive: true, force: true });
+  });
+
+  it("emits NOTHING AT ALL for a Swift project on a no-OS-sandbox backend", () => {
+    const swift = project({ "Package.swift": "// swift-tools-version:6.0\n" });
+    expect(notes(swift, "claude")).toBe("");
+    fs.rmSync(swift, { recursive: true, force: true });
+  });
+
+  it("keeps the full block for a vitest project that actually wires the flag", () => {
+    const node = project({
+      "package.json": JSON.stringify({ devDependencies: { vitest: "^3" } }),
+      "test/helpers/judgeEnv.ts": "process.env.SPARRA_JUDGE_SANDBOX;\n",
+    });
+    const text = notes(node);
+    expect(text).toContain('Timeout calling "onTaskUpdate"');
+    expect(text).toContain("SPARRA_JUDGE_SANDBOX=1");
+    expect(text).toContain("EXPECTED green");
+    fs.rmSync(node, { recursive: true, force: true });
+  });
+
+  it("withholds the expected-green PROMISE from a vitest project that does NOT wire the flag", () => {
+    // The flag is set on every judge session; the SKIP only happens if the suite implements it.
+    const node = project({ "package.json": JSON.stringify({ devDependencies: { vitest: "^3" } }) });
+    const text = notes(node);
+    expect(text).toContain('Timeout calling "onTaskUpdate"'); // the runner flake is still real here
+    expect(text).not.toContain("EXPECTED green");
+    expect(text).not.toContain("SPARRA_JUDGE_SANDBOX=1");
+    fs.rmSync(node, { recursive: true, force: true });
+  });
+
+  it("detects the stack from evidence, not from configuration", () => {
+    const bare = project({ "README.md": "# thing\n" });
+    expect(detectJudgeStack(bare)).toEqual({ node: false, vitest: false, judgeSandboxSeam: false });
+    const viaConfig = project({ "package.json": "{}", "vitest.config.ts": "export default {};\n" });
+    expect(detectJudgeStack(viaConfig)).toMatchObject({ node: true, vitest: true });
+    expect(detectJudgeStack("/nonexistent/path")).toEqual(UNKNOWN_JUDGE_STACK);
+    fs.rmSync(bare, { recursive: true, force: true });
+    fs.rmSync(viaConfig, { recursive: true, force: true });
   });
 });

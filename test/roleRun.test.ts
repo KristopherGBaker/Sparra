@@ -405,6 +405,10 @@ describe("runRole — safety intent + wiring", () => {
 
   it("injects the KNOWN sandbox-capability notes for a Codex judge, NOT a Claude one (U-K)", async () => {
     const { ctx, dir } = await makeCtx();
+    // The vitest/tsx notes are STACK-CONDITIONAL — a test asserting them grades a vitest project.
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+    fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
 
     // Codex evaluator → notes present in the task.
     const codexEv = recorder();

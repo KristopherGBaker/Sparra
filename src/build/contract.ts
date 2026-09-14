@@ -133,6 +133,7 @@ export async function negotiateContract(
       hasOsSandbox: evalBackend.capabilities.sandbox,
       sandboxMode: "read-only",
       scratchEnabled: false,
+      workspaceDir: cwd,
     }) + contractEvaluatorVerifyNoteText(evaluatorVerifyCommands);
 
   const plan = (await readText(ctx.paths.frozenPlan)) ?? "";

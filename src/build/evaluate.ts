@@ -248,6 +248,7 @@ export async function evaluateItem(args: {
     hasOsSandbox: getBackend(role.backend).capabilities.sandbox,
     sandboxMode: exerciseMode,
     scratchEnabled: exerciseScratch,
+    workspaceDir,
   });
 
   const task = `Adversarially evaluate work item ${item.id}: ${item.title} (round ${round}).

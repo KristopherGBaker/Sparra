@@ -660,9 +660,18 @@ describe("Q3 config defaults + prompt edits", () => {
 });
 
 describe("negotiateContract — sandbox capability-notes injection (U-K)", () => {
+  /** Mark a workspace as a Node/vitest project: the vitest/tsx notes are STACK-CONDITIONAL now, so a
+   *  test asserting them has to grade a project that actually runs vitest. */
+  function asNodeVitestProject(dir: string) {
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+    fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
+  }
+
   it("injects the KNOWN sandbox-capability notes into the contract-evaluator task for a Codex judge, NOT a Claude one", async () => {
     // Codex contract-evaluator → notes present.
     const { ctx, root, wt } = await makeCtx();
+    asNodeVitestProject(wt);
     ctx.config.roles.contractEvaluator.backend = "codex";
     const session = fakeSession(() => "npm test");
     await negotiateContract(ctx, item, wt, 1, "", wt, session.fn);
@@ -676,6 +685,7 @@ describe("negotiateContract — sandbox capability-notes injection (U-K)", () =>
 
     // Claude contract-evaluator (default backend) → NO sandbox-policy rows, but STILL the runner-limits note.
     const c = await makeCtx();
+    asNodeVitestProject(c.wt);
     const session2 = fakeSession(() => "npm test");
     await negotiateContract(c.ctx, item, c.wt, 1, "", c.wt, session2.fn);
     const evalCall2 = session2.calls.find((cc) => cc.role === "contract-evaluator")!;

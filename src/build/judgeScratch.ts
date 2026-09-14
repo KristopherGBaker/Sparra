@@ -141,6 +141,55 @@ export function createJudgeScratch(baseDir: string = os.tmpdir()): string {
 // confirm the judge's sandbox (the harness process runs OUTSIDE that sandbox), so we ship this KNOWN
 // matrix and surface it to the judge instead of asking it to re-prove the limitation each round.
 
+/**
+ * What the graded project is actually built with — the notes below are only TRUE for some stacks.
+ *
+ * The sandbox-limit and runner-limit blocks were emitted unconditionally, so a Swift/iOS judge whose
+ * gates are `make verify`, `xcodebuild` and `swift test` received a page about
+ * `net.createServer().listen()`, "a tsx-launched CLI smoke that IPCs over a .pipe", and vitest's
+ * worker-RPC timeout. That is not merely wasted tokens: it told the judge the full suite is "EXPECTED
+ * green" under a flag the project never reads, and handed it a ready-made UN-RUN classification keyed
+ * to a runner it will never invoke — a misclassification aimed straight at the gates it must grade.
+ */
+export interface JudgeStack {
+  /** A Node project (a `package.json` at the workspace root). */
+  node: boolean;
+  /** Runs vitest (a dependency entry, or a `vitest.config.*`). */
+  vitest: boolean;
+  /**
+   * The project CONSUMES `SPARRA_JUDGE_SANDBOX` — i.e. its socket-dependent suites really do skip
+   * under the flag. The "full suite is EXPECTED green" claim holds ONLY then; asserted anywhere else
+   * it is a false promise. Detected from the documented shared helper / a vitest entry point.
+   */
+  judgeSandboxSeam: boolean;
+}
+
+/** Files that can wire the judge-sandbox flag, cheapest first. Bounded: no tree walk. */
+const SEAM_FILES = ["test/helpers/judgeEnv.ts", "vitest.setup.ts", "vitest.config.ts", "package.json"];
+
+/** Detect the graded project's stack from its workspace. Cheap (a handful of stats + small reads). */
+export function detectJudgeStack(workspaceDir: string): JudgeStack {
+  const read = (rel: string): string | null => {
+    try {
+      return fs.readFileSync(path.join(workspaceDir, rel), "utf8");
+    } catch {
+      return null;
+    }
+  };
+  const pkg = read("package.json");
+  const vitestConfig = ["vitest.config.ts", "vitest.config.js", "vitest.config.mts", "vitest.config.mjs"].some(
+    (f) => read(f) !== null
+  );
+  return {
+    node: pkg !== null,
+    vitest: vitestConfig || (pkg !== null && /["']vitest["']\s*:/.test(pkg)),
+    judgeSandboxSeam: SEAM_FILES.some((f) => read(f)?.includes(JUDGE_SANDBOX_FLAG) ?? false),
+  };
+}
+
+/** A stack that claims nothing — the safe default when no workspace is known. */
+export const UNKNOWN_JUDGE_STACK: JudgeStack = { node: false, vitest: false, judgeSandboxSeam: false };
+
 /** The Codex-style sandbox modes a judge can run under (see `AgentRequest.sandbox` + `readOnly`). */
 export type JudgeSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
@@ -172,22 +221,33 @@ export function sandboxCapabilityNotes(args: {
   hasOsSandbox: boolean;
   sandboxMode: JudgeSandboxMode;
   scratchEnabled: boolean;
+  /** The graded project's stack. Omitted → claims nothing stack-specific. */
+  stack?: JudgeStack;
 }): DeniedCapability[] {
   if (!args.hasOsSandbox) return [];
   if (args.sandboxMode === "danger-full-access") return [];
+  const stack = args.stack ?? UNKNOWN_JUDGE_STACK;
+  // The DENY is a sandbox-policy fact, true for any stack — a dev server, a language server, an
+  // IPC-based test runner. Only the EXAMPLES and the vitest-skip promise are Node-specific.
+  const nodeExample = stack.node
+    ? ` — so a tsx-launched CLI smoke that IPCs over a .pipe, or any dev-server bind, cannot run under this ${args.sandboxMode} judge`
+    : ` — so any gate that binds a socket (a dev server, an IPC-based runner) cannot run under this ${args.sandboxMode} judge`;
+  const skipPromise = stack.judgeSandboxSeam
+    ? ` This session runs the suite with SPARRA_JUDGE_SANDBOX=1, so those socket-dependent suites vitest-SKIP ` +
+      `(visibly counted, never silently filtered) instead of EPERM-failing — the full suite is therefore ` +
+      `EXPECTED green, and a NONZERO full-suite exit is a REAL artifact signal, not an environment limit.`
+    : ` A gate that fails ONLY on this deny is environment-blocked (UN-RUN), never an artifact FAIL.`;
   const caps: DeniedCapability[] = [
     {
       capability: "unix-domain-socket-listen",
       detail:
         `listen(2) on a Unix-domain socket is denied by the ${args.backendId} sandbox POLICY even inside a ` +
-        `writable scratch TMPDIR (proved with a raw net.createServer().listen() probe) — so a tsx-launched ` +
-        `CLI smoke that IPCs over a .pipe, or any dev-server bind, cannot run under this ${args.sandboxMode} judge. ` +
-        `This session runs the suite with SPARRA_JUDGE_SANDBOX=1, so those socket-dependent suites vitest-SKIP ` +
-        `(visibly counted, never silently filtered) instead of EPERM-failing — the full suite is therefore ` +
-        `EXPECTED green, and a NONZERO full-suite exit is a REAL artifact signal, not an environment limit.`,
+        `writable scratch TMPDIR (proved with a raw net.createServer().listen() probe)${nodeExample}.` +
+        skipPromise,
     },
   ];
-  if (args.sandboxMode === "read-only") {
+  // vitest/vite specifics belong only to a project that runs vitest.
+  if (args.sandboxMode === "read-only" && stack.vitest) {
     caps.push({
       capability: "vitest-vite-temp-write",
       detail:
@@ -223,7 +283,8 @@ export interface RunnerLimitation {
  * a no-OS-sandbox Claude judge). Independent of backend / sandbox mode — a runner CPU-saturation
  * flake, not a sandbox-policy deny. No probing, exec, or fs access — a static list.
  */
-export function runnerLimitations(): RunnerLimitation[] {
+export function runnerLimitations(stack: JudgeStack = UNKNOWN_JUDGE_STACK): RunnerLimitation[] {
+  if (!stack.vitest) return []; // the signature below is vitest's own worker/reporter RPC
   return [
     {
       id: "vitest-worker-rpc-timeout",
@@ -249,8 +310,10 @@ export function runnerLimitations(): RunnerLimitation[] {
  * that runs the suite receives it (a no-OS-sandbox Claude judge included), because the flake is
  * runner CPU saturation, not a sandbox-policy deny that could be absent.
  */
-export function runnerLimitationsText(): string {
-  const lines = runnerLimitations()
+export function runnerLimitationsText(stack: JudgeStack = UNKNOWN_JUDGE_STACK): string {
+  const limits = runnerLimitations(stack);
+  if (!limits.length) return ""; // a non-vitest project never meets this flake
+  const lines = limits
     .map((l) => `- ${l.id}: ${l.detail}`)
     .join("\n");
   return (
@@ -267,24 +330,31 @@ export function runnerLimitationsText(): string {
  * listed denied capability is environment-blocked / UN-RUN (cite the error as evidence), never an
  * artifact FAIL; spend at MOST ONE confirming probe — no multi-round re-proving of a known limitation.
  */
-export function sandboxCapabilityNotesText(caps: DeniedCapability[]): string {
+export function sandboxCapabilityNotesText(caps: DeniedCapability[], stack: JudgeStack = UNKNOWN_JUDGE_STACK): string {
+  // The SPARRA_JUDGE_SANDBOX paragraph is a promise about what the PROJECT'S suite does under the
+  // flag. Asserted to a project that never reads it, it is false — and worse than noise, since it
+  // pre-authorizes an UN-RUN classification for a runner that will never be invoked.
+  const suiteBlock = stack.judgeSandboxSeam
+    ? `\n\nThis session runs the test suite with SPARRA_JUDGE_SANDBOX=1: every socket-dependent real-bin/tsx ` +
+      `suite vitest-SKIPS visibly under that flag, so the FULL suite is EXPECTED green here. A NONZERO ` +
+      `full-suite exit is therefore a REAL artifact signal — NOT auto-classifiable as UN-RUN / ` +
+      `environment-blocked / "mixed" — investigate the actual failing test.` +
+      (stack.vitest
+        ? ` EXCEPTION: the worker/reporter-RPC-timeout signature in KNOWN RUNNER LIMITS below (whole files ` +
+          `aborting on \`Timeout calling "onTaskUpdate"\`/\`onCollected\` with zero failing assertions) is runner ` +
+          `CPU saturation, so it does NOT count as that REAL artifact signal — classify it UN-RUN per that entry.`
+        : "")
+    : "";
   const sandboxBlock =
     caps.length === 0
       ? ""
       : `\nKNOWN SANDBOX CAPABILITY LIMITS (policy denies, independent of path/TMPDIR writability — do NOT re-prove):\n` +
-        `${caps.map((c) => `- ${c.capability}: ${c.detail}`).join("\n")}\n\n` +
-        `This session runs the test suite with SPARRA_JUDGE_SANDBOX=1: every socket-dependent real-bin/tsx ` +
-        `suite vitest-SKIPS visibly under that flag, so the FULL suite is EXPECTED green here. A NONZERO ` +
-        `full-suite exit is therefore a REAL artifact signal — NOT auto-classifiable as UN-RUN / ` +
-        `environment-blocked / "mixed" — investigate the actual failing test. EXCEPTION: the ` +
-        `worker/reporter-RPC-timeout signature in KNOWN RUNNER LIMITS below (whole files aborting on ` +
-        `\`Timeout calling "onTaskUpdate"\`/\`onCollected\` with zero failing assertions) is runner CPU ` +
-        `saturation, so it does NOT count as that REAL artifact signal — classify it UN-RUN per that entry.\n\n` +
+        `${caps.map((c) => `- ${c.capability}: ${c.detail}`).join("\n")}${suiteBlock}\n\n` +
         `If some OTHER gate fails ONLY because of a listed denied capability, classify THAT one ` +
         `environment-blocked / UN-RUN (cite the exact error as evidence) — it is NOT an artifact FAIL. Spend ` +
         `AT MOST ONE confirming probe; do not re-prove a known limitation across multiple rounds. A live ` +
         `harness-side probe is impossible (the harness runs OUTSIDE your sandbox), so this matrix is the source of truth.\n`;
-  return sandboxBlock + runnerLimitationsText();
+  return sandboxBlock + runnerLimitationsText(stack);
 }
 
 /**
@@ -299,8 +369,12 @@ export function judgeCapabilityNotesText(args: {
   hasOsSandbox: boolean;
   sandboxMode: JudgeSandboxMode;
   scratchEnabled: boolean;
+  /** The graded project's workspace — its stack decides which notes are TRUE here. Omitted (or a
+   *  workspace with no Node/vitest evidence) → no Node-ecosystem instructions are emitted at all. */
+  workspaceDir?: string;
 }): string {
-  return sandboxCapabilityNotesText(sandboxCapabilityNotes(args));
+  const stack = args.workspaceDir ? detectJudgeStack(args.workspaceDir) : UNKNOWN_JUDGE_STACK;
+  return sandboxCapabilityNotesText(sandboxCapabilityNotes({ ...args, stack }), stack);
 }
 
 /**

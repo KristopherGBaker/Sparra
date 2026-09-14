@@ -508,6 +508,10 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     expect(claude.calls[0]!.mcpServers).toBeDefined();
     expect(claude.calls[0]!.allowedTools).toContain("mcp__exercise__run_command");
 
+    // The vitest/tsx notes are STACK-CONDITIONAL, so the graded tree has to be a vitest project.
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+    fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
     const codex = recorder();
     await evaluateItem({
       ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
@@ -521,6 +525,10 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
 
   it("a Codex eval backend gets native-runner guidance (no mcp__exercise__ token); Claude keeps the mcp mandate (U1)", async () => {
     const { ctx, dir } = await makeCtx();
+    // The vitest/tsx notes are STACK-CONDITIONAL, so the graded tree has to be a vitest project.
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+    fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
     const codex = recorder();
     await evaluateItem({
       ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
@@ -552,6 +560,10 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
   // — Sandbox capability-notes injection (U-K) —
   it("injects the KNOWN sandbox-capability notes into the task for a Codex eval backend, NOT a Claude one (U-K)", async () => {
     const { ctx, dir } = await makeCtx();
+    // The vitest/tsx notes are STACK-CONDITIONAL, so the graded tree has to be a vitest project.
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ devDependencies: { vitest: "^3" } }));
+    fs.mkdirSync(path.join(dir, "test/helpers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "test/helpers/judgeEnv.ts"), "process.env.SPARRA_JUDGE_SANDBOX;\n");
     const codex = recorder();
     await evaluateItem({
       ctx, item: ITEM, contractText: "contract", workspaceDir: dir, round: 1,
