@@ -341,7 +341,12 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // `CONTRACT: AGREED WITH CAVEATS` + one-bullet-per-requirement grammar the harness parses and
     // folds into the contract, and is told the harness persists its critique (never write files, and
     // don't report a denied write as a finding). One existing prompt edited; no new prompt.
-    expect(h.digest("hex")).toBe("405ada0990ecb5e27d23c1c7b0944d930943813ab4797bbfdf713c51eccb63bb");
+    // Regenerated 2026-09-14 (stack-neutral runner flake): the EVALUATOR prompt's load-vs-artifact
+    // bullet dropped its vitest-only signature (`Timeout calling "onTaskUpdate"`/`onCollected`),
+    // which was being handed to Swift/iOS judges. The rule is true of any parallel test runner and
+    // stays; the exact vitest strings now reach a vitest judge through the STACK-CONDITIONAL KNOWN
+    // RUNNER LIMITS block instead. One existing prompt edited; no new prompt.
+    expect(h.digest("hex")).toBe("3d8be38a736bff7baae13e9c47fc9809b90f86cdd03af2e809520cb563ab37bf");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

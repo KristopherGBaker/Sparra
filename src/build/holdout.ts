@@ -166,8 +166,11 @@ export function makeHoldoutReadDecider(
   // repo root permanently holdout-bearing and denied every forbid role a root `Grep` — the cheapest
   // search it has — on projects with no holdout at all (observed: two contract-generator runs, both
   // reporting denied Greps, on a repo with no HOLDOUT.md anywhere). With no holdout present there is
-  // no wall to enforce here; targeted reads/globs INTO `.sparra` stay denied below either way, so a
-  // verdict or trace still cannot be opened deliberately.
+  // no wall to enforce here. What stays denied either way is every LITERAL reference — a Read of a
+  // path under `.sparra`, a search rooted in it, a glob or Bash operand naming the segment — so a
+  // verdict or trace still cannot be opened deliberately. What a holdout-free project DOES allow is
+  // a wildcard that merely reaches in without naming it (`**/*.md`, `.s*/**`), which is the point:
+  // there is nothing holdout-bearing under there to reach.
   const wallActive = holdoutPresent(ctx, explicitPath);
   const artifacts = wallActive ? [...protectedFiles, sparraDir].filter((a) => fs.existsSync(a) || a === sparraDir) : [];
   // Role INPUTS under `.sparra` (see `Paths.roleInputDirs`): the brief a role is asked to work from

@@ -514,6 +514,18 @@ describe("makeHoldoutReadDecider — no holdout on disk means no wall to enforce
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("keeps every LITERAL `.sparra` reference denied, while a wildcard that merely reaches in is allowed", async () => {
+    // The exact boundary, pinned: the docs claim this, so a test has to hold it.
+    const { deny, root } = await noHoldoutProject();
+    for (const literal of [".sparra/**", ".sparra/verdicts/*.md", "**/.sparra/**"])
+      expect(deny("Glob", { pattern: literal })).toBeTruthy();
+    expect(deny("Bash", { command: "rg -n x .sparra" })).toBeTruthy();
+    // …and the wildcards that reach in WITHOUT naming it are allowed — there is nothing
+    // holdout-bearing under there on this project.
+    for (const wild of ["**/*.md", ".s*/**", "**/verdicts/*.md"]) expect(deny("Glob", { pattern: wild })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("re-arms the moment a holdout exists — including a frozen-only one", async () => {
     const { ctx, root } = await makeMatureDeciderCtx();
     fs.rmSync(ctx.paths.holdout, { force: true }); // live holdout gone, frozen copy remains
