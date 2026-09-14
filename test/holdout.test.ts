@@ -222,12 +222,14 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     expect(deny("Grep", { pattern: "x", path: path.join(root, "src"), glob: ".sparra/**" })).toBeTruthy();
     expect(deny("Grep", { pattern: "x", path: root, glob: "**/vitest.config.*" })).toBeNull();
     expect(deny("Grep", { pattern: "x", glob: "**/vitest.config.*" })).toBeNull();
-    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*.md" })).toMatch(/src\//);
-    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*OUT.md" })).toMatch(/src\//);
+    // The message NAMES the offending target and the real reason (it used to be one fixed string
+    // suggesting `src/` and `**/vitest.config.*` — JS boilerplate, and useless in, say, a Swift repo).
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*.md" })).toContain("**/*.md");
+    expect(deny("Grep", { pattern: "x", path: root, glob: "**/*OUT.md" })).toContain("evaluator-only artifacts");
     const unsafeRoot = deny("Grep", { pattern: "x", path: root });
     const protectedTarget = deny("Grep", { pattern: "x", path: root, glob: "**/HOLDOUT.*" });
     expect(unsafeRoot).toContain("rooted");
-    expect(protectedTarget).toContain("targets");
+    expect(protectedTarget).toContain("evaluator-only artifacts");
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -334,6 +336,81 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     expect(deny("Bash", { command: "grep redactHoldout src" })).toBeNull();
     expect(deny("Bash", { command: "cat foo.test.ts" })).toBeNull();
     expect(deny("Bash", { command: "echo holdout is redacted" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// ── Field report 2026-09-14 (Sarukani, contract-generator): commands that touched NOTHING the wall
+// protects were refused as policy violations, each with the same "evaluator-only artifacts" text. The
+// matcher decided on raw command TEXT: `*.md` in ANY token could match the basename `HOLDOUT.md`
+// (directory-agnostic), and ` .*` inside a REGEX argument read as a dotfile glob. ──────────────────
+describe("makeHoldoutReadDecider — Bash decides on resolved path OPERANDS, not command text", () => {
+  /** A project-shaped workspace: real dirs, a root-level holdout, `.sparra/` beside it. */
+  async function realProject() {
+    const { ctx, root } = await makeDeciderCtx();
+    for (const d of ["docs", "Packages", "Apps"]) fs.mkdirSync(path.join(root, d), { recursive: true });
+    return { deny: makeHoldoutReadDecider(ctx, root), ctx, root };
+  }
+
+  it("allows the four field-report commands — a glob under docs/ and a regex that looks like a dotglob", async () => {
+    const { deny, root } = await realProject();
+    for (const command of [
+      `rg -n '458' CLAUDE.md AGENTS.md docs/*.md | head`,
+      `rg -n "catalogue" docs/*.md CLAUDE.md AGENTS.md | head -40`,
+      `rg -n "never met|actually been taught" docs/*.md Packages/SarukaniKit/Sources --glob '!*.json' | head -40`,
+      `rg -n '^## §' docs/DECISIONS.md | tail -5; rg -n '^#+ .*§(8[0-9])' docs/DECISIONS.md | tail -5`,
+    ])
+      expect(deny("Bash", { command })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("still denies a command that genuinely targets the artifacts — by path, wildcard or dotglob", async () => {
+    const { deny, root, ctx } = await realProject();
+    // The reported-safe case must stay refused: a command reaching into `.sparra/verdicts/`.
+    expect(deny("Bash", { command: "cat .sparra/verdicts/item-001.r1.verdict.md" })).toBeTruthy();
+    expect(deny("Bash", { command: `wc -l ${ctx.paths.holdout}` })).toBeTruthy(); // absolute path
+    expect(deny("Bash", { command: "cat HOLDOUT.*" })).toBeTruthy(); // wildcard-basename evasion
+    expect(deny("Bash", { command: "cat .*" })).toBeTruthy(); // dotglob reaching `.sparra`
+    expect(deny("Bash", { command: "cat .s*/frozen/HOLDOUT.frozen.md" })).toBeTruthy();
+    // A root-level `find -name '*.md'` really WOULD enumerate the holdout — directory-aware, so denied
+    // here while the same `*.md` under docs/ is allowed above.
+    expect(deny("Bash", { command: "find . -name '*.md'" })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("names the offending operand and suggests paths from the project actually in play", async () => {
+    const { deny, root } = await realProject();
+    const msg = deny("Bash", { command: "cat HOLDOUT.*" })!;
+    expect(msg).toContain("HOLDOUT.*"); // WHICH operand
+    expect(msg).toContain("evaluator-only artifacts"); // WHY
+    expect(msg).toMatch(/docs\/|Packages\/|Apps\//); // real dirs, not `src/` boilerplate
+    expect(msg).not.toContain("vitest.config");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("ALLOWS (and audits) a command whose operands cannot be resolved, rather than calling it a violation", async () => {
+    const { deny, root } = await realProject();
+    // Runtime expansion: the operand list would be a guess, and a guess is not a policy verdict.
+    expect(deny("Bash", { command: 'rg -n "x" "$(cat list.txt)"' })).toBeNull();
+    expect(deny("Bash", { command: "rg -n x $DOCS_DIR" })).toBeNull();
+    expect(deny("Bash", { command: `rg -n 'unbalanced docs/` })).toBeNull();
+    // …but the LITERAL check still runs on the raw text, so an unresolvable command that NAMES a
+    // protected artifact is still refused.
+    expect(deny("Bash", { command: 'cat "$(echo .sparra)/verdicts/x.md"' })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not mistake flags, regex patterns or the command word for paths", async () => {
+    const { deny, root } = await realProject();
+    for (const command of [
+      "swift test 2>/dev/null | tail -5",
+      "rg -n --glob '!*.json' 'HOLD.*' Packages", // --glob takes a VALUE, so `HOLD.*` is still the regex
+      "rg --include=*.swift 'HOLDOUT' Packages", // the pattern may name the artifact; it reads nothing
+      "sed -n '1,5p' docs/DECISIONS.md",
+      "awk '/^#/ {print}' docs/DECISIONS.md",
+      "ls Packages/SarukaniKit/StoreTests/*.swift",
+    ])
+      expect(deny("Bash", { command })).toBeNull();
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

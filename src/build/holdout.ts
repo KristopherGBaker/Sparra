@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { Ctx } from "../context.ts";
 import type { RetiredHoldout } from "./types.ts";
 import { readText } from "../util/io.ts";
+import { warn } from "../util/log.ts";
 
 /**
  * The isolation wall (from Kallistra): optional acceptance checks the human authors
@@ -338,33 +340,174 @@ export function makeHoldoutReadDecider(
   const globHitsArtifact = (pattern: string, root: string): boolean =>
     expandBraces(pattern).some((alt) => altHitsArtifact(alt, root));
 
-  // BEST-EFFORT, PATH-BASED Bash matcher. A shell on a backend with no FS sandbox can always read an
-  // absolute path or assemble one from pieces (`cat ".sp""arra/…"`, an interpreter, etc.), so no
-  // string check is airtight — the authoritative wall is that the holdout lives OUTSIDE the role's
-  // cwd/read scope + the prompt wall + verdict redaction. We deny commands that reference a protected
-  // artifact BY PATH: the `.sparra` dir (name or absolute), a protected basename (`HOLDOUT.md` /
-  // `HOLDOUT.frozen.md` / the explicit holdout), a hidden-path glob (`.s*`, `.[a-z]*`, `.*`) that
-  // could expand into the dotted `.sparra`, or a WILDCARD token whose segment matches a protected
-  // basename (`cat HOLDOUT.*`, `head HOLD*`, `cat *OUT.md` — the same wildcard-basename evasion the
-  // Glob path closes; without it a live holdout at `<root>/HOLDOUT.md` is read directly). We
-  // deliberately do NOT block on a bare case-insensitive "holdout" substring — that false-blocked
-  // legitimate source (`src/build/holdout.ts`, `redactHoldout`, `cat *.test.ts`); a command naming a
-  // real holdout ARTIFACT (by literal path or matching wildcard) still trips the checks above.
-  const hiddenGlob = /(?:^|[\s'"=:(<>|&/])\.[A-Za-z0-9_]*[*?[]/; // a dot-prefixed token containing a glob metachar
-  const bashBlocked = (cmd: string): boolean => {
-    // Case-insensitive on the direct path/basename substrings so a lowercase name on a
-    // case-insensitive FS (`cat holdout.md`, `.SPARRA/…`) still reads the real artifact — blocked.
-    const lc = cmd.toLowerCase();
-    if (lc.includes(sparraDir.toLowerCase()) || lc.includes(sparraBase.toLowerCase())) return true;
-    if ([...basenames].some((b) => lc.includes(b.toLowerCase()))) return true;
-    if (hiddenGlob.test(cmd)) return true;
-    for (const tok of cmd.split(/[\s;|&<>()'"=`]+/)) {
-      if (tok && GLOB_META.test(tok) && tok.split("/").some(segNamesArtifact)) return true;
+  // ── Bash: decide on RESOLVED PATH OPERANDS, never on raw command text ───────────────────────────
+  //
+  // BEST-EFFORT by construction. A shell on a backend with no FS sandbox can always read an absolute
+  // path or assemble one from pieces (`cat ".sp""arra/…"`, an interpreter, base64), so no string check
+  // is airtight — the authoritative wall is that the holdout lives OUTSIDE the role's cwd/read scope,
+  // plus the prompt wall and verdict redaction.
+  //
+  // What it must NOT do is refuse commands that touch nothing it protects. Matching raw TEXT did
+  // exactly that: `rg -n "x" docs/*.md` was denied because the TOKEN `*.md` could match the basename
+  // `HOLDOUT.md` *somewhere* (the old check was directory-agnostic), and `rg -n '^#+ .*§'` was denied
+  // because a REGEX argument looked like a dotfile glob. Both refusals claimed "evaluator-only
+  // artifacts", sending the role hunting for a path problem it did not have.
+  //
+  // So: tokenize the command, keep only the tokens that are actually PATH OPERANDS (no command words,
+  // no flags, no regex patterns), and resolve each against the real artifact locations — directory-
+  // aware, via the SAME `globHitsArtifact` the Glob tool path uses. `docs/*.md` then resolves under
+  // `docs/` and reaches nothing, while `cat HOLDOUT.*`, `cat .*`, `ls .sparra/…` and
+  // `find . -name '*.md'` (which really would enumerate a root-level holdout) still deny.
+
+  /** Runtime expansion — the operand list cannot be resolved statically ahead of the shell. */
+  const DYNAMIC = /\$\(|\$\{|\$[A-Za-z_]|`|\beval\b|\bxargs\b|\b(?:ba)?sh\s+-c\b/;
+  /** Commands whose FIRST operand is a regex/pattern rather than a path. */
+  const PATTERN_FIRST = new Set(["rg", "grep", "egrep", "fgrep", "ag", "ack", "sed", "awk", "perl"]);
+  /** Flags whose VALUE is a regex/pattern — skipped entirely (it names nothing on disk). */
+  const PATTERN_FLAGS = new Set(["-e", "--regexp", "--regex", "--expression"]);
+  /** Flags whose VALUE is a path-shaped FILTER (`--glob '!*.json'`, `-name '*.md'`). Evaluated like
+   *  any operand — a filter CAN reach an artifact — but it must not consume the positional pattern
+   *  slot below, or the real regex would be read as a path. Deliberately conservative: we do not
+   *  model how a tool's own root argument narrows its filter, so `--include='*.md'` is judged from
+   *  the workspace (where it really would enumerate a root-level holdout). */
+  const GLOB_FLAGS = new Set([
+    "--glob", "-g", "--iglob", "--include", "--exclude", "--exclude-dir", "-f", "--file",
+    "-name", "-iname", "-path", "-ipath", "-wholename",
+  ]);
+  /** Flags whose VALUE is neither a path nor a pattern (counts, types, context windows). */
+  const VALUE_FLAGS = new Set([
+    "-t", "--type", "-m", "--max-count", "-A", "-B", "-C", "--after-context", "--before-context",
+    "--context", "--max-depth", "--maxdepth", "-maxdepth", "-S", "--sort",
+  ]);
+  /** Wrappers that prefix the real command word. */
+  const WRAPPERS = new Set(["sudo", "env", "time", "nice", "nohup", "command", "builtin", "exec"]);
+
+  /**
+   * Split a command into pipeline/list SEGMENTS of tokens, honoring quotes and escapes. `confident`
+   * is false when the command carries runtime expansion or an unbalanced quote — the operand list is
+   * then a guess, not a parse, and callers must not treat it as a policy verdict.
+   */
+  const shellSegments = (cmd: string): { segments: string[][]; confident: boolean } => {
+    const segments: string[][] = [];
+    let seg: string[] = [];
+    let tok = "";
+    let held = false; // a quoted empty string is still a token
+    let quote: '"' | "'" | null = null;
+    const pushTok = () => {
+      if (tok !== "" || held) seg.push(tok);
+      tok = "";
+      held = false;
+    };
+    const pushSeg = () => {
+      pushTok();
+      if (seg.length) segments.push(seg);
+      seg = [];
+    };
+    for (let k = 0; k < cmd.length; k++) {
+      const c = cmd[k]!;
+      if (quote) {
+        if (c === quote) quote = null;
+        else tok += c;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        quote = c;
+        held = true;
+        continue;
+      }
+      if (c === "\\") {
+        const n = cmd[++k];
+        if (n !== undefined) tok += n;
+        continue;
+      }
+      if (/\s/.test(c)) pushTok();
+      else if (c === "|" || c === ";" || c === "&" || c === "(" || c === ")") pushSeg();
+      else if (c === ">" || c === "<") pushTok(); // the redirect TARGET becomes its own token (a path)
+      else tok += c;
     }
-    return false;
+    pushSeg();
+    return { segments, confident: quote === null && !DYNAMIC.test(cmd) };
   };
-  const DENY =
-    "Pattern targets evaluator-only Holdout/.sparra artifacts — narrow it to a safe relative subtree or filename, such as src/ or **/vitest.config.*.";
+
+  /** The tokens of a parsed command that are actually PATH operands. */
+  const pathOperands = (segments: string[][]): string[] => {
+    const out: string[] = [];
+    for (const seg of segments) {
+      let k = 0;
+      // Leading `VAR=value` assignments: not operands, but the VALUE can name a path.
+      while (k < seg.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg[k]!)) out.push(seg[k++]!.split("=").slice(1).join("="));
+      while (k < seg.length && WRAPPERS.has(path.basename(seg[k]!))) k++;
+      const cmdWord = k < seg.length ? path.basename(seg[k]!) : "";
+      k++; // the command word itself is never an operand
+      let firstOperand = true;
+      for (; k < seg.length; k++) {
+        const t = seg[k]!;
+        if (t.startsWith("-") && t.length > 1) {
+          if (PATTERN_FLAGS.has(t) || VALUE_FLAGS.has(t)) k++; // the value names nothing on disk
+          else if (GLOB_FLAGS.has(t)) {
+            const v = seg[++k];
+            if (v !== undefined) out.push(v); // a path-shaped filter: judged, but not the pattern slot
+          } else {
+            const eq = t.indexOf("=");
+            if (eq > 0 && GLOB_FLAGS.has(t.slice(0, eq))) out.push(t.slice(eq + 1)); // --include=*.md
+          }
+          continue; // the flag itself names nothing
+        }
+        if (firstOperand && PATTERN_FIRST.has(cmdWord)) {
+          firstOperand = false; // rg/grep/sed/awk take the PATTERN here
+          continue;
+        }
+        firstOperand = false;
+        out.push(t);
+      }
+    }
+    return out;
+  };
+
+  // Guidance that names paths from the project ACTUALLY in play, resolved once on first denial —
+  // the old text suggested `src/` and `**/vitest.config.*`, JS boilerplate in, say, a Swift repo.
+  let safeExamples: string | undefined;
+  const suggestion = (): string => {
+    if (safeExamples === undefined) {
+      let names: string[] = [];
+      try {
+        names = fs
+          .readdirSync(workspace, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !["node_modules", "build", "dist"].includes(e.name))
+          .slice(0, 3)
+          .map((e) => `${e.name}/`);
+      } catch {
+        names = [];
+      }
+      safeExamples = names.length ? ` — e.g. ${names.join(", ")}` : "";
+    }
+    return safeExamples;
+  };
+  const artifactLabel = [sparraBase + "/", ...basenames].join(", ");
+  /** Deny naming the OFFENDING target and the real reason. */
+  const denyTarget = (what: string, target: string): string =>
+    `${what} \`${target}\` resolves onto evaluator-only artifacts (${artifactLabel}) — retarget it outside them${suggestion()}.`;
+
+  const bashDenial = (cmd: string): string | null => {
+    // Literal reference to a protected path/name, case-insensitively (a case-insensitive FS makes
+    // `cat holdout.md` / `.SPARRA/…` read the real artifact). Checked on the raw text ON PURPOSE:
+    // it is the assembled-path defense, and it still applies when the parse below is not confident.
+    const lc = cmd.toLowerCase();
+    const literal = [sparraDir, sparraBase, ...basenames].find((n) => lc.includes(n.toLowerCase()));
+    if (literal !== undefined) return denyTarget("Command names protected artifact", literal);
+    const { segments, confident } = shellSegments(cmd);
+    if (!confident) {
+      // The operands cannot be resolved ahead of the shell (expansion, eval, an unbalanced quote).
+      // ALLOW and AUDIT rather than deny: a guess is not a policy violation, and refusing every
+      // `$(…)` would re-introduce exactly the class of false refusal this matcher exists to avoid.
+      // The literal check above still ran, and the authoritative wall (read scope + prompt + verdict
+      // redaction) does not depend on this matcher.
+      warn(`holdout guard: could not resolve command targets (runtime expansion) — allowed, unaudited: ${cmd.slice(0, 160)}`);
+      return null;
+    }
+    const hit = pathOperands(segments).find((op) => globHitsArtifact(op, workspace));
+    return hit === undefined ? null : denyTarget("Command operand", hit);
+  };
   const DENY_ROOT =
     "Search is rooted at a holdout-bearing dir (it contains .sparra) — pass an explicit non-holdout subdir path like src/ instead.";
   return (tool, input) => {
@@ -373,23 +516,23 @@ export function makeHoldoutReadDecider(
       | undefined;
     if (tool === "Read") {
       const target = i?.file_path ?? i?.path;
-      if (target && blockedReadTarget(target)) return DENY;
+      if (target && blockedReadTarget(target)) return denyTarget("Read target", target);
     }
     if (tool === "Grep") {
       // Content `pattern` is never inspected; deny only on the search root or a path-shaped filter.
       const root = resolve(i?.path ?? workspace);
       if (i?.glob) {
-        if (globHitsArtifact(i.glob, root)) return DENY;
+        if (globHitsArtifact(i.glob, root)) return denyTarget("Grep glob", i.glob);
       } else if (blockedSearchRoot(root)) return DENY_ROOT;
     }
     if (tool === "Glob") {
       // The pattern IS path-shaped — decide on the targets it resolves to, not the root shape.
       const root = resolve(i?.path ?? workspace);
       if (i?.pattern) {
-        if (globHitsArtifact(i.pattern, root)) return DENY;
+        if (globHitsArtifact(i.pattern, root)) return denyTarget("Glob pattern", i.pattern);
       } else if (blockedSearchRoot(root)) return DENY_ROOT; // pattern-less Glob → fall back to the root rule
     }
-    if (tool === "Bash" && bashBlocked(i?.command ?? "")) return DENY;
+    if (tool === "Bash") return bashDenial(i?.command ?? "");
     return null;
   };
 }
