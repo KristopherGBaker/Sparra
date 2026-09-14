@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { parseContractAgreement } from "../src/roleEnvelope.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -234,6 +235,42 @@ describe("negotiateContract — harness verify-probe on agreement", () => {
     const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, exec);
     expect(res.agreed).toBe(true);
     expect(session.calls.filter((c) => c.role === "contract-generator")).toHaveLength(1);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("a caveated agreement AGREES in one round and folds the requirements into the contract text", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams): Promise<RunResult> => {
+      calls.push(p);
+      const text =
+        p.role === "contract-generator"
+          ? proposalWith("mytool run")
+          : "Satisfiable as written.\n\nCONTRACT: AGREED WITH CAVEATS\n" +
+            "- The committed test must compare a parsed FLOOR, never an exact pin.\n" +
+            "- `make verify` green before the report.\n";
+      return { ok: true, subtype: "success", resultText: text, sessionId: "s", costUsd: 0, tokens: 0, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "" };
+    };
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, fn, async (_ws, cmd) => behavioral(cmd));
+
+    expect(res.agreed).toBe(true); // NOT a rejection: another round here is a loop, not diligence
+    expect(calls.filter((c) => c.role === "contract-generator")).toHaveLength(1);
+    // The requirements bind the build, so they must reach the generator + evaluator — dropping them
+    // silently turns "agreed provided X" into "agreed".
+    expect(res.text).toContain("## Agreed caveats (evaluator requirements)");
+    expect(res.text).toContain("- The committed test must compare a parsed FLOOR, never an exact pin.");
+    expect(res.text).toContain("- `make verify` green before the report.");
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it("a plain agreement leaves the contract text untouched (no caveats section)", async () => {
+    const { ctx, root, wt } = await makeCtx();
+    const session = fakeSession(() => "mytool run");
+    const res = await negotiateContract(ctx, item, wt, 1, "", wt, session.fn, async (_ws, cmd) => behavioral(cmd));
+    expect(res.agreed).toBe(true);
+    expect(res.text).not.toContain("Agreed caveats");
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(wt, { recursive: true, force: true });
   });
@@ -648,5 +685,42 @@ describe("negotiateContract — sandbox capability-notes injection (U-K)", () =>
     expect(evalCall2.prompt).toContain('Timeout calling "onTaskUpdate"');
     fs.rmSync(c.root, { recursive: true, force: true });
     fs.rmSync(c.wt, { recursive: true, force: true });
+  });
+});
+
+// ── Field report 2026-09-14: the round-4 contract-evaluator returned "CONTRACT: AGREED WITH
+// CAVEATS" plus two precisely specified build-time requirements. The runner reported
+// `contractAgreed: false`, so a conductor keying off that flag re-opens negotiation forever on a
+// contract the judge has accepted. ─────────────────────────────────────────────────────────────────
+describe("parseContractAgreement — agreement is three-state", () => {
+  it("reads a caveated agreement as AGREEMENT, with its requirements extracted", () => {
+    const a = parseContractAgreement(
+      "Assertions 1-4 are satisfiable as written.\n\nCONTRACT: AGREED WITH CAVEATS\n" +
+        "- The committed test must compare a parsed FLOOR, never an exact version pin.\n" +
+        "- `make verify` must be green before the completion report.\n"
+    );
+    expect(a.status).toBe("agreed-with-caveats");
+    expect(a.caveats).toEqual([
+      "The committed test must compare a parsed FLOOR, never an exact version pin.",
+      "`make verify` must be green before the completion report.",
+    ]);
+  });
+
+  it("keeps plain agreement and rejection distinguishable from it", () => {
+    expect(parseContractAgreement("looks good\n\nCONTRACT: AGREED").status).toBe("agreed");
+    expect(parseContractAgreement("**CONTRACT: AGREED**").status).toBe("agreed");
+    expect(parseContractAgreement("1. fix the fixture\n2. tighten assertion 3").status).toBe("rejected");
+    // A caveated agreement whose conditions are prose still reads as agreement (empty list) rather
+    // than as a rejection — the worse of the two errors.
+    const prose = parseContractAgreement("CONTRACT: AGREED WITH CAVEATS\nPlease pin the floor.");
+    expect(prose.status).toBe("agreed-with-caveats");
+    expect(prose.caveats).toEqual([]);
+  });
+
+  it("stops the caveat list at the first non-list line and caps it", () => {
+    const a = parseContractAgreement(
+      "CONTRACT: AGREED WITH CAVEATS\n1. first\n2) second\n\nThanks for the revision.\n- not a caveat\n"
+    );
+    expect(a.caveats).toEqual(["first", "second"]);
   });
 });

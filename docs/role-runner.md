@@ -344,6 +344,16 @@ the run ended**, and every writer result carries:
   landed work — never re-run the item or feed it back as a FAIL.
 - **`hitBudget: true`** — the run stopped on **our own** budget cap (not a provider limit, not a
   turn cap). Telemetry; resume via `sessionId` (raising the cap if warranted).
+- **`contractAgreed` / `contractStatus` / `caveats`** (`contract-evaluator` only) — agreement is
+  **three-state**. A judge that accepts the contract *provided* specific build-time requirements are
+  met has **agreed**: it ends with `CONTRACT: AGREED WITH CAVEATS` and one `- ` bullet per
+  requirement. `contractAgreed` is therefore **true for both agreement forms** (it reported `false`
+  for the caveated one, so a conductor keying off it re-opened negotiation on an accepted contract);
+  `contractStatus` is `agreed` | `agreed-with-caveats` | `rejected`, and `caveats[]` carries the
+  requirements verbatim. They **bind the build** — the autonomous negotiator folds them into the
+  contract under `## Agreed caveats (evaluator requirements)`, so the generator implements them and
+  the evaluator grades them; a conductor driving the loop itself must carry them in the same way
+  rather than dropping them.
 - **`degraded: true` + `deniedInputs: [{tool, target, reason}]`** — the guard **refused one or more
   of the role's reads**, so whatever it produced was built without an input it went looking for.
   Independent of the classification matrix below (a degraded run can still be `ok`), because a

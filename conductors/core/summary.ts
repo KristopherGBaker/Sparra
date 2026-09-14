@@ -52,6 +52,8 @@ export const PARENT_SAFE_FIELDS = [
   "verifyGateWarning",
   "remapCount",
   "contractAgreed",
+  "contractStatus",
+  "caveats",
   "unitWorktree",
   "promptDrift",
   "errors",

@@ -23,6 +23,37 @@ function baseResult(over: Partial<RoleRunResult>): RoleRunResult {
   };
 }
 
+describe("buildRunRolePayload — contract agreement is three-state", () => {
+  const critique = (text: string) =>
+    buildRunRolePayload(baseResult({ roleKind: "contract-evaluator", resultText: text }), 75);
+
+  it("reports a caveated agreement as AGREED, with the status and requirements alongside", () => {
+    const p = critique("CONTRACT: AGREED WITH CAVEATS\n- pin the floor, not the version\n- verify green first\n");
+    // The field failure: this came back `false`, so a conductor re-opened negotiation forever on a
+    // contract the judge had accepted.
+    expect(p.contractAgreed).toBe(true);
+    expect(p.contractStatus).toBe("agreed-with-caveats");
+    expect(p.caveats).toEqual(["pin the floor, not the version", "verify green first"]);
+  });
+
+  it("keeps plain agreement and rejection distinguishable, and omits caveats when there are none", () => {
+    const agreed = critique("CONTRACT: AGREED");
+    expect(agreed.contractAgreed).toBe(true);
+    expect(agreed.contractStatus).toBe("agreed");
+    expect(agreed).not.toHaveProperty("caveats");
+
+    const rejected = critique("1. tighten assertion 3");
+    expect(rejected.contractAgreed).toBe(false);
+    expect(rejected.contractStatus).toBe("rejected");
+  });
+
+  it("carries none of it for a non-contract role", () => {
+    const p = buildRunRolePayload(baseResult({ roleKind: "generator", resultText: "CONTRACT: AGREED" }), 75);
+    expect(p).not.toHaveProperty("contractAgreed");
+    expect(p).not.toHaveProperty("contractStatus");
+  });
+});
+
 describe("buildRunRolePayload — holdout-safe field split", () => {
   it("copies every canonical RoleRunResult field verbatim or accounts for its intentional transformation", () => {
     // Record<keyof ...> makes this fixture fail typecheck when RoleRunResult gains a field until

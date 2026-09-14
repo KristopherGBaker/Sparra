@@ -4,7 +4,6 @@ import { runSession } from "../sdk/session.ts";
 import type { RunResult, RunSessionParams } from "../sdk/session.ts";
 import { contractEvaluatorGuard, readOnlyGuard } from "../sdk/guard.ts";
 import { holdoutFreeCwd } from "./readscope.ts";
-import { hasMarker } from "../util/extract.ts";
 import { appendText, readText, writeText, exists } from "../util/io.ts";
 import { detail, info, ok, warn } from "../util/log.ts";
 import { readMemory, memorySection } from "../memory.ts";
@@ -19,7 +18,7 @@ import { getBackend } from "../sdk/session.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 
-import { CONTRACT_AGREED_MARKER as AGREED } from "../roleEnvelope.ts";
+import { parseContractAgreement } from "../roleEnvelope.ts";
 const SECTION = "## AGREED CONTRACT";
 
 // Delta marker injected on round>1 evaluator calls (alongside the prior critiques). The FULL
@@ -233,7 +232,11 @@ export async function negotiateContract(
     critique = evalRes.resultText.trim();
     await appendText(file, `### Round ${round} — critique\n\n${critique}\n\n`);
 
-    if (hasMarker(critique, AGREED)) {
+    // Three-state: a judge that accepts the contract PROVIDED specific requirements are met has
+    // AGREED — treating that as "not agreed" spends another negotiation round (and, for an
+    // interactive conductor keying off the flag, loops) on a contract already accepted.
+    const agreement = parseContractAgreement(critique);
+    if (agreement.status !== "rejected") {
       // Harness verify-PROBE (no model): dry-run the agreed contract's verify commands. Two
       // outcomes re-open negotiation with the probe output: a USAGE error (broken as written:
       // not found / unknown flag / usage text) and an UNSAFE command (rejected by the safety
@@ -260,7 +263,23 @@ export async function negotiateContract(
           continue;
         }
         agreed = true;
-        ok(`Contract ${item.id} agreed in round ${round}.`);
+        // A caveated agreement's requirements bind the BUILD. Fold them into the contract text the
+        // generator implements and the evaluator grades — otherwise "agreed provided X" silently
+        // becomes "agreed", which is the same shape of quiet loss as a dropped assertion.
+        if (agreement.caveats.length) {
+          proposal = `${proposal}\n\n## Agreed caveats (evaluator requirements)\n\n${agreement.caveats
+            .map((c) => `- ${c}`)
+            .join("\n")}\n`;
+          await appendText(
+            file,
+            `### Round ${round} — agreed WITH CAVEATS\n\n${agreement.caveats.map((c) => `- ${c}`).join("\n")}\n\n`
+          );
+        }
+        ok(
+          `Contract ${item.id} agreed in round ${round}${
+            agreement.caveats.length ? ` with ${agreement.caveats.length} caveat(s) folded in` : ""
+          }.`
+        );
         break;
       }
       // Probe output flows into the next generator round's critique context — redact holdout

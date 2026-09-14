@@ -337,7 +337,11 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // contract-generator (a new rule line) and the generator (extending its read-scope bullet); the
     // contract-evaluator's stale ".sparra is unavailable" claim corrected to name the readable role
     // inputs (briefs/, contracts/). Three existing prompts edited; no new prompt.
-    expect(h.digest("hex")).toBe("05b458148ceef63a178aa41bf80fb62fab3db4c5e9e12fdda2f164d2c1fee36f");
+    // Regenerated 2026-09-14 (caveated agreement): the contract-evaluator learns the
+    // `CONTRACT: AGREED WITH CAVEATS` + one-bullet-per-requirement grammar the harness parses and
+    // folds into the contract, and is told the harness persists its critique (never write files, and
+    // don't report a denied write as a finding). One existing prompt edited; no new prompt.
+    expect(h.digest("hex")).toBe("405ada0990ecb5e27d23c1c7b0944d930943813ab4797bbfdf713c51eccb63bb");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

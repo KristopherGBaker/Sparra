@@ -14,8 +14,7 @@ import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 // here for back-compat with existing importers (`phases/role.ts`, tests).
 export type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
 import type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
-import { CONTRACT_AGREED_MARKER } from "../roleEnvelope.ts";
-import { hasMarker } from "../util/extract.ts";
+import { parseContractAgreement } from "../roleEnvelope.ts";
 
 /** The `run_role` tool's argument shape (mirrors the zod schema below). */
 export interface RunRoleToolArgs {
@@ -171,11 +170,19 @@ export function buildRunRolePayload(
         sessionId: r.sessionId,
         ok: r.ok,
         resultText: r.resultText,
-        // contract-evaluator only: surface the AGREED signal as a structured boolean so a conductor
-        // reading the (resultText-dropped) parent summary can still detect agreement. Holdout-safe
-        // (contract-evaluator output is holdout-free; this is just a boolean). Absent for other roles.
-        contractAgreed:
-          r.roleKind === "contract-evaluator" ? hasMarker(r.resultText, CONTRACT_AGREED_MARKER) : undefined,
+        // contract-evaluator only: surface the agreement as structured fields so a conductor reading
+        // the (resultText-dropped) parent summary can act without re-parsing prose. THREE states:
+        // a judge that accepts the contract PROVIDED specific requirements are met has agreed —
+        // reporting that as `false` made conductors re-open negotiation on an accepted contract — so
+        // `contractAgreed` is true for both agreement forms and `contractStatus`/`caveats` carry the
+        // difference. Holdout-safe (contract-evaluator output is holdout-free). Absent for other roles.
+        ...(r.roleKind === "contract-evaluator"
+          ? (({ status, caveats }) => ({
+              contractAgreed: status !== "rejected",
+              contractStatus: status,
+              ...(caveats.length ? { caveats } : {}),
+            }))(parseContractAgreement(r.resultText))
+          : {}),
         // Holdout-free for these roles (holdout is dropped from their scope) — the conductor
         // may tail `<traceDir>/NN-*.md` for live progress. NOT included in the evaluator
         // (verdict) branch above, whose trace is holdout-bearing.
