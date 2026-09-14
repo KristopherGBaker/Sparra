@@ -188,6 +188,33 @@ describe("codex backend", () => {
       expect(codexCapture.threadOptions.networkAccessEnabled).toBeUndefined();
     });
 
+    it("maps the harness effort scale 1:1 onto Codex modelReasoningEffort — 'max' is sent AS max", async () => {
+      for (const [harness, codex] of [
+        ["low", "low"],
+        ["medium", "medium"],
+        ["high", "high"],
+        ["xhigh", "xhigh"],
+        // Previously folded onto "xhigh" (the SDK union stopped there) — asking for the top level
+        // and quietly grading a notch below defeats the escalation path.
+        ["max", "max"],
+      ] as const) {
+        codexCapture.threadOptions = undefined;
+        await codexBackend.runTask(judgeReq("evaluator", { effort: harness }));
+        expect(codexCapture.threadOptions.modelReasoningEffort).toBe(codex);
+      }
+    });
+
+    it("omits modelReasoningEffort entirely for an unset or unmapped effort", async () => {
+      codexCapture.threadOptions = undefined;
+      await codexBackend.runTask(judgeReq("evaluator"));
+      expect(codexCapture.threadOptions.modelReasoningEffort).toBeUndefined();
+      // The scales are independent: an effort Codex has no name for is DROPPED, never passed through
+      // as an unknown `model_reasoning_effort` the CLI would reject.
+      codexCapture.threadOptions = undefined;
+      await codexBackend.runTask(judgeReq("evaluator", { effort: "ultra" as AgentRequest["effort"] }));
+      expect(codexCapture.threadOptions.modelReasoningEffort).toBeUndefined();
+    });
+
     it("a plain read-only judge (no scratch) stays read-only, no network relaxation flag", async () => {
       codexCapture.threadOptions = undefined;
       await codexBackend.runTask(judgeReq("evaluator", { exerciseScratch: false }));

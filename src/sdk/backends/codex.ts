@@ -250,7 +250,18 @@ function emit(onEvent: ((e: SessionEvent) => void) | undefined, e: SessionEvent)
   onEvent?.(e);
 }
 
-/** Map the harness effort scale onto Codex's modelReasoningEffort. */
+/**
+ * Map the harness effort scale onto Codex's `modelReasoningEffort`. The two scales happen to
+ * coincide today (`ModelReasoningEffort` also carries "minimal" | "ultra" | "persistent", which the
+ * harness has no name for), but they are independent — an unmapped value is dropped rather than
+ * passed through, so a future harness level can't reach the CLI as an unknown `model_reasoning_effort`.
+ *
+ * "max" is sent AS "max": it was folded onto "xhigh" only because the Codex SDK's union stopped
+ * there, and asking for the harness's top level while silently grading at one notch below is exactly
+ * the kind of quiet downgrade the escalation path exists to avoid. It needs a `codex` CLI new enough
+ * to accept the value (the CLI ships in lockstep with the SDK — @openai/codex-sdk 0.154.0 here);
+ * an older CLI on PATH rejects it rather than degrading, so pin `effort: xhigh` if you run one.
+ */
 function mapEffort(effort: AgentRequest["effort"]): string | undefined {
   switch (effort) {
     case "low":
@@ -260,8 +271,9 @@ function mapEffort(effort: AgentRequest["effort"]): string | undefined {
     case "high":
       return "high";
     case "xhigh":
-    case "max":
       return "xhigh";
+    case "max":
+      return "max";
     default:
       return undefined;
   }

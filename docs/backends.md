@@ -92,6 +92,16 @@ A request carries **backend-agnostic intent** — `writeScope`, `readOnly`, `out
 
 The **git worktree is the outer boundary for every backend**, with `writeScopeViolations()` as a backend-independent post-hoc backstop (see [sandbox-first safety](build-loop.md#sandbox-first-safety)).
 
+**Effort.** `roles.*.effort` (`low | medium | high | xhigh | max`) is the harness's own scale; each
+backend maps it natively — on Codex onto `modelReasoningEffort` (`mapEffort` in
+`src/sdk/backends/codex.ts`), today 1:1 for all five levels. The scales stay **independent**: Codex
+also has `minimal`/`ultra`/`persistent`, which the harness has no name for, and an effort Codex can't
+name is **dropped** rather than passed through as an unknown `model_reasoning_effort` the CLI would
+reject. `max` is sent as `max` (it was folded onto `xhigh` while the SDK union stopped there) — it
+needs a `codex` CLI new enough to accept the value; the CLI ships in lockstep with the SDK
+(`@openai/codex-sdk` 0.154.0), and an **older CLI rejects it rather than degrading**, so pin
+`effort: xhigh` if you run one.
+
 **Turns-remaining warning is Claude-only, by construction.** The generator's one-time nudge to emit its report JSON before the turn cap (see [build-loop](build-loop.md#bounded-by-default-budgets)) is a **PostToolUse hook** merged into the writer hook set. Since Codex enforces no turn cap, exposes no mid-session injection seam, and reports `hooks: false`, the warning simply never attaches on Codex — it is a **no-op there, never an error**. The Claude backend, where hooks fire, is the only place the injection lands.
 
 ### Per-role sandbox (Codex) + the worktree safety gate
