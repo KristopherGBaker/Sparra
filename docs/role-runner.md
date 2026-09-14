@@ -363,6 +363,9 @@ the run ended**, and every writer result carries:
   the artifact as a considered answer. Only `Read`/`Glob`/`Grep` refusals count (a blocked write or
   Bash mutation is the guard working as designed); the list is deduped, capped at 20, and carries
   **paths only**, never file content. The runner also logs a `DEGRADED` warning line.
+  **Claude-only by construction**, like the turns-remaining warning: the signal rides the PreToolUse
+  hook, and Codex reports `hooks: false` — a Codex role is bounded by its OS sandbox, which refuses
+  reads without telling the harness which ones. Absent ≠ "nothing was refused" on that backend.
 
 Classification is a strict first-match matrix — at most ONE of `limitHit` / `hitMaxTurns` /
 `emptyCompletion` / `noProgress` is set: a genuine limit stays `limitHit` (suppressing a

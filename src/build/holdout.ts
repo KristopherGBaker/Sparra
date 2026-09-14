@@ -464,9 +464,21 @@ export function makeHoldoutReadDecider(
     return { segments, confident: quote === null && !DYNAMIC.test(cmd) };
   };
 
-  /** The tokens of a parsed command that are actually PATH operands. */
-  const pathOperands = (segments: string[][]): string[] => {
+  /**
+   * Split a parsed command's tokens into the two things we can say about them:
+   *   - `globs`   — real path operands, judged with full directory-aware glob semantics.
+   *   - `literal` — tokens that are PROBABLY a regex/pattern (the pattern slot of rg/grep/sed/awk,
+   *                 and the value of an unrecognized `--flag=value`), judged ONLY as an exact path.
+   *
+   * The second list exists because the flag vocabulary of every tool cannot be enumerated: a value-
+   * taking flag we do not know (`rg --ignore-file HOLDOUT.md`) pushes its value into the pattern
+   * slot, and ripgrep really does READ that file. Checking the slot literally denies that while
+   * keeping a genuine regex safe — `rg 'HOLDOUT.*' src` searches for text and reads no artifact, so
+   * it must not be judged as a glob that "could match" the holdout basename.
+   */
+  const pathOperands = (segments: string[][]): { globs: string[]; literal: string[] } => {
     const out: string[] = [];
+    const literal: string[] = [];
     for (const seg of segments) {
       let k = 0;
       // Leading `VAR=value` assignments: not operands, but the VALUE can name a path.
@@ -484,19 +496,23 @@ export function makeHoldoutReadDecider(
             if (v !== undefined) out.push(v); // a path-shaped filter: judged, but not the pattern slot
           } else {
             const eq = t.indexOf("=");
-            if (eq > 0 && GLOB_FLAGS.has(t.slice(0, eq))) out.push(t.slice(eq + 1)); // --include=*.md
+            // `--include=*.md` is a known path filter (full glob judgment); any OTHER `--flag=value`
+            // may still be a path we do not know about (`--ignore-file=HOLDOUT.md`) — judged
+            // literally, so a `--regexp=HOLD.*` value is not mistaken for a glob.
+            if (eq > 0) (GLOB_FLAGS.has(t.slice(0, eq)) ? out : literal).push(t.slice(eq + 1));
           }
           continue; // the flag itself names nothing
         }
         if (firstOperand && PATTERN_FIRST.has(cmdWord)) {
-          firstOperand = false; // rg/grep/sed/awk take the PATTERN here
+          firstOperand = false; // rg/grep/sed/awk take the PATTERN here — literal judgment only
+          literal.push(t);
           continue;
         }
         firstOperand = false;
         out.push(t);
       }
     }
-    return out;
+    return { globs: out, literal };
   };
 
   // Guidance that names paths from the project ACTUALLY in play, resolved once on first denial —
@@ -542,8 +558,12 @@ export function makeHoldoutReadDecider(
       warn(`holdout guard: could not resolve command targets (runtime expansion) — allowed, audited: ${cmd.slice(0, 160)}`);
       return null;
     }
-    const hit = pathOperands(segments).find((op) => globHitsArtifact(op, workspace));
-    return hit === undefined ? null : denyTarget("Command operand", hit);
+    const { globs, literal } = pathOperands(segments);
+    const hit = globs.find((op) => globHitsArtifact(op, workspace));
+    if (hit !== undefined) return denyTarget("Command operand", hit);
+    // Pattern-slot / unknown-flag values: exact path only, no glob interpretation.
+    const named = literal.find((op) => blockedReadTarget(op));
+    return named === undefined ? null : denyTarget("Command operand", named);
   };
   const DENY_ROOT =
     "Search is rooted at a holdout-bearing dir (it contains .sparra) — pass an explicit non-holdout subdir path like src/ instead.";

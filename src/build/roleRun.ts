@@ -589,6 +589,10 @@ export interface RoleRunResult {
    * contract and emitted `CONTRACT: AGREED` anyway — honest, and still a confident artifact built on
    * reconstruction, which a conductor only discovered rounds later. The conductor should treat this
    * as "check the inputs/permissions", not as a graded outcome.
+   *
+   * CLAUDE-ONLY by construction (like the turns-remaining warning): it rides the PreToolUse hook,
+   * and Codex reports `hooks: false` — there a role is bounded by the OS sandbox, which refuses
+   * reads without telling the harness which. Absent does NOT mean "nothing was refused" on Codex.
    */
   degraded?: boolean;
   /** The refused read attempts behind `degraded` (deduped, capped). Tool + target PATH only — never

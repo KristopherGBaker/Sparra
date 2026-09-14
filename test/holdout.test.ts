@@ -400,6 +400,21 @@ describe("makeHoldoutReadDecider — Bash decides on resolved path OPERANDS, not
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  // Found by the cross-model (Codex) review of this very change: an unknown value-taking flag pushes
+  // its value into the PATTERN slot, and ripgrep really does read `--ignore-file`.
+  it("denies a protected path passed to an unrecognized value-taking flag, in both spellings", async () => {
+    const { deny, root } = await realProject();
+    expect(deny("Bash", { command: "rg --ignore-file HOLDOUT.md x docs/" })).toBeTruthy();
+    expect(deny("Bash", { command: "rg --ignore-file=HOLDOUT.md x docs/" })).toBeTruthy();
+    expect(deny("Bash", { command: "rg -n x --ignore-file HOLDOUT.md docs" })).toBeTruthy();
+    expect(deny("Bash", { command: "rg -f .sparra/verdicts/item.md x docs" })).toBeTruthy();
+    // …while a genuine REGEX in that slot still reads nothing and stays allowed: the slot is judged
+    // as an exact path, never as a glob that "could match" a protected basename.
+    expect(deny("Bash", { command: "rg 'HOLDOUT.*' Packages" })).toBeNull();
+    expect(deny("Bash", { command: "rg --ignore-file docs/.rgignore x docs/" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("does not mistake flags, regex patterns or the command word for paths", async () => {
     const { deny, root } = await realProject();
     for (const command of [
