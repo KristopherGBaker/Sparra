@@ -64,7 +64,7 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       tokens: true, errors: true, limitHit: true, noProgress: true, hitMaxTurns: true,
       emptyCompletion: true, filesChanged: true, hitBudget: true, unitWorktree: true,
       fallbackFrom: true, sameModelGrade: true, verifyGateWarning: true, remapCount: true,
-      degraded: true, deniedInputs: true, critiquePath: true,
+      degraded: true, deniedInputs: true, critiquePath: true, wipGapWarning: true,
     };
     const full = baseResult({
       roleKind: "evaluator", backend: "codex", model: "gpt-complete", resultText: "raw",
@@ -77,12 +77,13 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       verifyGateWarning: "run npm test", remapCount: 2,
       degraded: true, deniedInputs: [{ tool: "Read", target: "/p/.sparra/briefs/u.md", reason: "denied" }],
       critiquePath: "/p/.sparra/critiques/role-run-contract-evaluator-x.critique.md",
+      wipGapWarning: "unit worktree \"u1\" was branched from HEAD…",
     });
     const directWorkerFields = [
       "ok", "roleKind", "backend", "model", "resultText", "outPath", "traceDir", "sessionId",
       "costUsd", "tokens", "errors", "limitHit", "noProgress", "hitMaxTurns", "emptyCompletion",
       "filesChanged", "hitBudget", "unitWorktree", "fallbackFrom", "verifyGateWarning", "remapCount",
-      "degraded", "deniedInputs", "critiquePath",
+      "degraded", "deniedInputs", "critiquePath", "wipGapWarning",
     ] as const satisfies readonly (keyof RoleRunResult)[];
     const directEvaluatorFields = [
       "ok", "roleKind", "backend", "model", "outPath", "verdictPath", "sessionId", "costUsd",

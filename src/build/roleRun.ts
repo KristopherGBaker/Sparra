@@ -28,7 +28,7 @@ import { RUBRIC_CRITERIA, type ExerciseStatus, type HoldoutContradiction, type R
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
-import { ensureUnitWorktree, type UnitWorktreeDeps } from "./unitWorktree.ts";
+import { ensureUnitWorktree, unitWorktreeWipGap, unitWorktreeWipWarning, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
@@ -655,6 +655,11 @@ export interface RoleRunResult {
    *  Null/absent when self-verify IS enabled, the contract references no verify command, or
    *  `verifyCommands` is empty. */
   verifyGateWarning?: string;
+  /** Set when the unit worktree (branched from HEAD) is MISSING a path the brief/contract NAMES that
+   *  exists as uncommitted work in the source tree. A judge's `--worktree` snapshot is WIP-faithful,
+   *  so the generator and its grader would be looking at different trees. Advisory, not a failure:
+   *  the asymmetry between the two worktree kinds is deliberate — the silence was the defect. */
+  wipGapWarning?: string;
   /** F1 telemetry: the count of `.sparra`→marker neutralizations `remapBriefForWorkspaceCounted`
    *  made on the conductor-authored brief for THIS run (code spans are exempt, so a QUOTED `.sparra`
    *  reference is preserved and not counted). Present (>0) only when a substitution occurred on a
@@ -1410,6 +1415,19 @@ export async function runRoleInUnitWorktree(req: RoleRunRequest): Promise<RoleRu
   info(
     `role-run-${roleKind}: ${wt.created ? "created" : "reusing"} persistent unit worktree "${name}" at ${wt.dir} on ${wt.branch}`
   );
+  // WIP-asymmetry check (see `unitWorktreeWipGap`): this tree was cut from HEAD, while a judge's
+  // --worktree snapshot is WIP-faithful. Warn when the work the role was GIVEN names a path that
+  // exists only as uncommitted source WIP, so the near-miss surfaces before the round burns rather
+  // than after an assertion fails on a fixture the generator never had.
+  const gapText = `${req.brief ?? (req.briefPath ? ((await readText(req.briefPath)) ?? "") : "")}\n${
+    req.contract ?? (req.contractPath ? ((await readText(req.contractPath)) ?? "") : "")
+  }`;
+  const wipWarning = unitWorktreeWipWarning(
+    unitWorktreeWipGap({ srcWip: changedFiles(src), src, worktreeDir: wt.dir, text: gapText }),
+    name
+  );
+  if (wipWarning) warn(`role-run-${roleKind}: ${wipWarning}`);
+
   const result = await runRoleInPlace({
     ...req,
     workspace: wt.dir,
@@ -1417,7 +1435,11 @@ export async function runRoleInUnitWorktree(req: RoleRunRequest): Promise<RoleRu
     useWorktree: false,
     depSourceDir: src,
   });
-  return { ...result, unitWorktree: { name, dir: wt.dir, branch: wt.branch, created: wt.created } };
+  return {
+    ...result,
+    unitWorktree: { name, dir: wt.dir, branch: wt.branch, created: wt.created },
+    ...(wipWarning ? { wipGapWarning: wipWarning } : {}),
+  };
 }
 
 /** Injectable seams for the temp-worktree wrapper — tests use a throwaway git repo + a fake

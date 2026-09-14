@@ -167,7 +167,10 @@ launch-time `ENOENT` (the backend dying at a missing cwd with no model output) i
 **PERSISTENT, named per-unit worktree** on a `sparra/<name>` branch, created on first use (deps
 provisioned) and **reused across that unit's rounds** so the generator's WIP survives round N → N+1.
 The worktree IS the writer's safety boundary. It's writer-only (rejected on a judge role) and
-mutually exclusive with `worktree`. The result surfaces `unitWorktree: { name, dir, branch, created }`
+mutually exclusive with `worktree`. **The two kinds treat WIP differently, on purpose:** this one is
+branched from **HEAD**, so uncommitted/untracked files do NOT travel into it (a durable branch should
+not inherit stray WIP), while the judge snapshot above IS WIP-faithful. That gap is surfaced rather
+than silent — see `wipGapWarning` below. The result surfaces `unitWorktree: { name, dir, branch, created }`
 so the conductor knows where the WIP lives; tear it down explicitly on accept/abandon with the
 `remove_unit_worktree` MCP tool or `sparra role rm-worktree --name <name> [--force]` (WIP-safe —
 refuses a dirty tree / unmerged branch unless forced). This makes **parallel generators run iff they
@@ -344,6 +347,16 @@ the run ended**, and every writer result carries:
   landed work — never re-run the item or feed it back as a FAIL.
 - **`hitBudget: true`** — the run stopped on **our own** budget cap (not a provider limit, not a
   turn cap). Telemetry; resume via `sessionId` (raising the cap if warranted).
+- **`wipGapWarning`** (`unitWorktree` runs only) — the two worktree kinds treat WIP differently ON
+  PURPOSE: a **unit worktree** is a new branch cut from **HEAD**, so uncommitted and untracked files
+  do not travel into it (a durable branch should not inherit stray WIP), while a judge's
+  **`--worktree`** snapshot is **WIP-faithful** (it must grade what you are actually building).
+  Nothing connected the two, so a contract could pin a fixture the judge would see and the generator
+  simply does not have — in the field, a captured API-response fixture that was still untracked. The
+  runner now compares the source tree's WIP against the worktree and warns when the **brief or
+  contract NAMES** such a path (matched on the repo-relative path, never a bare basename, so the
+  warning stays worth reading). Advisory, not a failure: commit the file in the source, or drop it
+  from the contract, before the round.
 - **`critiquePath`** (`contract-evaluator` only) — where the runner **auto-persisted** the critique,
   set whenever the role produced one, independent of `out`. The critique exists nowhere else: the
   trace records the inlined prompt and short progress notes, not the critique body, so before this

@@ -204,6 +204,8 @@ export function buildRunRolePayload(
         // self-verify is off → these commands were approval-blocked, claims may be "unverified".
         // Fix: re-run with allowVerify:true or on a worktree boundary.  HOLDOUT-SAFE.
         verifyGateWarning: r.verifyGateWarning,
+        // Unit-worktree WIP gap: the tree was cut from HEAD and lacks a path the work NAMES.
+        wipGapWarning: r.wipGapWarning,
         // Fallback provenance: present when the run fell back from the requested backend/model.
         // backend/model above already carry the ACTUAL post-fallback identity — do not rename.
         fallbackFrom: r.fallbackFrom, // {backend, model?} of the requested role that hit a limit

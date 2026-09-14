@@ -102,6 +102,9 @@ export interface RunRolePayload {
   emptyCompletion?: boolean;
   noProgress?: boolean;
   verifyGateWarning?: string;
+  /** The unit worktree is missing a path the brief/contract names that exists only as uncommitted
+   *  work in the source tree — generator and judge would see different trees. Advisory. */
+  wipGapWarning?: RoleRunResult["wipGapWarning"];
   /** F1 telemetry: how many `.sparra` references in the conductor-authored brief were neutralized to
    *  the inlined-contract marker on a worktree remap (fenced/inline code spans are exempt, so a QUOTED
    *  `.sparra` reference is preserved and NOT counted). Present (>0) only when a substitution

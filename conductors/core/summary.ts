@@ -51,6 +51,7 @@ export const PARENT_SAFE_FIELDS = [
   "degraded",
   "deniedInputs",
   "verifyGateWarning",
+  "wipGapWarning",
   "remapCount",
   "contractAgreed",
   "contractStatus",

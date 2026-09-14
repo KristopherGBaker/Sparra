@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { unitWorktreeWipGap, unitWorktreeWipWarning } from "../src/build/unitWorktree.ts";
 import { runRole, deniedInputSummary, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, validateReportPath, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
 import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
@@ -3916,5 +3917,64 @@ describe("runRole — contract critiques are persisted by the runner", () => {
     const gen = await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: recorder("done").fn });
     expect(gen.critiquePath).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── Field report 2026-09-14: the agreed contract pinned a captured API-response fixture by exact
+// path. It was still UNTRACKED, so the unit worktree (branched from HEAD) did not have it — while a
+// judge's --worktree snapshot would have. Nothing warned; it was caught by eyeballing
+// `git worktree list`. The asymmetry is deliberate; the silence was the defect. ─────────────────────
+describe("unitWorktreeWipGap — the generator's tree vs the judge's snapshot", () => {
+  const src = "/repo";
+  const wt = "/repo-u1";
+  const wip = ["/repo/Tests/Fixtures/response.json", "/repo/src/scratch.ts", "/repo/README.md"];
+
+  it("flags a NAMED path that exists only as source WIP", () => {
+    const gap = unitWorktreeWipGap({
+      srcWip: wip,
+      src,
+      worktreeDir: wt,
+      text: "Assert the parser against `Tests/Fixtures/response.json` exactly.",
+      existsFn: () => false, // nothing landed in the worktree
+    });
+    expect(gap).toEqual(["Tests/Fixtures/response.json"]);
+    const warning = unitWorktreeWipWarning(gap, "u1");
+    expect(warning).toContain("Tests/Fixtures/response.json");
+    expect(warning).toContain("branched from HEAD");
+    expect(warning).toContain("--worktree snapshot WOULD see them");
+  });
+
+  it("stays quiet about WIP the work does not name — a warning nobody reads is worse than none", () => {
+    expect(
+      unitWorktreeWipGap({ srcWip: wip, src, worktreeDir: wt, text: "Refactor the parser.", existsFn: () => false })
+    ).toEqual([]);
+    expect(unitWorktreeWipWarning([], "u1")).toBeUndefined();
+  });
+
+  it("matches on the repo-relative PATH, never a bare basename", () => {
+    // "README.md" is named, but as a bare basename — matching that would fire on every repo.
+    const gap = unitWorktreeWipGap({
+      srcWip: wip,
+      src,
+      worktreeDir: wt,
+      text: "Update README.md with the new flag.",
+      existsFn: () => false,
+    });
+    expect(gap).toEqual(["README.md"]); // named exactly as its relative path (it IS at the root)
+    const nested = unitWorktreeWipGap({
+      srcWip: ["/repo/docs/deep/README.md"],
+      src,
+      worktreeDir: wt,
+      text: "Update README.md with the new flag.",
+      existsFn: () => false,
+    });
+    expect(nested).toEqual([]); // basename-only mention does NOT fire for a nested file
+  });
+
+  it("says nothing when the path is present in the worktree after all, or nothing was given", () => {
+    expect(
+      unitWorktreeWipGap({ srcWip: wip, src, worktreeDir: wt, text: "Tests/Fixtures/response.json", existsFn: () => true })
+    ).toEqual([]);
+    expect(unitWorktreeWipGap({ srcWip: wip, src, worktreeDir: wt, text: "", existsFn: () => false })).toEqual([]);
   });
 });

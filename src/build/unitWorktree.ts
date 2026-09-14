@@ -119,6 +119,57 @@ export interface EnsureUnitWorktreeResult {
  * entry is dropped + pruned and the tree RECREATED under the same identity (re-attaching a surviving
  * branch if one is present, so committed WIP is preserved) rather than returned pointing at nothing.
  */
+/**
+ * Paths the brief/contract NAMES that exist in the source tree's WIP but are ABSENT from the unit
+ * worktree — the silent asymmetry between the two worktree kinds, made visible.
+ *
+ * A unit worktree is a NEW BRANCH CUT FROM HEAD (`addNamedWorktree`), so uncommitted and untracked
+ * files do not travel into it. A judge's `--worktree` snapshot is WIP-FAITHFUL (`addWipWorktree`
+ * commits a throwaway snapshot). Both are deliberate — a durable branch should not inherit stray
+ * WIP, and a judge must grade what you are actually building — but nothing connected the two, so a
+ * contract could pin a fixture that the judge would see and the generator simply does not have. In
+ * the field that was a captured API-response fixture, still untracked: the generator would have run
+ * a long way before failing that assertion, or invented a substitute.
+ *
+ * Deliberately NARROW, because a warning nobody reads is worse than none: only paths the brief or
+ * contract actually names, matched on the repo-relative path (never a bare basename, which would
+ * fire on every `README.md`). Pure — the caller supplies the WIP list and the existence probe.
+ */
+export function unitWorktreeWipGap(args: {
+  /** Absolute WIP paths in the SOURCE tree (`changedFiles(src)`: modified + untracked). */
+  srcWip: string[];
+  src: string;
+  worktreeDir: string;
+  /** The brief + contract the role will work from. */
+  text: string;
+  existsFn?: (p: string) => boolean;
+}): string[] {
+  const text = args.text ?? "";
+  if (!text.trim()) return [];
+  const existsFn = args.existsFn ?? exists;
+  const gap: string[] = [];
+  for (const abs of args.srcWip) {
+    const rel = path.relative(args.src, abs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    if (!text.includes(rel)) continue; // not named in the work the role was given
+    if (existsFn(path.join(args.worktreeDir, rel))) continue; // it made it into the tree after all
+    gap.push(rel);
+    if (gap.length >= 10) break;
+  }
+  return gap;
+}
+
+/** The one-line warning for a non-empty {@link unitWorktreeWipGap}; `undefined` when there is none. */
+export function unitWorktreeWipWarning(gap: string[], name: string): string | undefined {
+  if (!gap.length) return undefined;
+  return (
+    `unit worktree "${name}" was branched from HEAD, so ${gap.length} path(s) your brief/contract NAMES ` +
+    `exist only as uncommitted work in the source tree and are MISSING here: ${gap.join(", ")}. ` +
+    `A judge's --worktree snapshot WOULD see them, so the generator and its grader disagree about the ` +
+    `tree. Commit them in the source (or drop them from the contract) before the round.`
+  );
+}
+
 export async function ensureUnitWorktree(
   ctx: Ctx,
   name: string,
