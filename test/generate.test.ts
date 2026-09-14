@@ -535,7 +535,7 @@ describe("generateItem — build read scope (extraReadDirs)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("is undefined with no extra dirs when building in the repo root", async () => {
+  it("is undefined with no extra dirs when building in the repo root (inputs are already in the cwd)", async () => {
     const { ctx, dir } = await ctxFor("cli");
     let dirs: string[] | undefined = ["x"];
     await generateItem({

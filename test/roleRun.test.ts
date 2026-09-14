@@ -310,16 +310,19 @@ describe("runRole — safety intent + wiring", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("a forbid role on a separate worktree does NOT get .sparra/ in its read scope; the evaluator does", async () => {
+  it("a forbid role on a separate worktree gets ONLY the .sparra role-input dirs in its read scope; the evaluator gets it all", async () => {
     const { ctx, dir } = await makeCtx();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-rolerun-wt-"));
 
     const gen = recorder();
     await runRole({ ctx, roleKind: "generator", brief: "build", workspace, runSessionFn: gen.fn });
     const genDirs = gen.calls[0]!.additionalDirectories ?? [];
-    // ctx.root (which contains .sparra) is dropped — no granted dir contains the holdout machinery.
+    // ctx.root (which contains .sparra) is dropped — no granted dir carries the holdout machinery…
     expect(genDirs).not.toContain(dir);
-    expect(genDirs.some((d) => d.includes(".sparra"))).toBe(false);
+    expect(genDirs.some((d) => /\.sparra\/(verdicts|traces|frozen|proposals|reviews)/.test(d))).toBe(false);
+    // …but the role's own INPUTS are granted: on a worktree the brief is in neither the cwd nor the
+    // dropped root, so without this the role is told to read a file it cannot reach.
+    expect(genDirs).toEqual(expect.arrayContaining(ctx.paths.roleInputDirs));
 
     const ev = recorder();
     await runRole({ ctx, roleKind: "evaluator", brief: "grade", workspace, runSessionFn: ev.fn });

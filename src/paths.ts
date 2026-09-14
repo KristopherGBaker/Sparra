@@ -117,6 +117,22 @@ export class Paths {
   get contracts() {
     return path.join(this.dir, "contracts");
   }
+  /** Unit BRIEFS — the input a conductor hands a contract-generator/generator (`--brief <file>`),
+   *  written by a human or a conducting agent. Never evaluator-derived. */
+  get briefs() {
+    return path.join(this.dir, "briefs");
+  }
+  /**
+   * The `.sparra` subtrees that are role INPUTS rather than evaluator-derived artifacts: the unit
+   * brief a role is asked to work from, and the negotiated contracts (which the generator is handed
+   * verbatim anyway, and which no forbid role could have tainted — contract roles never see the
+   * holdout). The holdout wall allows a forbid role to READ these and denies the rest of `.sparra` —
+   * verdicts, evaluator traces, frozen copies, memory, proposals — so an allowlist of two named dirs
+   * keeps default-deny intact. Single source of truth for the deny-hook and the read scope.
+   */
+  get roleInputDirs(): string[] {
+    return [this.briefs, this.contracts];
+  }
   get verdicts() {
     return path.join(this.dir, "verdicts");
   }
@@ -210,6 +226,7 @@ export class Paths {
       ensureDir(this.snapshots),
       ensureDir(this.workitems),
       ensureDir(this.contracts),
+      ensureDir(this.briefs),
       ensureDir(this.verdicts),
       ensureDir(this.reviews),
       ensureDir(this.proposals),

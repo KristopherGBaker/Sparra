@@ -404,6 +404,7 @@ your-project/
    ├─ frozen/          # PLAN.frozen.md, CODEBASE_MAP.frozen.md, HOLDOUT.frozen.md (build input)
    ├─ snapshots/       # timestamped PLAN/MAP checkpoints
    ├─ workitems/       # decomposition (items.json)
+   ├─ briefs/          # unit BRIEFS — the input a conductor hands a role (`--brief <file>`)
    ├─ contracts/       # negotiated "done" contracts
    ├─ verdicts/        # evaluator scores + assertion pass/fail with evidence (holdout-redacted).
    │  ├─ <run>/<item>.rN.verdict.md         #   autonomous build runs — RUN-SCOPED subdir so reused
@@ -444,7 +445,7 @@ written **only when absent** — a `.sparra/.gitignore` you have edited is never
 
 | | Rides git (durable, shareable) | Stays local / never committed (volatile) |
 |---|---|---|
-| **Contents** | `.gitignore`, `config.yaml`, `prompts/` (incl. `.baseline.json`), `calibration/` | `state.json` (machine-local absolute paths), `environment.md`, `memory.md`, `frozen/` (holds `HOLDOUT.frozen.md`), `traces/`, `verdicts/`, `runs/`, `conduct/`, `reflect/`, `cycles/`, `snapshots/`, `contracts/`, `reviews/`, `proposals/`, `workitems/`, `measure/`, and **any future dir** |
+| **Contents** | `.gitignore`, `config.yaml`, `prompts/` (incl. `.baseline.json`), `calibration/` | `state.json` (machine-local absolute paths), `environment.md`, `memory.md`, `frozen/` (holds `HOLDOUT.frozen.md`), `traces/`, `verdicts/`, `runs/`, `conduct/`, `reflect/`, `cycles/`, `snapshots/`, `briefs/`, `contracts/`, `reviews/`, `proposals/`, `workitems/`, `measure/`, and **any future dir** |
 | **Why** | role/model config + prompt overrides + taste samples are the same everywhere | absolute paths, per-machine toolchain, and every **holdout-derived** artifact must not travel |
 
 **Working across machines.** Commit the human-facing docs (`CODEBASE_MAP.md`, `PLAN.md`,

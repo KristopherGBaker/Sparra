@@ -72,6 +72,17 @@ export function buildReadDirs(
   let deduped = [...new Set(dirs)].filter((d) => d !== workspaceDir);
   if (opts?.excludeHoldoutScope) {
     deduped = deduped.filter((d) => !containsHoldoutArtifact(ctx, d));
+    // …then add back the role INPUT dirs (`Paths.roleInputDirs`: briefs + contracts). Dropping
+    // `ctx.root` above also drops the brief the role is being asked to work from — on a worktree run
+    // it is not in the cwd either, so the role would be told to read a file it cannot reach, and a
+    // forbid role that reconstructs its unit from whatever else it can see writes a confident,
+    // wrong contract. These two subtrees hold no evaluator-derived content (contract roles never see
+    // the holdout), so admitting exactly them keeps the rest of `.sparra` excluded.
+    // Only when they are not already reachable: an in-place run has them inside its own cwd, so the
+    // grant would be noise. A worktree run does not, which is the case that needed fixing.
+    for (const d of ctx.paths.roleInputDirs.map((r) => path.resolve(r)))
+      if (!within(d, path.resolve(workspaceDir)) && !deduped.some((g) => within(d, g)) && !containsHoldoutArtifact(ctx, d))
+        deduped.push(d);
   }
   return deduped.length ? deduped : undefined;
 }

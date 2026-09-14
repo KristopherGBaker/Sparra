@@ -30,9 +30,12 @@ describe("buildReadDirs — holdout scope exclusion", () => {
     expect(buildReadDirs(ctx, workspace)).toEqual([root]);
   });
 
-  it("with excludeHoldoutScope, drops ctx.root because it contains .sparra", () => {
+  it("with excludeHoldoutScope, drops ctx.root because it contains .sparra — keeping only the role INPUT dirs", () => {
     const { ctx, workspace } = makeCtx();
-    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toBeUndefined();
+    // ctx.root is dropped (it holds the holdout), but the brief the role is asked to work from, and
+    // the negotiated contracts, are its INPUTS — excluding them left a forbid role told to read a
+    // file it could not reach. They carry no evaluator-derived content.
+    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual(ctx.paths.roleInputDirs);
   });
 
   it("with excludeHoldoutScope, KEEPS a holdout-free extraReadDir while dropping ctx.root", () => {
@@ -41,13 +44,13 @@ describe("buildReadDirs — holdout scope exclusion", () => {
     // Without the flag both ctx.root and the extra dir are granted.
     expect(buildReadDirs(ctx, workspace)).toEqual([root, extra]);
     // With it, only the holdout-free extra dir survives.
-    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual([extra]);
+    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual([extra, ...ctx.paths.roleInputDirs]);
   });
 
   it("with excludeHoldoutScope, also drops an extraReadDir that CONTAINS .sparra", () => {
     const { ctx, root, workspace } = makeCtx();
     ctx.config.build.extraReadDirs = [root]; // ctx.root listed again as an extra (contains .sparra)
-    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toBeUndefined();
+    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual(ctx.paths.roleInputDirs);
   });
 
   it("drops an extraReadDir whose holdout (under docsDir, OUTSIDE .sparra) it contains, while keeping a holdout-free dir", () => {
@@ -64,6 +67,6 @@ describe("buildReadDirs — holdout scope exclusion", () => {
     // Evaluator (no exclusion) still gets BOTH the docsBase (holdout dir) and the free dir.
     expect(buildReadDirs(ctx, workspace)).toEqual([root, docsBase, holdoutFree]);
     // Forbid role: docsBase is dropped (it contains the live holdout), holdout-free dir kept.
-    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual([holdoutFree]);
+    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual([holdoutFree, ...ctx.paths.roleInputDirs]);
   });
 });

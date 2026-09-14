@@ -414,3 +414,52 @@ describe("makeHoldoutReadDecider — Bash decides on resolved path OPERANDS, not
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
+
+// ── Field report 2026-09-14: a contract-generator was denied `.sparra/briefs/<unit>.md` — the INPUT
+// its task told it to read first — then reconstructed the unit from what it could reach and encoded
+// a fact backwards (a subject with "an assignment row whose startedAt is nil" when it has no row at
+// all). The brief is not evaluator-derived; the wall was over-reaching. ────────────────────────────
+describe("makeHoldoutReadDecider — role INPUTS under .sparra are readable, the rest is not", () => {
+  it("lets a forbid role read its brief and the negotiated contracts, by path and by glob", async () => {
+    const { ctx, root } = await makeMatureDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    const brief = path.join(ctx.paths.briefs, "recall-synonym-gap.md");
+    fs.mkdirSync(ctx.paths.briefs, { recursive: true });
+    fs.writeFileSync(brief, "# Brief\n");
+
+    expect(deny("Read", { file_path: brief })).toBeNull();
+    expect(deny("Read", { file_path: ".sparra/briefs/recall-synonym-gap.md" })).toBeNull();
+    expect(deny("Read", { file_path: ctx.paths.contractFile("item-001") })).toBeNull();
+    expect(deny("Glob", { pattern: ".sparra/briefs/*.md" })).toBeNull();
+    expect(deny("Glob", { pattern: "**/contracts/*.md" })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: ctx.paths.briefs })).toBeNull();
+    expect(deny("Bash", { command: "ls .sparra/briefs/ && cat .sparra/contracts/item-001.contract.md" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps every OTHER .sparra artifact denied — the carve-out is two named dirs, not a denylist", async () => {
+    const { ctx, root } = await makeMatureDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Read", { file_path: ctx.paths.verdictFile("item-001", 1) })).toBeTruthy();
+    expect(deny("Read", { file_path: ctx.paths.frozenHoldout })).toBeTruthy();
+    expect(deny("Read", { file_path: ctx.paths.holdout })).toBeTruthy();
+    expect(deny("Read", { file_path: ctx.paths.memory })).toBeTruthy();
+    expect(deny("Bash", { command: "ls .sparra/traces/" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat .sparra/proposals/item-001-1.md" })).toBeTruthy();
+    expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy();
+    // A protected file is NEVER admitted by the input allowlist, even placed inside one of its dirs.
+    const planted = path.join(ctx.paths.briefs, "HOLDOUT.md");
+    expect(deny("Read", { file_path: planted })).toBeTruthy();
+    expect(deny("Glob", { pattern: "**/briefs/HOLDOUT.md" })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("denies a lowercase holdout path — a case-insensitive FS reads the real artifact", async () => {
+    const { ctx, root } = await makeDeciderCtx();
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Bash", { command: "cat holdout.md" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat .SPARRA/verdicts/x.md" })).toBeTruthy();
+    expect(deny("Read", { file_path: path.join(root, "Holdout.md") })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -151,11 +151,32 @@ export function makeHoldoutReadDecider(
   );
   const basenames = new Set([...protectedFiles].map((p) => path.basename(p)));
   const resolve = (p: string) => (path.isAbsolute(p) ? path.resolve(p) : path.resolve(workspace, p));
+  // CASE-INSENSITIVE path comparison throughout: on a case-insensitive filesystem (macOS, Windows)
+  // `cat holdout.md` reads the real `HOLDOUT.md`, so a case-sensitive compare would wave it through.
+  const fold = (p: string) => p.toLowerCase();
   const within = (child: string, parent: string) => {
-    const rel = path.relative(parent, child);
+    const rel = path.relative(fold(parent), fold(child));
     return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   };
+  const protectedFolded = new Set([...protectedFiles].map(fold));
+  const isProtectedFile = (abs: string) => protectedFolded.has(fold(abs));
   const artifacts = [...protectedFiles, sparraDir];
+  // Role INPUTS under `.sparra` (see `Paths.roleInputDirs`): the brief a role is asked to work from
+  // and the negotiated contracts. A forbid role was being refused the very file its task told it to
+  // read first ("evaluator-only artifacts", which a brief is not), then reconstructing the unit from
+  // whatever else it could reach — so the contract it produced encoded facts that live only in the
+  // brief, wrongly. These two named dirs are readable; everything else under `.sparra` stays denied,
+  // and a protected file is NEVER admitted by this list even if one is placed inside them.
+  const inputDirs = ctx.paths.roleInputDirs.map((d) => path.resolve(d));
+  const INPUT_DIR_NAMES = new Set(inputDirs.map((d) => fold(path.basename(d))));
+  const basenamesFolded = new Set([...basenames].map(fold));
+  // An input dir admits its own content — never a protected artifact, and never a file NAMED like one
+  // (a holdout copied or written into `briefs/` by mistake is still a holdout, and the allowlist must
+  // not become the way it reaches the builder).
+  const isRoleInput = (abs: string) =>
+    !isProtectedFile(abs) &&
+    !basenamesFolded.has(fold(path.basename(abs))) &&
+    inputDirs.some((d) => within(abs, d));
 
   // Minimatch-style single-segment glob → anchored regex (matches ONE path segment; `*`/`?` never
   // cross `/`). This is the defense against WILDCARD-basename evasion: exact-string equality alone
@@ -184,14 +205,14 @@ export function makeHoldoutReadDecider(
     const head = /[*?[]/.test(seg[0] ?? "") ? "(?!\\.)" : ""; // leading wildcard doesn't match a dotfile
     return new RegExp("^" + head + re + "$");
   };
-  const artifactNames = new Set([sparraBase, ...basenames]);
+  const artifactNames = new Set([sparraBase, ...basenames].map(fold));
   // Does a path segment NAME a protected artifact — the `.sparra` dir or a protected basename?
   // Exact match, OR a WILDCARD segment whose glob matches one of those names. `**` (recursion, not a
   // basename) is excluded here. Directory-AGNOSTIC — used only by the best-effort Bash matcher, where
   // a bare token like `HOLDOUT.*` is suspicious wherever it sits (the Glob path is dir-aware instead).
   const segNamesArtifact = (seg: string): boolean =>
-    artifactNames.has(seg) ||
-    (GLOB_META.test(seg) && !seg.includes("**") && [...artifactNames].some((n) => segToRegex(seg).test(n)));
+    artifactNames.has(fold(seg)) ||
+    (GLOB_META.test(seg) && !seg.includes("**") && [...artifactNames].some((n) => segToRegex(fold(seg)).test(n)));
 
   // Recursive minimatch of a relative glob (segments) against a relative path (segments); `**`
   // matches zero or more path segments. Lets the Glob path ask, directory-AWARE, whether a wildcard
@@ -249,14 +270,17 @@ export function makeHoldoutReadDecider(
   // A single-file READ is blocked when it IS / sits under a holdout artifact.
   const blockedReadTarget = (t: string) => {
     const abs = resolve(t);
-    return protectedFiles.has(abs) || within(abs, sparraDir);
+    if (isProtectedFile(abs)) return true;
+    return within(abs, sparraDir) && !isRoleInput(abs);
   };
   // A recursive SEARCH ROOT (the Grep `path`, else the cwd) reaches the holdout when it IS the
   // holdout scope, sits UNDER it, or CONTAINS it (is an ancestor) — the search descends into it.
   // A pathless Grep searches the cwd, so the cwd is the root then (this is the pathless-search leak:
   // contract/decomposer run with cwd = the holdout-bearing repo root).
   const blockedSearchRoot = (abs: string) =>
-    protectedFiles.has(abs) || within(abs, sparraDir) || artifacts.some((a) => within(a, abs));
+    isProtectedFile(abs) ||
+    (within(abs, sparraDir) && !isRoleInput(abs)) ||
+    (!isRoleInput(abs) && artifacts.some((a) => within(a, abs)));
 
   // Expand shell brace alternatives (`{a,b}` → ["a","b"]); handles nesting and multiple groups.
   const expandBraces = (pat: string): string[] => {
@@ -298,7 +322,12 @@ export function makeHoldoutReadDecider(
   // evasion, directory-aware), or when a recursive `**` would descend into an artifact beneath it.
   const altHitsArtifact = (alt: string, root: string): boolean => {
     const segs = alt.split("/").filter((s) => s !== "" && s !== ".");
-    if (segs.some((s) => artifactNames.has(s))) return true; // a literal `.sparra`/basename segment
+    // A glob that names a role-input dir literally (`.sparra/briefs/*.md`, `**/contracts/*.md`) is
+    // allowed to reach it — but only it: no other `.sparra` artifact carries those segment names, and
+    // a protected basename in the pattern still denies below.
+    const namesInput = segs.some((s) => INPUT_DIR_NAMES.has(fold(s)));
+    if (!namesInput && segs.some((s) => artifactNames.has(fold(s)))) return true; // literal `.sparra`/basename segment
+    if (segs.some((s) => [...basenames].some((b) => fold(b) === fold(s)))) return true; // a protected basename anywhere
     const literal: string[] = [];
     let sawWildcard = false;
     for (const s of segs) {
@@ -311,8 +340,8 @@ export function makeHoldoutReadDecider(
     const base = path.isAbsolute(alt)
       ? path.resolve("/" + literal.join("/"))
       : path.resolve(root, literal.join("/"));
-    if (!sawWildcard) return protectedFiles.has(base) || within(base, sparraDir); // concrete target
-    if (protectedFiles.has(base) || within(base, sparraDir)) return true; // scans from inside an artifact
+    if (!sawWildcard) return blockedReadTarget(base); // concrete target
+    if (blockedReadTarget(base)) return true; // scans from inside an artifact (a role-input dir is fine)
     // WILDCARD-basename evasion: does the glob (resolved under `base`) actually MATCH a protected
     // CONCRETE artifact sitting in the dir it scans? (`HOLDOUT.*`/`HOLD*`/`*OUT.md` at a root holding
     // the live <root>/HOLDOUT.md, or the explicit holdout path.) Directory-aware, so an innocent
@@ -320,7 +349,12 @@ export function makeHoldoutReadDecider(
     const restSegs = segs.slice(literal.length);
     for (const a of artifacts) {
       const rel = path.relative(base, a);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && matchGlobPath(restSegs, rel.split(path.sep), true))
+      if (
+        rel &&
+        !rel.startsWith("..") &&
+        !path.isAbsolute(rel) &&
+        matchGlobPath(restSegs.map(fold), fold(rel).split(path.sep), true)
+      )
         return true;
     }
     // STRUCTURAL descent (fix round 3, see `matchGlobPrefix` above): the wildcard tail traverses INTO
@@ -331,8 +365,9 @@ export function makeHoldoutReadDecider(
       relDir &&
       !relDir.startsWith("..") &&
       !path.isAbsolute(relDir) &&
+      !namesInput && // a literal `briefs`/`contracts` segment confines the descent to role inputs
       !hasProvablySafeTail(restSegs) &&
-      matchGlobPrefix(restSegs, relDir.split(path.sep))
+      matchGlobPrefix(restSegs.map(fold), fold(relDir).split(path.sep))
     )
       return true;
     return false;
@@ -489,20 +524,22 @@ export function makeHoldoutReadDecider(
     `${what} \`${target}\` resolves onto evaluator-only artifacts (${artifactLabel}) — retarget it outside them${suggestion()}.`;
 
   const bashDenial = (cmd: string): string | null => {
-    // Literal reference to a protected path/name, case-insensitively (a case-insensitive FS makes
-    // `cat holdout.md` / `.SPARRA/…` read the real artifact). Checked on the raw text ON PURPOSE:
-    // it is the assembled-path defense, and it still applies when the parse below is not confident.
-    const lc = cmd.toLowerCase();
-    const literal = [sparraDir, sparraBase, ...basenames].find((n) => lc.includes(n.toLowerCase()));
-    if (literal !== undefined) return denyTarget("Command names protected artifact", literal);
     const { segments, confident } = shellSegments(cmd);
     if (!confident) {
+      // Literal reference to a protected path/name, case-insensitively (a case-insensitive FS makes
+      // `cat holdout.md` / `.SPARRA/…` read the real artifact). Applied to the RAW text, and only
+      // here: it is the assembled-path defense for a command we could not parse. On a parsed command
+      // the operand check below is strictly better — it knows `.sparra/briefs/` is a role input and
+      // that a `.sparra` mention inside a regex reads nothing.
+      const lc = cmd.toLowerCase();
+      const literal = [sparraDir, sparraBase, ...basenames].find((n) => lc.includes(n.toLowerCase()));
+      if (literal !== undefined) return denyTarget("Command names protected artifact", literal);
       // The operands cannot be resolved ahead of the shell (expansion, eval, an unbalanced quote).
       // ALLOW and AUDIT rather than deny: a guess is not a policy violation, and refusing every
       // `$(…)` would re-introduce exactly the class of false refusal this matcher exists to avoid.
       // The literal check above still ran, and the authoritative wall (read scope + prompt + verdict
       // redaction) does not depend on this matcher.
-      warn(`holdout guard: could not resolve command targets (runtime expansion) — allowed, unaudited: ${cmd.slice(0, 160)}`);
+      warn(`holdout guard: could not resolve command targets (runtime expansion) — allowed, audited: ${cmd.slice(0, 160)}`);
       return null;
     }
     const hit = pathOperands(segments).find((op) => globHitsArtifact(op, workspace));
