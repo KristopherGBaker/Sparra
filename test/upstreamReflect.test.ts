@@ -332,7 +332,12 @@ describe("reflector DEFAULT_PROMPTS — the additive harness-tagging clause", ()
     // direct logical contradiction with the agreed contract; `contractClause` quotes the clause
     // verbatim; a flag is neither an artifact pass nor fail; "inconvenient" never qualifies). One
     // existing prompt edited; no new prompt.
-    expect(h.digest("hex")).toBe("6613a85f1cc61e73f165293889907a17e1028c67185e8cfff04765094c718ea4");
+    // Regenerated 2026-09-14 (denied-input reporting): a role refused a REQUIRED input must stop and
+    // report it rather than reconstruct it and emit a confident artifact — folded into the
+    // contract-generator (a new rule line) and the generator (extending its read-scope bullet); the
+    // contract-evaluator's stale ".sparra is unavailable" claim corrected to name the readable role
+    // inputs (briefs/, contracts/). Three existing prompts edited; no new prompt.
+    expect(h.digest("hex")).toBe("05b458148ceef63a178aa41bf80fb62fab3db4c5e9e12fdda2f164d2c1fee36f");
     // and the new sink token lives in the reflector ONLY
     for (const [role, text] of Object.entries(DEFAULT_PROMPTS)) {
       if (role !== "reflector") expect(text).not.toContain("upstream.md");

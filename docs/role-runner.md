@@ -344,6 +344,15 @@ the run ended**, and every writer result carries:
   landed work — never re-run the item or feed it back as a FAIL.
 - **`hitBudget: true`** — the run stopped on **our own** budget cap (not a provider limit, not a
   turn cap). Telemetry; resume via `sessionId` (raising the cap if warranted).
+- **`degraded: true` + `deniedInputs: [{tool, target, reason}]`** — the guard **refused one or more
+  of the role's reads**, so whatever it produced was built without an input it went looking for.
+  Independent of the classification matrix below (a degraded run can still be `ok`), because a
+  denied role does not stop: in the field a contract-generator refused its brief wrote a note about
+  the refusal *into the contract* and emitted `CONTRACT: AGREED` anyway — complete-looking, and
+  reconstructed. Treat it as **"check the brief's paths and the role's read scope"** before reading
+  the artifact as a considered answer. Only `Read`/`Glob`/`Grep` refusals count (a blocked write or
+  Bash mutation is the guard working as designed); the list is deduped, capped at 20, and carries
+  **paths only**, never file content. The runner also logs a `DEGRADED` warning line.
 
 Classification is a strict first-match matrix — at most ONE of `limitHit` / `hitMaxTurns` /
 `emptyCompletion` / `noProgress` is set: a genuine limit stays `limitHit` (suppressing a

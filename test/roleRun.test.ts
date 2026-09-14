@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runRole, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, validateReportPath, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
+import { runRole, deniedInputSummary, makeHoldoutReadDecider, parseVerdict, resolveEvalProvenance, validateReportPath, BRIEF_SPARRA_MARKER, type EvalProvenanceDeps, type RoleKind } from "../src/build/roleRun.ts";
 import { branchExists, listWorktrees } from "../src/util/git.ts";
 import { denyWriteOutsideRoots } from "../src/sdk/scoping.ts";
 import { JUDGE_SCRATCH_ENV_KEYS } from "../src/build/judgeScratch.ts";
@@ -3821,5 +3821,57 @@ describe("runRole — U3 holdout retirement (interactive)", () => {
     expect(persisted).toContain(holdoutId(HOLDOUT_LINE));
     expect(persisted).not.toContain("byte-identical");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── Field report 2026-09-14: denied its brief, a contract-generator wrote a NOTE ABOUT THE DENIAL
+// into the contract and emitted `CONTRACT: AGREED` anyway. The artifact looked complete; the
+// conductor learned it was reconstruction three rounds later. ──────────────────────────────────────
+describe("runRole — a role starved of an input reports it structurally", () => {
+  it("reports degraded + the refused reads when the guard denies them mid-session", async () => {
+    const { ctx, dir } = await makeCtx();
+    // A session that does what the field role did: try to read its brief (denied), then answer anyway.
+    const calls: RunSessionParams[] = [];
+    const fn = async (p: RunSessionParams) => {
+      calls.push(p);
+      const hook = p.hooks!.PreToolUse![0]!.hooks[0]! as (i: unknown, a: unknown, b: unknown) => Promise<unknown>;
+      for (const file_path of [ctx.paths.verdictFile("item-001", 1), ctx.paths.holdout, ctx.paths.holdout])
+        await hook({ tool_name: "Read", tool_input: { file_path } }, undefined, {});
+      await hook({ tool_name: "Write", tool_input: { file_path: path.join(dir, "x.ts") } }, undefined, {});
+      return {
+        ok: true, subtype: "success", resultText: "CONTRACT: AGREED", sessionId: "r", costUsd: 0,
+        tokens: 7, numTurns: 1, hitMaxTurns: false, hitBudget: false, errors: [], tracePath: "",
+      };
+    };
+    const res = await runRole({ ctx, roleKind: "contract-generator", brief: "negotiate", runSessionFn: fn as never });
+    expect(res.degraded).toBe(true);
+    // Deduped (the retried holdout read appears once) and READ-only (the denied Write is excluded).
+    expect(res.deniedInputs).toHaveLength(2);
+    expect(res.deniedInputs!.every((d) => d.tool === "Read")).toBe(true);
+    expect(res.deniedInputs!.map((d) => d.target)).toContain(ctx.paths.holdout);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves degraded absent for a run whose reads were all allowed", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder();
+    const res = await runRole({ ctx, roleKind: "contract-generator", brief: "negotiate", runSessionFn: rec.fn });
+    expect(res.degraded).toBeUndefined();
+    expect(res.deniedInputs).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("deniedInputSummary counts only READ refusals, deduped — a blocked write is the guard working", () => {
+    expect(deniedInputSummary([])).toEqual({});
+    expect(deniedInputSummary([{ tool: "Write", target: "/x", reason: "read-only role" }])).toEqual({});
+    const many = [
+      { tool: "Read", target: "/p/.sparra/briefs/u.md", reason: "denied" },
+      { tool: "Read", target: "/p/.sparra/briefs/u.md", reason: "denied" }, // same attempt, retried
+      { tool: "Glob", target: "**/u.md", reason: "denied" },
+      { tool: "Bash", target: "cat /p/.sparra/briefs/u.md", reason: "denied" }, // not a READ tool
+    ];
+    const out = deniedInputSummary(many);
+    expect(out.degraded).toBe(true);
+    expect(out.deniedInputs).toEqual([many[0], many[2]]);
   });
 });

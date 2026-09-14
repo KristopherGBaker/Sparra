@@ -33,6 +33,7 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       tokens: true, errors: true, limitHit: true, noProgress: true, hitMaxTurns: true,
       emptyCompletion: true, filesChanged: true, hitBudget: true, unitWorktree: true,
       fallbackFrom: true, sameModelGrade: true, verifyGateWarning: true, remapCount: true,
+      degraded: true, deniedInputs: true,
     };
     const full = baseResult({
       roleKind: "evaluator", backend: "codex", model: "gpt-complete", resultText: "raw",
@@ -43,16 +44,18 @@ describe("buildRunRolePayload — holdout-safe field split", () => {
       unitWorktree: { name: "u", dir: "/u", branch: "sparra/u", created: true },
       fallbackFrom: { backend: "claude", model: "opus" }, sameModelGrade: true,
       verifyGateWarning: "run npm test", remapCount: 2,
+      degraded: true, deniedInputs: [{ tool: "Read", target: "/p/.sparra/briefs/u.md", reason: "denied" }],
     });
     const directWorkerFields = [
       "ok", "roleKind", "backend", "model", "resultText", "outPath", "traceDir", "sessionId",
       "costUsd", "tokens", "errors", "limitHit", "noProgress", "hitMaxTurns", "emptyCompletion",
       "filesChanged", "hitBudget", "unitWorktree", "fallbackFrom", "verifyGateWarning", "remapCount",
+      "degraded", "deniedInputs",
     ] as const satisfies readonly (keyof RoleRunResult)[];
     const directEvaluatorFields = [
       "ok", "roleKind", "backend", "model", "outPath", "verdictPath", "sessionId", "costUsd",
       "tokens", "errors", "limitHit", "hitMaxTurns", "hitBudget", "fallbackFrom", "sameModelGrade",
-      "remapCount",
+      "remapCount", "degraded", "deniedInputs",
     ] as const satisfies readonly (keyof RoleRunResult)[];
 
     const workerResult = { ...full, roleKind: "generator" as const, verdict: undefined };

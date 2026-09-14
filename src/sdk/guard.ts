@@ -97,6 +97,7 @@ export function scopedWriterGuard(
   let hooks = scopedWriterHooks(writeRoots, ctx.config.permission.denyBashContains, verifyCommands, {
     readScopes: opts.readScopes,
     extraDeny: opts.extraDeny,
+    onDeny: opts.onDeny,
   });
   if (opts.format) hooks = mergeHooks(hooks, makeFormatHook(formatOptions(ctx)));
   let onAssistantText: ((text: string) => void) | undefined;

@@ -12,6 +12,7 @@ import { buildReadDirs } from "./readscope.ts";
 import { gateSandbox } from "./sandbox.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
 import { randomUUID } from "node:crypto";
+import type { GuardDenial } from "../sdk/hooks.ts";
 import { readHoldout, holdoutSection, assertNoHoldoutLeak, holdoutLines, redactHoldout, makeHoldoutReadDecider, holdoutId, renderRetiredHoldouts, RETIRED_HOLDOUT_MARKER } from "./holdout.ts";
 import { runVerifyCommand } from "./exec.ts";
 import { unsafeVerifyCommandReason } from "../sdk/scoping.ts";
@@ -519,6 +520,33 @@ export interface RoleRunRequest {
   traceSeq?: number;
 }
 
+/** One input a role asked for and the guard refused. Paths/tool names only. */
+export interface DeniedInput {
+  tool: string;
+  target: string;
+  reason: string;
+}
+
+/** Tools whose refusal means the role could not READ something it wanted. A denied Write/Edit or a
+ *  blocked Bash mutation is the guard working as designed, and must not read as a starved input. */
+const STARVED_INPUT_TOOLS = new Set(["Read", "Glob", "Grep", "NotebookRead"]);
+
+/** Project recorded guard denials onto the result fields — deduped by tool+target, capped. */
+export function deniedInputSummary(denials: DeniedInput[]): { degraded?: boolean; deniedInputs?: DeniedInput[] } {
+  const reads = denials.filter((d) => STARVED_INPUT_TOOLS.has(d.tool));
+  if (!reads.length) return {};
+  const seen = new Set<string>();
+  const deniedInputs: DeniedInput[] = [];
+  for (const d of reads) {
+    const key = `${d.tool}:${d.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deniedInputs.push(d);
+    if (deniedInputs.length >= 20) break;
+  }
+  return { degraded: true, deniedInputs };
+}
+
 export interface RoleRunResult {
   ok: boolean;
   roleKind: RoleKind;
@@ -554,6 +582,18 @@ export interface RoleRunResult {
    *  as "investigate the brief/permissions", NOT a behavioral FAIL to feed back to the generator.
    *  Never set when `limitHit` is (a limited run legitimately did nothing). */
   noProgress?: boolean;
+  /**
+   * Set when the guard REFUSED one or more of the role's read attempts (`Read`/`Glob`/`Grep`), so
+   * the artifact it produced was built without an input it went looking for. A denied role does not
+   * stop: observed in the field, a contract-generator refused its brief noted the refusal INSIDE the
+   * contract and emitted `CONTRACT: AGREED` anyway — honest, and still a confident artifact built on
+   * reconstruction, which a conductor only discovered rounds later. The conductor should treat this
+   * as "check the inputs/permissions", not as a graded outcome.
+   */
+  degraded?: boolean;
+  /** The refused read attempts behind `degraded` (deduped, capped). Tool + target PATH only — never
+   *  file content, so this stays holdout-safe. */
+  deniedInputs?: DeniedInput[];
   /** Set when the run stopped at the per-session turn cap (`build.maxTurnsPerSession`) with work
    *  unfinished — NOT a behavioral failure. The conductor should RESUME the same session
    *  (`resumeSessionId` + `resumeBackend` = this result's `sessionId`/`backend`) to continue where
@@ -1673,18 +1713,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // loses even though in-scope reads are granted.
   const readScopes = [workspace, ...(readDirs ?? [])];
   const extraDeny = evaluator ? [] : [makeHoldoutReadDecider(ctx, workspace, req.holdoutPath)];
+  // Every refusal this guard makes is RECORDED, so a role that was starved of an input is reported
+  // as such (`degraded` + `deniedInputs`) instead of leaving the conductor to discover it from prose
+  // rounds later — a denied role does not stop, it reconstructs and emits a confident artifact.
+  const denials: GuardDenial[] = [];
+  const onDeny = (d: GuardDenial) => {
+    if (denials.length < 50) denials.push(d);
+  };
   const guard: Guard =
     spec.guard === "writer"
-      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, onWorktreeBoundary: onLinkedWorktree, readScopes, extraDeny })
+      ? scopedWriterGuard(ctx, [workspace], { format: true, verify: true, verifyInPlace: req.allowVerify, onWorktreeBoundary: onLinkedWorktree, readScopes, extraDeny, onDeny })
       : spec.guard === "evaluator"
-        ? evaluatorGuard(ctx, { readScopes, extraDeny })
+        ? evaluatorGuard(ctx, { readScopes, extraDeny, onDeny })
         : roleKind === "contract-evaluator"
           ? contractEvaluatorGuard(
               ctx,
               onLinkedWorktree && getBackend(role.backend).capabilities.hooks ? ctx.config.build.verifyCommands : [],
-              { readScopes, extraDeny }
+              { readScopes, extraDeny, onDeny }
             )
-        : readOnlyGuard(ctx, { readScopes, extraDeny });
+        : readOnlyGuard(ctx, { readScopes, extraDeny, onDeny });
 
   // Reduced-surface, not closed: if a forbid role's readable scope (its cwd or a granted
   // dir) still contains a PRESENT holdout AND it runs on a hooks-ignoring backend (Codex),
@@ -1937,7 +1984,19 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
     // F1: informational brief-remap neutralization count — present only when > 0 (a worktree remap
     // that neutralized a .sparra prose reference); absent for an in-place run / no-.sparra brief.
     remapCount: remapCount > 0 ? remapCount : undefined,
+    // Inputs the guard refused this role (see `degraded`). Only READ tools count: a refused write or
+    // Bash mutation is the guard doing its job, not an input the role was starved of.
+    ...deniedInputSummary(denials),
   };
+  if (result.degraded) {
+    // Loud on the way out: the artifact below was produced WITHOUT an input the role asked for.
+    warn(
+      `role-run-${roleKind}: DEGRADED — ${result.deniedInputs!.length} read(s) refused by the guard, so this ` +
+        `artifact was produced without input the role went looking for: ` +
+        `${result.deniedInputs!.map((d) => `${d.tool} ${d.target}`).join("; ")}. Check the brief's paths and the ` +
+        `role's read scope before treating the output as a considered answer.`
+    );
+  }
 
   // Infra ≠ verdict: a LAUNCH-time ENOENT (the backend died before ANY model output because the
   // workspace/cwd did not exist) is an ENVIRONMENT failure, not a graded artifact failure. Surface

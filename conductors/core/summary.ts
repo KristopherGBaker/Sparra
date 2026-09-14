@@ -47,6 +47,8 @@ export const PARENT_SAFE_FIELDS = [
   "hitMaxTurns",
   "emptyCompletion",
   "noProgress",
+  "degraded",
+  "deniedInputs",
   "verifyGateWarning",
   "remapCount",
   "contractAgreed",

@@ -157,6 +157,10 @@ export function buildRunRolePayload(
         // F1: brief-remap neutralization count (>0 → a .sparra prose ref was neutralized on a
         // worktree remap; code spans exempt). Holdout-safe. Absent for an in-place / no-.sparra brief.
         remapCount: r.remapCount,
+        // Inputs the guard refused this role. Holdout-safe (tool + target PATH only) and decision-
+        // relevant: the artifact below was built WITHOUT something the role went looking for.
+        degraded: r.degraded,
+        deniedInputs: r.deniedInputs,
         errors: r.errors,
       }
     : {
@@ -196,6 +200,9 @@ export function buildRunRolePayload(
         // F1: brief-remap neutralization count (>0 → a .sparra prose ref was neutralized; code spans
         // exempt). Holdout-safe. Absent for an in-place / no-.sparra brief.
         remapCount: r.remapCount,
+        // Inputs the guard refused this role (see above).
+        degraded: r.degraded,
+        deniedInputs: r.deniedInputs,
         errors: r.errors,
       };
 }

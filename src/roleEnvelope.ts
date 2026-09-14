@@ -56,6 +56,13 @@ export interface RunRolePayload {
    *  (the contract is agreed), false when it did not, absent for every other role. Lets a conductor
    *  detect agreement from a structured field instead of the holdout-dropped `resultText`. */
   contractAgreed?: boolean;
+  /** The guard refused one or more of the role's READ attempts, so its artifact was produced without
+   *  an input it went looking for. A conductor should treat this as "check inputs/permissions"
+   *  BEFORE reading the artifact as a considered answer — a denied role reconstructs and emits
+   *  something plausible rather than stopping. Absent when nothing was refused. */
+  degraded?: RoleRunResult["degraded"];
+  /** The refused reads behind `degraded` — tool + target PATH only, never file content. */
+  deniedInputs?: RoleRunResult["deniedInputs"];
   unitWorktree?: RoleRunResult["unitWorktree"];
   promptDrift?: PromptDriftNote;
   errors: string[];
