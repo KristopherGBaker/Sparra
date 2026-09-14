@@ -211,6 +211,14 @@ export class Paths {
   roleRunVerdictFile(roleKind: string, token: string) {
     return path.join(this.verdicts, `role-run-${roleKind}-${token}.verdict.md`);
   }
+  /** Contract CRITIQUES from an interactive `contract-evaluator` run. The loop threads a round's
+   *  critique into the next round by PATH (`priorCritiquePaths`), so the runner has to leave one. */
+  get critiques() {
+    return path.join(this.dir, "critiques");
+  }
+  roleRunCritiqueFile(roleKind: string, token: string) {
+    return path.join(this.critiques, `role-run-${roleKind}-${token}.critique.md`);
+  }
   reviewFile(itemId: string, round: number) {
     return path.join(this.reviews, `${itemId}.r${round}.review.md`);
   }
@@ -228,6 +236,7 @@ export class Paths {
       ensureDir(this.contracts),
       ensureDir(this.briefs),
       ensureDir(this.verdicts),
+      ensureDir(this.critiques),
       ensureDir(this.reviews),
       ensureDir(this.proposals),
       ensureDir(this.prompts),

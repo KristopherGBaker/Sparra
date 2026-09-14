@@ -87,6 +87,10 @@ export interface RunRolePayload {
   resultText?: string;
   resultDigest?: string;
   verdictPath?: string;
+  /** `contract-evaluator` only: where the runner auto-persisted this critique. The loop threads a
+   *  prior round's critique into the next by PATH (`priorCritiquePaths`), so a conductor can pass
+   *  this straight back without having asked for `out`. Holdout-safe (a path). */
+  critiquePath?: string;
   outPath?: string;
   traceDir?: string;
   filesChanged?: number;

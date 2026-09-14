@@ -188,6 +188,9 @@ export function buildRunRolePayload(
         // (verdict) branch above, whose trace is holdout-bearing.
         traceDir: r.traceDir,
         outPath: r.outPath,
+        // contract-evaluator: the runner-persisted critique. Hand this back as `priorCritiquePaths`
+        // on the next round — the critique lives nowhere else once the worker's context is gone.
+        critiquePath: r.critiquePath,
         tokens: r.tokens,
         costUsd: r.costUsd,
         limitHit: r.limitHit, // present → provider limit/unavailability: retry/fall back, NOT a real fail

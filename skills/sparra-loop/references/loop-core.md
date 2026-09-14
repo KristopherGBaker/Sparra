@@ -11,6 +11,12 @@ PERSISTS its produced contract to `contractPath` itself — a fresh round create
 round replaces the older draft there, and the persisted path comes back on `outPath`; a run with no
 extractable contract and no file at the path fails loudly. Never hand-copy `resultText` to the path.
 
+A `contract-evaluator` run PERSISTS its critique the same way: the runner writes it under
+`.sparra/critiques/` and returns `critiquePath`, with or without `out`. Hand that path straight back
+as `priorCritiquePaths` next round — the critique lives NOWHERE else (the trace carries the inlined
+prompt and progress notes, not the critique body), so a critique you do not capture is gone with the
+worker's context.
+
 Critique threading is SYMMETRIC across both roles. Round 1 is full-scope; on later rounds pass this
 contract's prior critique files through `priorCritiquePaths` to EITHER role — the runner reads them
 (paths under `.sparra/` work) and inlines them ahead of the contract, labeled by round and prefixed

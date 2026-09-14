@@ -3875,3 +3875,39 @@ describe("runRole — a role starved of an input reports it structurally", () =>
     expect(out.deniedInputs).toEqual([many[0], many[2]]);
   });
 });
+
+// ── Field report 2026-09-14 (Sarukani): a contract critique existed ONLY in the returned resultText.
+// The trace holds the inlined prompt and three ~310-byte progress notes — not the critique body — so
+// once the worker's context was gone the round-1 critique was unrecoverable, and the documented loop
+// threads prior critiques by PATH (`priorCritiquePaths`). ───────────────────────────────────────────
+describe("runRole — contract critiques are persisted by the runner", () => {
+  it("auto-persists a contract-evaluator critique and returns its path, without `out`", async () => {
+    const { ctx, dir } = await makeCtx();
+    const rec = recorder("Assertion 3 is unsatisfiable as written.\n\n1. Cut it or name the fixture.");
+    const res = await runRole({ ctx, roleKind: "contract-evaluator", contract: "- a thing", runSessionFn: rec.fn });
+    expect(res.critiquePath).toBeTruthy();
+    expect(res.critiquePath!.startsWith(ctx.paths.critiques)).toBe(true);
+    // Readable straight back as a `priorCritiquePaths` input — that is the whole point.
+    expect(fs.readFileSync(res.critiquePath!, "utf8")).toContain("Assertion 3 is unsatisfiable");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps `out` working alongside it, and gives concurrent runs distinct files", async () => {
+    const { ctx, dir } = await makeCtx();
+    const out = path.join(dir, "critique.md");
+    const a = await runRole({ ctx, roleKind: "contract-evaluator", contract: "- a", out, runSessionFn: recorder("first").fn });
+    const b = await runRole({ ctx, roleKind: "contract-evaluator", contract: "- a", runSessionFn: recorder("second").fn });
+    expect(a.outPath).toBe(out);
+    expect(a.critiquePath).toBeTruthy();
+    expect(b.critiquePath).not.toBe(a.critiquePath); // uniquely named — no clobbering
+    expect(fs.readFileSync(b.critiquePath!, "utf8")).toContain("second");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("persists nothing for a role that is not the contract judge", async () => {
+    const { ctx, dir } = await makeCtx();
+    const gen = await runRole({ ctx, roleKind: "generator", brief: "build", runSessionFn: recorder("done").fn });
+    expect(gen.critiquePath).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

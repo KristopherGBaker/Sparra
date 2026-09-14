@@ -557,6 +557,11 @@ export interface RoleRunResult {
   verdict?: Verdict;
   /** Path the verdict/result was written to, if `out` was given. */
   outPath?: string;
+  /** Path the AUTO-PERSISTED critique was written to (`contract-evaluator` only). Always set when the
+   *  role produced a critique — independent of `out` — because the documented loop threads a prior
+   *  round's critique by PATH (`priorCritiquePaths`), and the critique exists nowhere else: the trace
+   *  holds the inlined prompt and progress notes, not the critique body. */
+  critiquePath?: string;
   /** Path the AUTO-PERSISTED, holdout-redacted verdict was written to (evaluator role only). Always
    *  set for an evaluator run — independent of `out` — so an interactive/loop cycle leaves
    *  evaluator-side evidence (scores, failed assertions, blocking reasons) on disk for `sparra
@@ -2234,6 +2239,25 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
         `A scratch-enabled judge may write ONLY gitignored build/test scratch, never the tracked source.`;
       if (!result.errors.includes(msg)) result.errors = [...result.errors, msg];
       warn(msg);
+    }
+    // Runner-owned CRITIQUE persistence (contract-evaluator): the critique exists ONLY in the
+    // returned `resultText` — the trace records the inlined prompt and short progress notes, not the
+    // critique body — so without this a round-1 critique is gone the moment the worker's context is,
+    // and `priorCritiquePaths` (which takes PATHS) cannot thread it into round 2. That is the loop
+    // this harness documents, so the runner leaves the file rather than requiring every caller to
+    // remember `out`. Same runner-owned pattern as the evaluator's auto-persisted verdict and the
+    // contract-generator's contract; uniquely named, so concurrent runs never clobber each other.
+    if (roleKind === "contract-evaluator") {
+      const critique = normalizeOutCapture(result.resultText).text.trim();
+      if (critique) {
+        const token = `${stampFromDate(new Date())}-${randomUUID().slice(0, 8)}`;
+        const critiquePath = ctx.paths.roleRunCritiqueFile(roleKind, token);
+        // Holdout-free by construction (a forbid role never sees it); redacted anyway, for the same
+        // reason the verdict path is — defense in depth costs nothing when there is nothing to strip.
+        const safe = holdoutLines(holdoutText).length ? redactHoldout(critique, holdoutText) : critique;
+        await writeText(critiquePath, `${safe}\n`);
+        result.critiquePath = critiquePath;
+      }
     }
     if (req.out) {
       // `result.resultText` (not the raw `res.resultText`) so a report recovered by the cap-death

@@ -344,6 +344,11 @@ the run ended**, and every writer result carries:
   landed work — never re-run the item or feed it back as a FAIL.
 - **`hitBudget: true`** — the run stopped on **our own** budget cap (not a provider limit, not a
   turn cap). Telemetry; resume via `sessionId` (raising the cap if warranted).
+- **`critiquePath`** (`contract-evaluator` only) — where the runner **auto-persisted** the critique,
+  set whenever the role produced one, independent of `out`. The critique exists nowhere else: the
+  trace records the inlined prompt and short progress notes, not the critique body, so before this
+  a round-1 critique vanished with the worker's context — and the loop threads prior critiques by
+  PATH (`priorCritiquePaths`). Files are uniquely named, so concurrent runs never clobber.
 - **`contractAgreed` / `contractStatus` / `caveats`** (`contract-evaluator` only) — agreement is
   **three-state**. A judge that accepts the contract *provided* specific build-time requirements are
   met has **agreed**: it ends with `CONTRACT: AGREED WITH CAVEATS` and one `- ` bullet per

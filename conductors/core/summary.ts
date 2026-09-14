@@ -38,6 +38,7 @@ export const PARENT_SAFE_FIELDS = [
   "blocking",
   "failedAssertions",
   "verdictPath",
+  "critiquePath",
   "outPath",
   "filesChanged",
   "sameModelGrade",
