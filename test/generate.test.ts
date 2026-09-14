@@ -548,6 +548,9 @@ describe("generateItem — build read scope (extraReadDirs)", () => {
 
   it("DROPS the holdout-bearing repo root but keeps clean extras on a separate worktree (no holdout leak)", async () => {
     const { ctx, dir } = await ctxFor("cli");
+    // A REAL holdout — the assertion below is about a holdout-BEARING root, and exclusion is now
+    // existence-aware (a project with no holdout has no wall and keeps its root).
+    fs.writeFileSync(ctx.paths.holdout, "# Holdout\n\n- the evaluator-only check\n");
     ctx.config.build.extraReadDirs = ["/opt/models"];
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-wt-"));
     let dirs: string[] | undefined;

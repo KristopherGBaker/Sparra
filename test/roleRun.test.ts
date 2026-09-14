@@ -3010,6 +3010,9 @@ describe("runRole — unitWorktree (persistent generator tree)", () => {
     const paths = new Paths(dir);
     await paths.ensureScaffold();
     const store = StateStore.create(paths, "greenfield");
+    // A REAL holdout: scope exclusion is existence-aware, so a fixture that only implies one no
+    // longer exercises the wall (it used to, because `.sparra/` alone counted).
+    fs.writeFileSync(paths.holdout, `# Holdout\n\n- ${HOLDOUT_LINE}\n`);
     return { ctx: { root: dir, paths, config: defaultConfig(), store }, dir };
   }
   const fakeProvision = () => vi.fn(() => ({ copied: [], skipped: [], failed: [] }));

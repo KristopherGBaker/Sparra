@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { Ctx } from "../context.ts";
 import type { RetiredHoldout } from "./types.ts";
 import { readText } from "../util/io.ts";
+import { holdoutPresent } from "./readscope.ts";
 import { warn } from "../util/log.ts";
 
 /**
@@ -160,7 +161,15 @@ export function makeHoldoutReadDecider(
   };
   const protectedFolded = new Set([...protectedFiles].map(fold));
   const isProtectedFile = (abs: string) => protectedFolded.has(fold(abs));
-  const artifacts = [...protectedFiles, sparraDir];
+  // Artifacts for the "a recursive search ROOTED here would descend into one" rule. EXISTENCE-aware
+  // and holdout-gated: `.sparra` resolves on every project, so including it unconditionally made the
+  // repo root permanently holdout-bearing and denied every forbid role a root `Grep` — the cheapest
+  // search it has — on projects with no holdout at all (observed: two contract-generator runs, both
+  // reporting denied Greps, on a repo with no HOLDOUT.md anywhere). With no holdout present there is
+  // no wall to enforce here; targeted reads/globs INTO `.sparra` stay denied below either way, so a
+  // verdict or trace still cannot be opened deliberately.
+  const wallActive = holdoutPresent(ctx, explicitPath);
+  const artifacts = wallActive ? [...protectedFiles, sparraDir].filter((a) => fs.existsSync(a) || a === sparraDir) : [];
   // Role INPUTS under `.sparra` (see `Paths.roleInputDirs`): the brief a role is asked to work from
   // and the negotiated contracts. A forbid role was being refused the very file its task told it to
   // read first ("evaluator-only artifacts", which a brief is not), then reconstructing the unit from
@@ -362,6 +371,7 @@ export function makeHoldoutReadDecider(
     // by name. Denied by default; the one narrow, justified exception is `hasProvablySafeTail`.
     const relDir = path.relative(base, sparraDir);
     if (
+      wallActive && // nothing to descend INTO: with no holdout, `.sparra` holds verdicts/traces only
       relDir &&
       !relDir.startsWith("..") &&
       !path.isAbsolute(relDir) &&
@@ -566,7 +576,8 @@ export function makeHoldoutReadDecider(
     return named === undefined ? null : denyTarget("Command operand", named);
   };
   const DENY_ROOT =
-    "Search is rooted at a holdout-bearing dir (it contains .sparra) — pass an explicit non-holdout subdir path like src/ instead.";
+    `Search is rooted at a dir that CONTAINS evaluator-only artifacts (${artifactLabel}), so a recursive ` +
+    `search would descend into them — pass an explicit subdir path instead${suggestion()}.`;
   return (tool, input) => {
     const i = input as
       | { file_path?: string; path?: string; pattern?: string; glob?: string; command?: string }

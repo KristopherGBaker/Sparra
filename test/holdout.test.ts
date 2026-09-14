@@ -173,7 +173,9 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     expect(deny("Grep", { path: root, pattern: "x" })).toBeTruthy(); // ABOVE (contains .sparra)
     const pathless = deny("Grep", { pattern: "byte-identical" }); // pathless → cwd = root
     expect(pathless).toBeTruthy();
-    expect(pathless).toMatch(/src\//); // #14 tells the role to pass an explicit non-holdout subdir
+    // #14 tells the role WHY and what to do instead (it named a fixed `src/` before, JS boilerplate).
+    expect(pathless).toContain("evaluator-only artifacts");
+    expect(pathless).toContain("explicit subdir path");
     expect(deny("Grep", { path: path.join(root, "src"), pattern: "x" })).toBeNull(); // subdir is fine
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -229,6 +231,7 @@ describe("makeHoldoutReadDecider — path-based, not substring (U2)", () => {
     const unsafeRoot = deny("Grep", { pattern: "x", path: root });
     const protectedTarget = deny("Grep", { pattern: "x", path: root, glob: "**/HOLDOUT.*" });
     expect(unsafeRoot).toContain("rooted");
+    expect(unsafeRoot).toContain("evaluator-only artifacts"); // names WHY, not just "holdout-bearing"
     expect(protectedTarget).toContain("evaluator-only artifacts");
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -475,6 +478,53 @@ describe("makeHoldoutReadDecider — role INPUTS under .sparra are readable, the
     expect(deny("Bash", { command: "cat holdout.md" })).toBeTruthy();
     expect(deny("Bash", { command: "cat .SPARRA/verdicts/x.md" })).toBeTruthy();
     expect(deny("Read", { file_path: path.join(root, "Holdout.md") })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// ── Field report 2026-09-14 (Sarukani): both contract-generator runs came back `degraded` with
+// denied Greps — on a project with NO holdout anywhere. `.sparra/` resolves on every project, so an
+// existence-blind predicate made every repo root permanently "holdout-bearing". ────────────────────
+describe("makeHoldoutReadDecider — no holdout on disk means no wall to enforce", () => {
+  /** A project with `.sparra/` (verdicts + traces) but NO holdout file of any kind. */
+  async function noHoldoutProject() {
+    const { ctx, root } = await makeMatureDeciderCtx();
+    fs.rmSync(ctx.paths.holdout, { force: true });
+    fs.rmSync(ctx.paths.frozenHoldout, { force: true });
+    expect(fs.existsSync(ctx.paths.verdictFile("item-001", 1))).toBe(true); // .sparra still populated
+    return { deny: makeHoldoutReadDecider(ctx, root), ctx, root };
+  }
+
+  it("allows the searches a role reaches for first: a pathless Grep, the repo root, a subdir", async () => {
+    const { deny, root } = await noHoldoutProject();
+    expect(deny("Grep", { pattern: "taughtVocabulary" })).toBeNull(); // pathless → cwd = repo root
+    expect(deny("Grep", { pattern: "x", path: root })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: path.join(root, "docs") })).toBeNull();
+    expect(deny("Glob", { pattern: "**/*.md" })).toBeNull();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("still refuses to open `.sparra` itself — the relaxation is about SEARCH ROOTS, not targets", async () => {
+    const { deny, ctx, root } = await noHoldoutProject();
+    expect(deny("Read", { file_path: ctx.paths.verdictFile("item-001", 1) })).toBeTruthy();
+    expect(deny("Grep", { pattern: "x", path: ctx.paths.verdicts })).toBeTruthy();
+    expect(deny("Glob", { pattern: ".sparra/**" })).toBeTruthy();
+    expect(deny("Bash", { command: "cat .sparra/verdicts/item-001.r1.verdict.md" })).toBeTruthy();
+    expect(deny("Bash", { command: "ls .sparra/traces/" })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("re-arms the moment a holdout exists — including a frozen-only one", async () => {
+    const { ctx, root } = await makeMatureDeciderCtx();
+    fs.rmSync(ctx.paths.holdout, { force: true }); // live holdout gone, frozen copy remains
+    expect(makeHoldoutReadDecider(ctx, root)("Grep", { pattern: "x", path: root })).toBeTruthy();
+    // …and an explicitly-passed holdout arms it too, wherever it lives.
+    fs.rmSync(ctx.paths.frozenHoldout, { force: true });
+    const explicit = path.join(root, "docs", "SECRET-CHECKS.md");
+    fs.mkdirSync(path.dirname(explicit), { recursive: true });
+    fs.writeFileSync(explicit, "- an evaluator-only check\n");
+    expect(makeHoldoutReadDecider(ctx, root, explicit)("Grep", { pattern: "x", path: root })).toBeTruthy();
+    expect(makeHoldoutReadDecider(ctx, root)("Grep", { pattern: "x", path: root })).toBeNull(); // not passed → no wall
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

@@ -9,10 +9,18 @@ import { StateStore } from "../src/state.ts";
 import { defaultConfig } from "../src/config.ts";
 import type { Ctx } from "../src/context.ts";
 
-/** A ctx whose root contains `.sparra`, plus a separate worktree + a holdout-free extra dir. */
+/**
+ * A ctx whose root contains `.sparra`, plus a separate worktree + a holdout-free extra dir.
+ *
+ * `withHoldout` WRITES a real `HOLDOUT.md`, because exclusion is existence-aware: a project with no
+ * holdout has no wall to enforce, and treating its root as holdout-bearing because `.sparra/` sits
+ * under it charged every forbid role for nothing. These fixtures previously relied on that bug —
+ * they never wrote a holdout at all.
+ */
 function makeCtx(
   extraReadDirs: string[] = [],
-  docsDir = ""
+  docsDir = "",
+  withHoldout = true
 ): { ctx: Ctx; root: string; workspace: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-readscope-root-"));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-readscope-wt-"));
@@ -21,6 +29,10 @@ function makeCtx(
   const config = defaultConfig();
   config.build.extraReadDirs = extraReadDirs;
   const ctx: Ctx = { root, paths, config, store };
+  if (withHoldout) {
+    fs.mkdirSync(path.dirname(paths.holdout), { recursive: true });
+    fs.writeFileSync(paths.holdout, "# Holdout\n\n- the evaluator-only check\n");
+  }
   return { ctx, root, workspace };
 }
 
@@ -51,6 +63,15 @@ describe("buildReadDirs — holdout scope exclusion", () => {
     const { ctx, root, workspace } = makeCtx();
     ctx.config.build.extraReadDirs = [root]; // ctx.root listed again as an extra (contains .sparra)
     expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual(ctx.paths.roleInputDirs);
+  });
+
+  it("with NO holdout on disk, excludeHoldoutScope keeps ctx.root — there is no wall to enforce", () => {
+    // The field case: a project with no HOLDOUT.md anywhere. `.sparra/` still resolves, so an
+    // existence-blind predicate marked the repo root holdout-bearing forever and dropped it.
+    const { ctx, root, workspace } = makeCtx([], "", false);
+    expect(fs.existsSync(ctx.paths.holdout)).toBe(false);
+    // ctx.root is granted, and it CONTAINS the role-input dirs — so they are not granted redundantly.
+    expect(buildReadDirs(ctx, workspace, { excludeHoldoutScope: true })).toEqual([root]);
   });
 
   it("drops an extraReadDir whose holdout (under docsDir, OUTSIDE .sparra) it contains, while keeping a holdout-free dir", () => {

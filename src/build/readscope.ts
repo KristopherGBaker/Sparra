@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { Ctx } from "../context.ts";
@@ -18,7 +19,21 @@ function expandHome(p: string): string {
  * `buildReadDirs`'s `excludeHoldoutScope` and `holdoutFreeCwd` (DRY — the single source of truth).
  */
 function holdoutArtifacts(ctx: Ctx): string[] {
-  return [ctx.paths.dir, ctx.paths.holdout, ctx.paths.frozenHoldout].map((p) => path.resolve(p));
+  // EXISTENCE-aware. The holdout paths are computed from config, not observed: on a project with no
+  // holdout at all they still resolve, so an unconditional list made EVERY repo root permanently
+  // "holdout-bearing" (it contains `.sparra/`) and charged every forbid role for a wall that was not
+  // there. `.sparra` itself counts only while a holdout is actually present — it is holdout-BEARING
+  // then; otherwise what it holds is verdicts and traces, which the generator already receives as
+  // feedback, and which stay protected by the targeted read/glob denies either way.
+  const holdouts = [ctx.paths.holdout, ctx.paths.frozenHoldout].map((p) => path.resolve(p)).filter((p) => fs.existsSync(p));
+  return holdouts.length ? [path.resolve(ctx.paths.dir), ...holdouts] : [];
+}
+
+/** True while a holdout actually EXISTS for this run (live or frozen) — the wall has something to
+ *  protect. Exported so the deny-hook and the read scope answer the question the same way. */
+export function holdoutPresent(ctx: Ctx, explicitPath?: string): boolean {
+  if (explicitPath && fs.existsSync(path.resolve(explicitPath))) return true;
+  return holdoutArtifacts(ctx).length > 0;
 }
 
 /** True if `dir` contains (or IS) any holdout artifact — i.e. it is NOT holdout-free. */
