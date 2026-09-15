@@ -526,6 +526,30 @@ describe("makeHoldoutReadDecider — no holdout on disk means no wall to enforce
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  // The SECOND denial in the field report was `docs/`, not just the repo root — a configured
+  // `docsDir` resolves `ctx.paths.holdout` to `<docsBase>/HOLDOUT.md`, so the existence-blind
+  // predicate made the docs dir "holdout-bearing" for a HOLDOUT.md that was never there.
+  it("with a configured docsDir and no holdout, the docs dir is a legal search root too", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sparra-docsdir-"));
+    const paths = new Paths(root, "docs");
+    await paths.ensureScaffold();
+    const ctx: Ctx = { root, paths, config: defaultConfig(), store: StateStore.create(paths, "greenfield") };
+    expect(path.dirname(paths.holdout)).toBe(path.join(root, "docs")); // the resolution that misfired
+    expect(fs.existsSync(paths.holdout)).toBe(false); // …for a file that does not exist
+
+    const deny = makeHoldoutReadDecider(ctx, root);
+    expect(deny("Grep", { pattern: "x", path: root })).toBeNull();
+    expect(deny("Grep", { pattern: "x", path: paths.docsBase })).toBeNull();
+    expect(deny("Grep", { pattern: "x" })).toBeNull(); // pathless
+
+    // …and the wall re-arms on that very dir the moment the holdout is authored there.
+    fs.writeFileSync(paths.holdout, "# Holdout\n\n- an evaluator-only check\n");
+    const armed = makeHoldoutReadDecider(ctx, root);
+    expect(armed("Grep", { pattern: "x", path: paths.docsBase })).toBeTruthy();
+    expect(armed("Read", { file_path: paths.holdout })).toBeTruthy();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("re-arms the moment a holdout exists — including a frozen-only one", async () => {
     const { ctx, root } = await makeMatureDeciderCtx();
     fs.rmSync(ctx.paths.holdout, { force: true }); // live holdout gone, frozen copy remains
