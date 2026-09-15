@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   reportReaskOverrides,
   reaskBudgetUsd,
+  reaskOverageNote,
+  effectiveBudgetCeilingUsd,
+  REASK_MAX_BUDGET_USD,
   REPORT_REASK_PROMPT,
   REPORT_REASK_MAX_TURNS,
   VERDICT_REASK_PROMPT,
@@ -28,15 +31,45 @@ describe("reaskBudgetUsd", () => {
     expect(roomy).toBeLessThan(25);
   });
 
-  // The clamp is a CEILING, not a "materially tighter than the dying run" guarantee. On a BUDGET-cap
-  // death observedCostUsd ≈ runCapUsd, so the re-ask is handed the run's FULL cap — pinned here so the
-  // honest behavior is asserted rather than left to a roomy-cap case that hides it. Real spend stays
-  // bounded by reportReaskOverrides' tightCap (1 turn, text-only), NOT by this number.
-  it("on a budget-cap death (observed ≈ cap) it returns the run's full cap — a ceiling, never more", () => {
-    expect(reaskBudgetUsd(5, 5)).toBe(5);
-    expect(reaskBudgetUsd(4.9, 5)).toBe(5);
-    // …and never exceeds it, however hot the dying run ran.
-    expect(reaskBudgetUsd(50, 5)).toBe(5);
+  // Field report 2026-09-14/15: a $12-capped generator finished at $14.43 and a $14-capped one at
+  // $16.78, both via the post-cap re-ask. On a budget-cap death observedCostUsd ≈ runCapUsd, so
+  // observed*margin cleared the cap and the clamp handed the re-ask the run's WHOLE cap again —
+  // an authorized ceiling of cap+cap on exactly the runs that already spent the most.
+  it("on a budget-cap death (observed ≈ cap) the re-ask never scales with the run — bounded absolutely", () => {
+    expect(reaskBudgetUsd(12, 12)).toBe(REASK_MAX_BUDGET_USD); // was 12 (the whole cap, twice over)
+    expect(reaskBudgetUsd(14, 14)).toBe(REASK_MAX_BUDGET_USD);
+    expect(reaskBudgetUsd(500, 500)).toBe(REASK_MAX_BUDGET_USD); // however hot the dying run ran
+  });
+
+  it("a cap TIGHTER than the absolute max still clamps to the cap (never authorizes more than the run)", () => {
+    expect(reaskBudgetUsd(5, 5)).toBe(Math.min(REASK_MAX_BUDGET_USD, 5));
+    expect(reaskBudgetUsd(50, 3)).toBe(3);
+  });
+
+  it("the absolute max still clears one expensive (opus) turn — recovery stays possible", () => {
+    expect(REASK_MAX_BUDGET_USD).toBeGreaterThan(OBSERVED_OPUS_TURN_USD);
+  });
+});
+
+describe("effectiveBudgetCeilingUsd / reaskOverageNote — the cap is a PRE-re-ask ceiling", () => {
+  it("states the number a caller should size for: cap + the bounded re-ask", () => {
+    expect(effectiveBudgetCeilingUsd(12)).toBe(12 + REASK_MAX_BUDGET_USD);
+    // A cap tighter than the re-ask max can at worst double, never more.
+    expect(effectiveBudgetCeilingUsd(2)).toBe(4);
+    expect(effectiveBudgetCeilingUsd(0)).toBe(0); // unlimited stays unlimited
+  });
+
+  it("the overage note names the spend, the authorization, the cap and the real ceiling", () => {
+    const note = reaskOverageNote(2.43, 4, 12);
+    expect(note).toContain("$2.43");
+    expect(note).toContain("$4.00");
+    expect(note).toContain("$12.00");
+    expect(note).toContain("$16.00"); // effective ceiling
+    expect(note).toContain("jsonReask");
+  });
+
+  it("no cap means nothing to overshoot — no note", () => {
+    expect(reaskOverageNote(2.43, 4, 0)).toBe("");
   });
 
   it("runCapUsd 0 means unlimited (existing Sparra semantics) — no clamp toward 0", () => {

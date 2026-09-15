@@ -55,6 +55,25 @@ const REASK_MIN_BUDGET_USD = 2;
 const REASK_OBSERVED_MARGIN = 1.25;
 
 /**
+ * ABSOLUTE ceiling on a re-ask's authorized spend — the bound that makes the per-item cap mean
+ * something again.
+ *
+ * `observedCostUsd` is a proxy for what ONE expensive turn costs, and it is a good proxy only while
+ * the dying run was short. On the runs that actually need recovery it is the opposite: a run killed
+ * by the budget cap has `observedCostUsd ≈ runCapUsd`, so `observed * margin` exceeded the cap, the
+ * clamp returned the cap, and the re-ask was authorized to spend the WHOLE cap a second time —
+ * `cap + cap`. Field evidence (2026-09-14/15): a $12-capped generator finished at $14.43 and a
+ * $14-capped one at $16.78, both via the post-cap re-ask; a run that never re-asked came in under.
+ * The real spend was ~one turn, but nothing in the numbers said it had to be.
+ *
+ * The re-ask is structurally ONE text-only turn (`reportReaskOverrides`' `tightCap`), so its budget
+ * never needs to scale with the run it recovers. Bounding it here makes the effective per-item
+ * ceiling `cap + min(this, cap)` — a number a caller can size for (see `effectiveBudgetCeilingUsd`)
+ * instead of an unannounced doubling. Sits above the observed opus-turn cost with headroom.
+ */
+export const REASK_MAX_BUDGET_USD = 4;
+
+/**
  * Derive the one-shot re-ask's USD budget cap from the run that just died, replacing the old
  * blind, hard-coded per-re-ask budget constant this module used to export. Both documented design
  * intents from that constant are preserved, just computed instead of hard-coded:
@@ -64,15 +83,17 @@ const REASK_OBSERVED_MARGIN = 1.25;
  *   2. **Never authorizes MORE spend than the run it's recovering from** — when `runCapUsd` is a
  *      real (positive) limit, the derived value is clamped to it. `runCapUsd <= 0` means unlimited
  *      (existing Sparra budget semantics — see `budgetExceeded`), so no clamp applies.
- *      NOTE this is a ceiling, NOT the old constant's "materially tighter than the dying run"
- *      guarantee, and deliberately so: the two intents conflict when the cap is small (a flat
- *      fraction of a $1 cap reintroduces the very `error_max_budget_usd` death this fixes). On a
- *      BUDGET-cap death `observedCostUsd ≈ runCapUsd`, so the clamp returns the run's FULL cap —
- *      reached today only by `roleRun.ts`'s evaluator `hitBudget` re-ask (`generate.ts` and
- *      `evaluate.ts` gate theirs behind `budgetExceeded`, so they only ever fire below the cap).
- *      Tightness is enforced STRUCTURALLY instead, by `reportReaskOverrides`' `tightCap`: ONE turn,
- *      text-only, no tools — which bounds real spend to a single turn whatever this number says.
- *      Don't "fix" this by shrinking the USD value; the turn pin is the control that matters.
+ *      NOTE this is a ceiling, NOT a "materially tighter than the dying run" guarantee, and
+ *      deliberately so: the two intents conflict when the cap is small (a flat fraction of a $1 cap
+ *      reintroduces the very `error_max_budget_usd` death this fixes).
+ *   3. **Never scales with the dying run** — bounded above by `REASK_MAX_BUDGET_USD`. Without that
+ *      bound, a BUDGET-cap death (`observedCostUsd ≈ runCapUsd`) pushed `observed * margin` past the
+ *      cap and the clamp handed the re-ask the run's FULL cap, so a capped item's real ceiling was
+ *      `cap + cap`. Read `effectiveBudgetCeilingUsd` for the number a caller should size for.
+ * Tightness is ALSO enforced structurally, by `reportReaskOverrides`' `tightCap`: ONE turn,
+ * text-only, no tools — which bounds real spend to a single turn whatever this number says. That
+ * turn pin remains the control that matters; the max above is what keeps the AUTHORIZED figure
+ * honest. Don't "fix" either by shrinking the USD floor.
  * All four re-ask call sites — the autonomous generator's turn-cap recovery (`generate.ts`), the
  * interactive role-runner's writer cap-death AND evaluator verdict re-ask (`roleRun.ts`), and the
  * evaluator verdict re-ask (`evaluate.ts`) — derive their `maxBudgetUsd` through this ONE helper so
@@ -80,8 +101,45 @@ const REASK_OBSERVED_MARGIN = 1.25;
  */
 export function reaskBudgetUsd(observedCostUsd: number, runCapUsd: number): number {
   const observed = Number.isFinite(observedCostUsd) && observedCostUsd > 0 ? observedCostUsd : 0;
-  const desired = Math.max(REASK_MIN_BUDGET_USD, observed * REASK_OBSERVED_MARGIN);
+  const desired = Math.min(
+    Math.max(REASK_MIN_BUDGET_USD, observed * REASK_OBSERVED_MARGIN),
+    REASK_MAX_BUDGET_USD // never scales with the dying run — one turn is one turn
+  );
   return runCapUsd > 0 ? Math.min(desired, runCapUsd) : desired;
+}
+
+/**
+ * The per-item ceiling a caller should actually size for: the cap PLUS the one-shot re-ask that can
+ * follow a cap death. The cap alone is a pre-re-ask ceiling — the harness stops *working* the item
+ * at the cap, then spends one more tightly-bounded turn to recover the report/verdict the cap-death
+ * forfeited. A caller that must not exceed a hard number sets `maxBudgetUsdPerItem` such that THIS
+ * is the number, or turns `build.jsonReask` off and accepts losing capped-run reports.
+ * `runCapUsd <= 0` is unlimited (existing Sparra semantics), so the ceiling is unlimited too (0).
+ */
+export function effectiveBudgetCeilingUsd(runCapUsd: number): number {
+  if (runCapUsd <= 0) return 0; // unlimited
+  return runCapUsd + reaskBudgetUsd(runCapUsd, runCapUsd);
+}
+
+/** Format a USD figure the way the budget logs do (2dp, no trailing noise). */
+const usd = (n: number): string => `$${n.toFixed(2)}`;
+
+/**
+ * The one line that makes a post-cap overage self-explaining wherever a re-ask recovers a report or
+ * verdict. Two field runs ($12 cap → $14.43, $14 cap → $16.78) looked like the cap simply failing to
+ * hold; the spend was real and legitimate — a recovery turn charged after the cap stopped the work —
+ * but nothing in the output said so, so it read as a broken guard on a paid role.
+ *
+ * Returns "" when there is no cap to overshoot (`runCapUsd <= 0` = unlimited).
+ */
+export function reaskOverageNote(spentUsd: number, authorizedUsd: number, runCapUsd: number): string {
+  if (runCapUsd <= 0) return "";
+  const spent = Number.isFinite(spentUsd) && spentUsd > 0 ? spentUsd : 0;
+  return (
+    ` The re-ask spent ${usd(spent)} (authorized ≤ ${usd(authorizedUsd)}) AFTER the ${usd(runCapUsd)} cap: ` +
+    `the per-item cap is a PRE-re-ask ceiling, so size for ${usd(effectiveBudgetCeilingUsd(runCapUsd))} ` +
+    `(set build.jsonReask: false to make the cap absolute and forfeit capped-run reports).`
+  );
 }
 
 /**

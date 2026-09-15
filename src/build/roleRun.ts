@@ -32,7 +32,7 @@ import { ensureUnitWorktree, unitWorktreeWipGap, unitWorktreeWipWarning, type Un
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
 import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
-import { reaskBudgetUsd, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
+import { reaskBudgetUsd, reaskOverageNote, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
@@ -2133,7 +2133,8 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       result.emptyCompletion = undefined;
       const recovered =
         `role-run-${roleKind}: recovered the final report via a one-shot re-ask (build.jsonReask) after the cap — ` +
-        `the cap telemetry above still stands.`;
+        `the cap telemetry above still stands.` +
+        reaskOverageNote(costUsdOrZero(retry.costUsd), reaskBudget, effectiveUsdCap);
       if (!result.errors.includes(recovered)) result.errors = [...result.errors, recovered];
       info(recovered);
     }
@@ -2183,7 +2184,8 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       result.resultText = retry.resultText;
       const recovered =
         `role-run-${roleKind}: recovered the JSON verdict via a one-shot re-ask (build.jsonReask) after the cap — ` +
-        `the cap telemetry above still stands.`;
+        `the cap telemetry above still stands.` +
+        reaskOverageNote(costUsdOrZero(retry.costUsd), reaskBudget, effectiveUsdCap);
       if (!result.errors.includes(recovered)) result.errors = [...result.errors, recovered];
       info(recovered);
     }
