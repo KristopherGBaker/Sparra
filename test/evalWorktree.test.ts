@@ -66,7 +66,7 @@ function real(p: string): string {
 /** The dep-provisioning seam, ALWAYS faked in these tests — no real npm-level copy ever runs,
  *  so the suite stays fast and deterministic under full-suite load. */
 function fakeProvision() {
-  return vi.fn(() => ({ copied: [], skipped: [], failed: [] }));
+  return vi.fn(() => ({ copied: [], skipped: [], failed: [], pruned: [] }));
 }
 
 function fakeResult(over: Partial<RoleRunResult> = {}): RoleRunResult {

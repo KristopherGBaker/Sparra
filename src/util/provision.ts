@@ -56,18 +56,117 @@ export function pickCopyCmd(platform: NodeJS.Platform | string, src: string, dst
   return ["cp", "-R", src, dst];
 }
 
+/**
+ * Directory names whose CONTENTS are bound to the ABSOLUTE PATH they were built at, so a copy of
+ * them into a new location is not merely stale — it is actively WRONG.
+ *
+ * `provisionWorkspaceDeps` copies configured dep dirs wholesale so an offline worktree can build.
+ * For a SwiftPM package that dir is `.build`, and `.build/<triple>/debug/ModuleCache` holds
+ * precompiled `.pcm` modules carrying absolute paths from wherever they were built. In the worktree
+ * they resolve to nothing and the build dies on:
+ *
+ *     <unknown>:0: error: missing required module 'SwiftShims'
+ *     error: emit-module command failed with exit code 1
+ *
+ * Observed twice independently — once in a unit worktree (cleared by deleting ONLY the ModuleCache)
+ * and once by a contract-evaluator judging `make verify` unrunnable as written in a provisioned
+ * worktree. It also presents as a lie: lint runs first and passes over ~190 files, so the log reads
+ * "clean lint, then a module error", which looks like the generator broke the source.
+ *
+ * The correct action is CACHE-ONLY. Deleting `.build` itself would destroy the dependency checkout
+ * the prewarm fetched while the network was still available — unrecoverable offline.
+ */
+export const PATH_BOUND_CACHE_DIRS = ["ModuleCache", "ModuleCache.noindex"];
+
+/** Directory names never worth descending into when hunting for a path-bound cache (they are huge
+ *  and hold none). Keeps the post-copy walk cheap on a `node_modules`-sized tree. */
+const PRUNE_WALK_SKIP = new Set(["node_modules", ".git"]);
+
+/** How deep to look. `.build/<triple>/debug/ModuleCache` is depth 4; DerivedData's is similar. */
+const PRUNE_WALK_MAX_DEPTH = 6;
+
+/** Filesystem seam for the post-copy prune — injected so the unit tests touch no real disk. */
+export interface PruneFs {
+  /** Sub-DIRECTORY names of `dir` (not files; [] when unreadable). */
+  readdirDirs: (dir: string) => string[];
+  /** Remove a directory recursively. */
+  remove: (dir: string) => void;
+}
+
+/**
+ * Find the path-bound cache dirs under `root` (bounded walk; never descends INTO a match, nor into
+ * `node_modules`/`.git`). Pure w.r.t. the injected fs — returns absolute paths, removes nothing.
+ */
+export function pathBoundCacheDirs(root: string, fsd: PruneFs, maxDepth: number = PRUNE_WALK_MAX_DEPTH): string[] {
+  // The skip set applies to the walk ROOT too: provisioning's common case is a `node_modules` with
+  // tens of thousands of directories and no path-bound cache anywhere in it, and walking it would
+  // cost more than the prune can ever save.
+  if (PRUNE_WALK_SKIP.has(path.basename(root))) return [];
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return;
+    for (const name of fsd.readdirDirs(dir)) {
+      const abs = path.join(dir, name);
+      if (PATH_BOUND_CACHE_DIRS.includes(name)) {
+        found.push(abs); // a match is the leaf — its contents are exactly what we're discarding
+        continue;
+      }
+      if (PRUNE_WALK_SKIP.has(name)) continue;
+      walk(abs, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
+/** Remove every path-bound cache under `root`, returning what was removed (absolute paths). */
+export function prunePathBoundCaches(root: string, fsd: PruneFs): string[] {
+  const dirs = pathBoundCacheDirs(root, fsd);
+  for (const dir of dirs) fsd.remove(dir);
+  return dirs;
+}
+
+/** Default (real) prune seam. Both probes are best-effort: an unreadable dir yields no children,
+ *  and a failed removal is not worth aborting provisioning over. */
+function realPruneFs(): PruneFs {
+  return {
+    readdirDirs: (dir) => {
+      try {
+        return fs
+          .readdirSync(dir, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.isSymbolicLink())
+          .map((e) => e.name);
+      } catch {
+        return [];
+      }
+    },
+    remove: (dir) => {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    },
+  };
+}
+
 /** Injectable seams (fs probes + exec + host platform), mirroring git.ts's `git()` runner seam. */
 export interface ProvisionDeps {
   exists?: (p: string) => boolean;
   isSymlink?: (p: string) => boolean;
   run?: (argv: string[]) => { ok: boolean; out: string };
   platform?: NodeJS.Platform | string;
+  /** Post-copy prune seam (see `prunePathBoundCaches`); defaults to the real fs. */
+  pruneFs?: PruneFs;
 }
 
 export interface ProvisionSummary {
   copied: string[];
   skipped: string[];
   failed: string[];
+  /** Path-bound caches discarded from the COPIES (never from the source) — see
+   *  `PATH_BOUND_CACHE_DIRS`. Relative to the worktree, for a readable log/summary. */
+  pruned: string[];
 }
 
 /** Default copy runner: spawn the argv (no shell), reporting ok/out like git.ts's `git()`. */
@@ -93,12 +192,13 @@ export function provisionWorkspaceDeps(
   cfg: { enabled: boolean; dirs: string[] },
   deps: ProvisionDeps = {}
 ): ProvisionSummary {
-  const summary: ProvisionSummary = { copied: [], skipped: [], failed: [] };
+  const summary: ProvisionSummary = { copied: [], skipped: [], failed: [], pruned: [] };
   if (workspaceDir === root || !cfg.enabled) return summary;
 
   const fsd: ProvisionFs = { exists: deps.exists ?? exists, isSymlink: deps.isSymlink ?? isSymlink };
   const run = deps.run ?? copyRun;
   const platform = deps.platform ?? os.platform();
+  const pruneFs = deps.pruneFs ?? realPruneFs();
 
   const { copy, skipped } = depsToProvision(root, workspaceDir, cfg.dirs, fsd);
   for (const dir of skipped) {
@@ -113,6 +213,14 @@ export function provisionWorkspaceDeps(
       if (r.ok) {
         detail(`provision: copied ${dir} into the worktree.`);
         summary.copied.push(dir);
+        // A copied module cache is bound to the path it was built at, so it poisons the very build
+        // this copy exists to enable (see PATH_BOUND_CACHE_DIRS). Discard it from the COPY only —
+        // the dependency checkout beside it cannot be re-fetched offline.
+        const pruned = prunePathBoundCaches(dst, pruneFs).map((p) => path.relative(workspaceDir, p));
+        if (pruned.length) {
+          detail(`provision: discarded ${pruned.length} path-bound module cache(s) from ${dir}: ${pruned.join(", ")}.`);
+          summary.pruned.push(...pruned);
+        }
       } else {
         warn(`provision: copy of ${dir} into the worktree failed (non-fatal): ${r.out.trim()}`);
         summary.failed.push(dir);

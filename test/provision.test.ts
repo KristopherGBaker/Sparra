@@ -7,6 +7,9 @@ import {
   pickCopyCmd,
   provisionWorkspaceDeps,
   prewarmSwiftPackages,
+  pathBoundCacheDirs,
+  prunePathBoundCaches,
+  PATH_BOUND_CACHE_DIRS,
   swiftpmCacheDir,
   ensureSwiftpmCacheDir,
   type SwiftPrewarmDeps,
@@ -293,5 +296,133 @@ describe("prewarmSwiftPackages — skip / non-fatal (U-X #6)", () => {
     const r = prewarmSwiftPackages("/repo", "/repo", { swiftPackages: true }, { exists: () => true, run: spy.run });
     expect(spy.calls).toHaveLength(0);
     expect(r.skipped).toBe("in-place");
+  });
+});
+
+
+// ── Field report 2026-09-15 (Sarukani): `provisionDeps` copies `Packages/SarukaniKit/.build` so
+// SwiftPM works offline. That copy carries `.build/<triple>/debug/ModuleCache`, whose precompiled
+// modules embed ABSOLUTE paths from where they were built; in the worktree they resolve to nothing:
+//     <unknown>:0: error: missing required module 'SwiftShims'
+// Hit directly in a unit worktree (cleared by deleting ONLY the ModuleCache) and independently
+// flagged by a contract-evaluator as making `make verify` unrunnable as written. ────────────────────
+
+/** A fake directory tree: map of dir → subdirectory names. */
+function fakeTree(tree: Record<string, string[]>) {
+  const removed: string[] = [];
+  return {
+    removed,
+    fsd: {
+      readdirDirs: (dir: string) => tree[dir] ?? [],
+      remove: (dir: string) => {
+        removed.push(dir);
+        delete tree[dir];
+      },
+    },
+  };
+}
+
+describe("path-bound module-cache prune", () => {
+  it("finds the SwiftPM ModuleCache a copied .build carries", () => {
+    const t = fakeTree({
+      "/wt/.build": ["arm64-apple-macosx", "checkouts"],
+      "/wt/.build/arm64-apple-macosx": ["debug"],
+      "/wt/.build/arm64-apple-macosx/debug": ["ModuleCache", "Modules"],
+      "/wt/.build/checkouts": ["GRDB.swift"],
+    });
+    expect(pathBoundCacheDirs("/wt/.build", t.fsd)).toEqual(["/wt/.build/arm64-apple-macosx/debug/ModuleCache"]);
+  });
+
+  it("removes ONLY the cache — the offline dependency checkout beside it survives", () => {
+    const t = fakeTree({
+      "/wt/.build": ["arm64-apple-macosx", "checkouts"],
+      "/wt/.build/arm64-apple-macosx": ["debug"],
+      "/wt/.build/arm64-apple-macosx/debug": ["ModuleCache"],
+      "/wt/.build/checkouts": ["GRDB.swift"],
+    });
+    const pruned = prunePathBoundCaches("/wt/.build", t.fsd);
+    expect(pruned).toEqual(["/wt/.build/arm64-apple-macosx/debug/ModuleCache"]);
+    expect(t.removed).toEqual(["/wt/.build/arm64-apple-macosx/debug/ModuleCache"]);
+    // `.build` itself and the fetched checkouts — unrecoverable offline — are untouched.
+    expect(t.removed).not.toContain("/wt/.build");
+    expect(t.removed.some((r) => r.includes("checkouts"))).toBe(false);
+  });
+
+  it("never descends INTO a match, and skips node_modules/.git so the walk stays cheap", () => {
+    const seen: string[] = [];
+    const fsd = {
+      readdirDirs: (dir: string) => {
+        seen.push(dir);
+        if (dir === "/wt") return ["node_modules", ".git", "ModuleCache"];
+        return [];
+      },
+      remove: () => {},
+    };
+    expect(pathBoundCacheDirs("/wt", fsd)).toEqual(["/wt/ModuleCache"]);
+    expect(seen).toEqual(["/wt"]); // no descent into node_modules, .git, or the match
+  });
+
+  it("covers the Xcode ModuleCache.noindex spelling too", () => {
+    expect(PATH_BOUND_CACHE_DIRS).toContain("ModuleCache.noindex");
+    const t = fakeTree({ "/wt": ["ModuleCache.noindex"] });
+    expect(pathBoundCacheDirs("/wt", t.fsd)).toEqual(["/wt/ModuleCache.noindex"]);
+  });
+
+  it("is depth-bounded (a deep tree does not walk forever)", () => {
+    const tree: Record<string, string[]> = {};
+    let dir = "/wt";
+    for (let i = 0; i < 20; i++) {
+      tree[dir] = ["d"];
+      dir = path.join(dir, "d");
+    }
+    tree[dir] = ["ModuleCache"]; // far below the bound
+    expect(pathBoundCacheDirs("/wt", { readdirDirs: (d) => tree[d] ?? [], remove: () => {} })).toEqual([]);
+  });
+
+  it("provisionWorkspaceDeps prunes the COPY after a successful copy and reports it", () => {
+    const { run } = fakeRun();
+    const t = fakeTree({
+      "/repo-wt/.build": ["arm64-apple-macosx"],
+      "/repo-wt/.build/arm64-apple-macosx": ["debug"],
+      "/repo-wt/.build/arm64-apple-macosx/debug": ["ModuleCache"],
+    });
+    const summary = provisionWorkspaceDeps(
+      ROOT,
+      WT,
+      { enabled: true, dirs: [".build"] },
+      { ...fakeFs(new Set(["/repo/.build"])), run, platform: "darwin", pruneFs: t.fsd }
+    );
+    expect(summary.copied).toEqual([".build"]);
+    expect(summary.pruned).toEqual([".build/arm64-apple-macosx/debug/ModuleCache"]); // worktree-relative
+    expect(t.removed).toEqual(["/repo-wt/.build/arm64-apple-macosx/debug/ModuleCache"]);
+  });
+
+  it("a FAILED copy is not pruned (nothing landed to prune)", () => {
+    const { run } = fakeRun(() => ({ ok: false, out: "no space" }));
+    const t = fakeTree({ "/repo-wt/.build": ["ModuleCache"] });
+    const summary = provisionWorkspaceDeps(
+      ROOT,
+      WT,
+      { enabled: true, dirs: [".build"] },
+      { ...fakeFs(new Set(["/repo/.build"])), run, platform: "darwin", pruneFs: t.fsd }
+    );
+    expect(summary.failed).toEqual([".build"]);
+    expect(summary.pruned).toEqual([]);
+    expect(t.removed).toEqual([]);
+  });
+
+  it("a node_modules copy is not walked at all (tens of thousands of dirs, never a path-bound cache)", () => {
+    const { run } = fakeRun();
+    const seen: string[] = [];
+    const t = { removed: [] as string[], fsd: { readdirDirs: (d: string) => { seen.push(d); return []; }, remove: () => {} } };
+    const summary = provisionWorkspaceDeps(
+      ROOT,
+      WT,
+      { enabled: true, dirs: ["node_modules"] },
+      { ...fakeFs(new Set(["/repo/node_modules"])), run, platform: "darwin", pruneFs: t.fsd }
+    );
+    expect(summary.copied).toEqual(["node_modules"]);
+    expect(summary.pruned).toEqual([]);
+    expect(seen).toEqual([]); // not one readdir
   });
 });

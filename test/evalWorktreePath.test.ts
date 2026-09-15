@@ -54,7 +54,7 @@ function real(p: string): string {
 }
 
 function fakeProvision() {
-  return vi.fn(() => ({ copied: [], skipped: [], failed: [] }));
+  return vi.fn(() => ({ copied: [], skipped: [], failed: [], pruned: [] }));
 }
 
 function fakeResult(over: Partial<RoleRunResult> = {}): RoleRunResult {
