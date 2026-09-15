@@ -1,6 +1,6 @@
 {
   "name": "sparra",
-  "version": "0.1.0-ctxsweep1",
+  "version": "0.1.0-fieldfix0915",
   "description": "Conduct Sparra's adversarial cross-model build and evaluation loop from Codex.",
   "author": {
     "name": "Kristopher Baker",
