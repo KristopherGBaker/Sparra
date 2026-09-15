@@ -1313,6 +1313,16 @@ export function remapBriefForWorkspace(brief: string, root: string, workspace: s
 }
 
 /**
+ * Where a role-run's trace (and its `sessions.jsonl` session-id sidecar) lands when the caller
+ * doesn't name one. Exported so an ADAPTER can compute it up front and hand it to `runRole` —
+ * the MCP server does, so a call the client aborts mid-run still told the conductor where the
+ * session id it needs to resume is (the envelope never arrives in that case).
+ */
+export function defaultRoleRunTraceDir(ctx: Ctx, roleKind: RoleKind): string {
+  return path.join(ctx.paths.traces, `role-run-${roleKind}-${stampFromDate(new Date())}-${randomUUID().slice(0, 8)}`);
+}
+
+/**
  * Run a single Sparra role once, enforcing the holdout wall, and return a normalized
  * result (a verdict for the evaluator). The interactive surface never receives holdout
  * contents — only this runner materializes them, and only for the evaluator.
@@ -1790,8 +1800,7 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   // Unique trace dir so repeated role runs don't overwrite each other. Evaluator traces
   // contain holdout by design (the evaluator is allowed to see it) — they live in a
   // role-run subdir; the conductor reads verdicts, not evaluator traces.
-  const traceDir =
-    req.traceDir ?? path.join(ctx.paths.traces, `role-run-${roleKind}-${stampFromDate(new Date())}-${randomUUID().slice(0, 8)}`);
+  const traceDir = req.traceDir ?? defaultRoleRunTraceDir(ctx, roleKind);
 
   // Snapshot the artifact surface before an exercise that may write (Codex workspace-write); the
   // source-integrity guard reverts + reports any artifact mutation the evaluator makes below.

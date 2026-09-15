@@ -540,3 +540,32 @@ describe("toRunRoleRequest — crossModelBaseline forwarding (U-1 assertion 4, 7
     expect(req.crossModelBaseline?.backend).toBeUndefined();
   });
 });
+
+
+// ── Field report 2026-09-15 (Sarukani): two contract-generator runs came back `degraded` with
+// denials a holdout fix had already addressed, and there was no way to tell whether the long-lived
+// MCP server had picked up that fix — "your own adapter notes warn that it may retain pre-edit
+// code". The envelope now says which code answered. ────────────────────────────────────────────────
+describe("runnerVersion — which Sparra code answered", () => {
+  it("stamps every payload, both the evaluator (verdict) branch and the rest", () => {
+    const writer = buildRunRolePayload(baseResult({}), 80);
+    const judge = buildRunRolePayload(
+      baseResult({
+        roleKind: "evaluator",
+        verdict: { verdict: "pass", weightedTotal: 93, scores: {}, assertions: [], blocking: [] } as never,
+      }),
+      80
+    );
+    for (const p of [writer, judge]) {
+      expect(p.runnerVersion).toBeTruthy();
+      // `<package version>+<short HEAD>` in a git checkout; the version alone otherwise.
+      expect(p.runnerVersion).toMatch(/^[^+]+(\+[0-9a-f]{7,40})?$/);
+    }
+    expect(writer.runnerVersion).toBe(judge.runnerVersion);
+  });
+
+  it("carries no project information — it describes the runner, not the graded tree", () => {
+    const p = buildRunRolePayload(baseResult({}), 80);
+    expect(p.runnerVersion).not.toContain("/"); // never a path
+  });
+});

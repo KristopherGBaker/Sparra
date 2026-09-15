@@ -57,6 +57,7 @@ export const PARENT_SAFE_FIELDS = [
   "contractStatus",
   "caveats",
   "unitWorktree",
+  "runnerVersion",
   "promptDrift",
   "errors",
   "tokens",

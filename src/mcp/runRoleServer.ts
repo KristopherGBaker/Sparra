@@ -5,7 +5,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
-import { runRole, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { runRole, defaultRoleRunTraceDir, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { startHeartbeat } from "./heartbeat.ts";
+import { sessionsPath } from "../sdk/session.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 
@@ -15,6 +17,7 @@ import { promptDrift, summarizePromptDrift } from "../prompts.ts";
 export type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
 import type { RunRolePayload, PromptDriftNote } from "../roleEnvelope.ts";
 import { parseContractAgreement } from "../roleEnvelope.ts";
+import { runnerVersion } from "../runnerVersion.ts";
 
 /** The `run_role` tool's argument shape (mirrors the zod schema below). */
 export interface RunRoleToolArgs {
@@ -116,9 +119,13 @@ export function buildRunRolePayload(
   // Only surface the drift note when there's something actionable (a newer default / conflict) —
   // don't add noise to every call. Role names + the note line only; never a body, never holdout.
   const driftField = drift ? { promptDrift: drift } : {};
+  // Which Sparra CODE answered. A long-lived MCP server keeps the modules it imported at launch, so
+  // "is this run stale?" was previously unanswerable from the envelope (see `runnerVersion`).
+  const versionField = { runnerVersion: runnerVersion() };
   return r.verdict
     ? {
         ...driftField,
+        ...versionField,
         roleKind: r.roleKind,
         backend: r.backend,
         model: r.model,
@@ -164,6 +171,7 @@ export function buildRunRolePayload(
       }
     : {
         ...driftField,
+        ...versionField,
         roleKind: r.roleKind,
         backend: r.backend,
         model: r.model,
@@ -350,7 +358,11 @@ export async function startRunRoleServer(root: string): Promise<void> {
           "Evaluator-only opt-in (requires evalBaseRef): a command from build.verifyCommands to run at the base ref SHA in a throwaway detached worktree. The runner (not the generator) produces a [VERIFIED BASELINE] block the evaluator trusts over any brief prose — a generator that broke tests cannot launder them by claiming pre-existence. Chained/piped/subshell forms and non-allowlisted commands are rejected pre-launch without spawning. An infra failure after the base resolves yields a [VERIFIED BASELINE: UNAVAILABLE] note; the eval proceeds. Off by default."
         ),
     },
-    async (args) => {
+    async (args, extra) => {
+      // Keep-alive: a verify-heavy role can spend half an hour inside one Bash call, and an MCP
+      // client aborts a tool call that sends nothing for its idle window (observed: 1800s). Beat for
+      // the life of the call so the guard kills a genuinely wedged run, not a working one.
+      let stopHeartbeat = () => {};
       try {
         // Defer the auto-permission probe (a live SDK query) so a request that fails
         // eval-provenance validation (bad expectedHead/evalBaseRef) aborts with ZERO model tokens;
@@ -360,6 +372,19 @@ export async function startRunRoleServer(root: string): Promise<void> {
         validateEvalProvenance(req);
         validateBaselineCommand(req);
         validateReportPath(req);
+        // Pin the trace dir HERE (rather than letting runRole default it) so the heartbeat can name
+        // the session-id sidecar up front: on an abort the envelope never arrives, and that file is
+        // the only thing standing between "resume" and "re-run from scratch". Withheld for the
+        // evaluator, whose trace is holdout-bearing by design.
+        req.traceDir = req.traceDir ?? defaultRoleRunTraceDir(ctx, req.roleKind);
+        if (extra?.sendNotification) {
+          stopHeartbeat = startHeartbeat({
+            progressToken: extra._meta?.progressToken,
+            sendNotification: extra.sendNotification as Parameters<typeof startHeartbeat>[0]["sendNotification"],
+            label: `run_role ${req.roleKind}`,
+            detail: req.roleKind === "evaluator" ? undefined : `resume id in ${sessionsPath(req.traceDir)}`,
+          });
+        }
         await autoProbeCtx(ctx);
         const r = await runRole(req);
         // Surface a newer-default (`stale`) / conflicting prompt to the /sparra-loop conductor, so
@@ -375,6 +400,8 @@ export async function startRunRoleServer(root: string): Promise<void> {
       } catch (e) {
         // Holdout-leak and other failures surface as a (sanitized) tool error.
         return { content: [{ type: "text" as const, text: `run_role failed: ${(e as Error).message}` }], isError: true };
+      } finally {
+        stopHeartbeat();
       }
     }
   );

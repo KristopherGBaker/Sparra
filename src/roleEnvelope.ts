@@ -130,6 +130,12 @@ export interface RunRolePayload {
   /** The refused reads behind `degraded` — tool + target PATH only, never file content. */
   deniedInputs?: RoleRunResult["deniedInputs"];
   unitWorktree?: RoleRunResult["unitWorktree"];
+  /** The Sparra code that produced this envelope: `<package version>+<short HEAD>`. The `sparra-run`
+   *  MCP server imports `src/**` once at launch and `tsx` does not hot-reload, so a fix landed on
+   *  disk does NOT reach an already-running server. Compare this against
+   *  `git -C <sparra> rev-parse --short HEAD`; a mismatch means restart the server, not that the fix
+   *  is wrong. Holdout-safe (a version string about the runner, not the project). */
+  runnerVersion?: string;
   promptDrift?: PromptDriftNote;
   errors: string[];
   tokens: number;
