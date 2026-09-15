@@ -358,6 +358,37 @@ export function sandboxCapabilityNotesText(caps: DeniedCapability[], stack: Judg
 }
 
 /**
+ * Where a judge that wants to WRITE something is supposed to write it.
+ *
+ * Writing an adversarial probe is a legitimate and valuable thing for a judge to do — on one project
+ * a later evaluator found a real data-loss defect precisely by writing a round-trip test. But the
+ * artifact tree is off limits: the source-integrity guard reverts any write to the graded surface
+ * and marks the verdict untrustworthy, which is correct and worked exactly as designed in the field
+ * (an evaluator's `EvaluatorAdversarialTests.swift` was caught, reverted, and the verdict distrusted).
+ * The gap was upstream of the guard: nothing ever TOLD the judge where its writable scratch was, so a
+ * judge that wanted a probe kept reaching for the only tree it knew about.
+ *
+ * `$TMPDIR` is redirected per-session to a scratch root OUTSIDE the workspace (see the file header),
+ * so `mktemp -d` already lands in the right place — the judge just has to know that, and know that a
+ * probe needing to compile inside a package must take a COPY of the tree with it.
+ *
+ * Emitted only for a judge that can actually write (a read-only sandbox blocks writes anyway, so the
+ * paragraph would be noise there).
+ */
+export function judgeWriteScratchText(): string {
+  return (
+    `\nWRITABLE SCRATCH (your writes have a home — the artifact tree is not it):\n` +
+    `- \`$TMPDIR\` is redirected for this session to a scratch root OUTSIDE the workspace. \`mktemp -d\` ` +
+    `lands there. Put probes, fixtures, helper scripts, screenshots, build output and derived data there.\n` +
+    `- The graded tree is INTEGRITY-GUARDED: any write to a tracked or new source file is reverted and ` +
+    `your verdict is reported untrustworthy — so a probe written INTO the artifact costs you the whole ` +
+    `evaluation, however good the probe was.\n` +
+    `- To exercise a probe that must compile inside the project (a test in a package, a fixture a build ` +
+    `reads), COPY the tree into \`$(mktemp -d)\` and work in the copy; cite it as evidence normally.\n`
+  );
+}
+
+/**
  * Convenience for the injection sites: the capability-notes block for a judge on `backendId` with a
  * given sandbox mode + scratch state. `hasOsSandbox` is resolved by the caller from the backend
  * registry (keeps THIS module free of an sdk import). Always returns the KNOWN RUNNER LIMITS block
@@ -374,7 +405,11 @@ export function judgeCapabilityNotesText(args: {
   workspaceDir?: string;
 }): string {
   const stack = args.workspaceDir ? detectJudgeStack(args.workspaceDir) : UNKNOWN_JUDGE_STACK;
-  return sandboxCapabilityNotesText(sandboxCapabilityNotes({ ...args, stack }), stack);
+  return (
+    sandboxCapabilityNotesText(sandboxCapabilityNotes({ ...args, stack }), stack) +
+    // Only a judge that CAN write needs telling where to put it.
+    (args.scratchEnabled ? judgeWriteScratchText() : "")
+  );
 }
 
 /**

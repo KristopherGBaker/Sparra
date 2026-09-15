@@ -13,6 +13,7 @@ import {
   sandboxCapabilityNotes,
   sandboxCapabilityNotesText,
   judgeCapabilityNotesText,
+  judgeWriteScratchText,
   runnerLimitations,
   runnerLimitationsText,
   type JudgeSandboxMode,
@@ -371,9 +372,14 @@ describe("judge capability notes — conditional on the graded project's stack",
     fs.rmSync(swift, { recursive: true, force: true });
   });
 
-  it("emits NOTHING AT ALL for a Swift project on a no-OS-sandbox backend", () => {
+  it("emits no stack-specific note AT ALL for a Swift project on a no-OS-sandbox backend", () => {
     const swift = project({ "Package.swift": "// swift-tools-version:6.0\n" });
-    expect(notes(swift, "claude")).toBe("");
+    const text = notes(swift, "claude");
+    // No sandbox-policy rows (no OS sandbox) and no runner limits (not vitest) — nothing is CLAIMED
+    // about this stack. The write-scratch note is stack-INDEPENDENT (it is about the integrity guard,
+    // which is armed on exactly this writable-judge path) and is the one block that remains.
+    expect(text.replace(judgeWriteScratchText(), "")).toBe("");
+    expect(text).toContain("WRITABLE SCRATCH");
     fs.rmSync(swift, { recursive: true, force: true });
   });
 
@@ -407,5 +413,37 @@ describe("judge capability notes — conditional on the graded project's stack",
     expect(detectJudgeStack("/nonexistent/path")).toEqual(UNKNOWN_JUDGE_STACK);
     fs.rmSync(bare, { recursive: true, force: true });
     fs.rmSync(viaConfig, { recursive: true, force: true });
+  });
+});
+
+
+// ── Field report 2026-09-15 (Sarukani): an evaluator wrote `EvaluatorAdversarialTests.swift` into
+// the artifact tree during grading. The guard caught it, reverted it, and marked its own verdict
+// untrustworthy — exactly as designed. The gap is upstream: writing an adversarial probe is a
+// valuable thing for a judge to do (a later evaluator on that project found a real data-loss defect
+// with a round-trip test), and nothing ever told it where its writable scratch was. ────────────────
+describe("judge write-scratch note — the artifact is off limits AND there is somewhere else", () => {
+  it("names the scratch, the consequence of ignoring it, and the copy-the-tree route for a probe", () => {
+    const t = judgeWriteScratchText();
+    expect(t).toContain("$TMPDIR"); // where
+    expect(t).toContain("mktemp -d"); // how
+    expect(t).toContain("INTEGRITY-GUARDED"); // why it matters
+    expect(t).toContain("COPY the tree"); // the route for a probe that must compile in-package
+  });
+
+  it("reaches a judge that can actually write, on either writable mode and either backend", () => {
+    for (const sandboxMode of ["workspace-write", "danger-full-access"] as JudgeSandboxMode[]) {
+      for (const [backendId, hasOsSandbox] of [["codex", true], ["claude", false]] as const) {
+        expect(
+          judgeCapabilityNotesText({ backendId, hasOsSandbox, sandboxMode, scratchEnabled: true })
+        ).toContain("WRITABLE SCRATCH");
+      }
+    }
+  });
+
+  it("is omitted for a read-only judge — its writes are blocked anyway, so the paragraph is noise", () => {
+    expect(
+      judgeCapabilityNotesText({ backendId: "codex", hasOsSandbox: true, sandboxMode: "read-only", scratchEnabled: false })
+    ).not.toContain("WRITABLE SCRATCH");
   });
 });
