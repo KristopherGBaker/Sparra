@@ -7,6 +7,7 @@ import {
   snapshotArtifact,
   enforceArtifactIntegrity,
   isBuildCachePath,
+  isBuildOutputDirSegment,
   isScratchDepSymlink,
   realIntegrityDeps,
   type IntegrityDeps,
@@ -200,6 +201,78 @@ describe("build-cache exclusion (isBuildCachePath + guard integration)", () => {
     const mutated = enforceArtifactIntegrity(WS, snap, ctx.deps);
     expect(mutated).toEqual([]);
     expect(ctx.files.get(".build/x.o")!.toString()).toBe("V2"); // left as rebuilt, not reverted to V1
+  });
+
+  // ── Field report 2026-09-15 (Sarukani): an evaluator graded 93.0 against a threshold of 80 with
+  // ZERO failed assertions and still returned verdict:fail on ONE blocking item — the guard counted
+  // 7,664 compiler intermediates under `.derivedData-load/Build/Intermediates.noindex/GRDB.build/…`
+  // as artifact-injected files. The project's .gitignore covered `.derivedData/`, not that name, so
+  // git listed them untracked. A passing grade reported as a failure is the worst direction to be
+  // wrong in: a conductor trusts the envelope. ────────────────────────────────────────────────────
+  describe("derived-data / build-output dir exclusion (field report: .derivedData-load)", () => {
+    it("excludes the EXACT field path that false-failed a passing verdict", () => {
+      expect(isBuildCachePath(".derivedData-load/Build/Intermediates.noindex/GRDB.build/x.o")).toBe(true);
+    });
+
+    it("covers the derived-data FAMILY, not one literal name", () => {
+      for (const yes of [
+        "DerivedData/Build/x.o", // the canonical name (already covered before)
+        ".derivedData/Build/x.o", // dot-prefixed
+        "derived-data/Build/x.o", // hyphenated
+        ".derivedData-load/Build/x.o", // the field name: suffixed variant
+        "derived_data/Build/x.o",
+        "DerivedData_ci/Build/x.o",
+        "Packages/App/.derivedData-load/x.o", // nested, not just at the root
+      ]) {
+        expect(isBuildCachePath(yes)).toBe(true);
+      }
+    });
+
+    it("covers Xcode `*.build` intermediates and `*.noindex` build dirs as segments", () => {
+      expect(isBuildCachePath("Build/Intermediates.noindex/GRDB.build/x.o")).toBe(true);
+      expect(isBuildCachePath("out/App.build/Objects-normal/arm64/App.o")).toBe(true);
+      expect(isBuildCachePath("Index.noindex/DataStore/x")).toBe(true);
+    });
+
+    it("does NOT drop graded source that merely LOOKS like build output", () => {
+      for (const no of [
+        "docs/DerivedDataNotes.md", // a FILE segment is never judged a build dir
+        "Sources/App/DerivedData.swift", // ditto: real source named after the concept
+        "src/DerivedDataStore/Store.swift", // dir prefix, but not a `-`/`_`/`.` suffix boundary
+        "Tests/NoindexTests.swift",
+        "Sources/Rebuild/x.swift",
+      ]) {
+        expect(isBuildCachePath(no)).toBe(false);
+      }
+    });
+
+    it("isBuildOutputDirSegment judges one segment, filename-agnostic", () => {
+      expect(isBuildOutputDirSegment(".derivedData-load")).toBe(true);
+      expect(isBuildOutputDirSegment("GRDB.build")).toBe(true);
+      expect(isBuildOutputDirSegment("Intermediates.noindex")).toBe(true);
+      expect(isBuildOutputDirSegment("DerivedDataNotes.md")).toBe(false);
+      expect(isBuildOutputDirSegment("Sources")).toBe(false);
+    });
+
+    it("a judge whose gates emit ONLY derived-data output yields NO integrity violation", () => {
+      const ctx = fakeDeps(WS, { "src/App.swift": "APP" }, ["src/App.swift"]);
+      const snap = snapshotArtifact(WS, ctx.deps);
+      // The gates the contract demanded, run by the judge, writing thousands of intermediates.
+      for (let i = 0; i < 50; i++) {
+        ctx.files.set(`.derivedData-load/Build/Intermediates.noindex/GRDB.build/o${i}.o`, Buffer.from("obj"));
+      }
+      expect(enforceArtifactIntegrity(WS, snap, ctx.deps)).toEqual([]);
+      expect(ctx.removes).toEqual([]); // and nothing was deleted out from under the build
+    });
+
+    it("…while a real source edit alongside that output is still caught and reverted", () => {
+      const ctx = fakeDeps(WS, { "src/App.swift": "APP" }, ["src/App.swift"]);
+      const snap = snapshotArtifact(WS, ctx.deps);
+      ctx.files.set(".derivedData-load/Build/Intermediates.noindex/GRDB.build/x.o", Buffer.from("obj"));
+      ctx.files.set("src/App.swift", Buffer.from("HACKED"));
+      expect(enforceArtifactIntegrity(WS, snap, ctx.deps)).toEqual(["src/App.swift"]);
+      expect(ctx.files.get("src/App.swift")!.toString()).toBe("APP");
+    });
   });
 
   describe(".claude/skills scratch exclusion", () => {

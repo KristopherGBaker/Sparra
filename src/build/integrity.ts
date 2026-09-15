@@ -56,6 +56,30 @@ export interface SourceSnapshot {
 }
 
 /**
+ * A DIRECTORY segment that names Xcode/SwiftPM BUILD OUTPUT rather than graded source.
+ *
+ * Exact-name matching was not enough. A judge told to build into a "repo-local derived-data dir"
+ * picks its own name — observed in the field: `.derivedData-load`, which the project's `.gitignore`
+ * (covering `.derivedData/`) did not match either, so git listed **7,664** compiler intermediates as
+ * untracked and the guard reported a 93.0/80 verdict with zero failed assertions as an integrity
+ * FAILURE. The paths were all `<dd>/Build/Intermediates.noindex/GRDB.build/…` — output of running
+ * the very gates the contract demanded.
+ *
+ * So the families, not the literals:
+ *   - a derived-data root: `DerivedData`, `.derivedData`, `derived-data`, `.derivedData-load`,
+ *     `DerivedData_ci` — i.e. `derived[-_]?data` optionally followed by a `-`/`_`/`.` suffix;
+ *   - an Xcode per-target intermediates dir: anything ending `.build` (`GRDB.build`, `App.build`);
+ *   - an Xcode non-indexed build dir: anything ending `.noindex` (`Intermediates.noindex`).
+ *
+ * Judged on a DIRECTORY segment only — never the final (filename) segment — so a documentation file
+ * named `DerivedDataNotes.md` stays on the protected artifact surface.
+ */
+export function isBuildOutputDirSegment(seg: string): boolean {
+  const s = seg.replace(/^\./, "").toLowerCase();
+  return /^derived[-_]?data([-_.].*)?$/.test(s) || s.endsWith(".build") || s.endsWith(".noindex");
+}
+
+/**
  * Built-in exclusion for well-known compiler/module-cache relpaths. These are the evaluator's OWN
  * build-cache writes (a legit `swift build` emits `.swiftpm-home/.cache/clang/ModuleCache/…`,
  * `.build/…`, DerivedData/…) — NOT edits to the graded artifact source — so the guard must ignore
@@ -63,6 +87,8 @@ export interface SourceSnapshot {
  *   - `.cache/clang/ModuleCache` as ANY path segment run (matches `**​/.cache/clang/ModuleCache/**`);
  *   - `.build` as ANY path segment (matches `**​/.build/**` and a leading `.build/`);
  *   - `DerivedData` as ANY path segment (matches `**​/DerivedData/**`);
+ *   - any `isBuildOutputDirSegment` DIRECTORY segment — the derived-data / `*.build` / `*.noindex`
+ *     families above, so a judge's own choice of derived-data name is covered too;
  *   - a leading `.swiftpm-home/` prefix;
  *   - `.claude/skills` as ANY consecutive segment run (matches `**​/.claude/skills/**`) — tool-generated
  *     skill scratch (e.g. `.claude/skills/aseprite`) written during exercise. Only the `skills`
@@ -74,6 +100,11 @@ export function isBuildCachePath(rel: string): boolean {
   const segs = norm.split("/");
   if (norm.startsWith(".swiftpm-home/")) return true;
   if (segs.includes(".build") || segs.includes("DerivedData")) return true;
+  // Build-output DIRECTORY segments (never the filename): a derived-data root under any name, an
+  // Xcode `*.build` intermediates dir, a `*.noindex` build dir.
+  for (let i = 0; i + 1 < segs.length; i++) {
+    if (isBuildOutputDirSegment(segs[i]!)) return true;
+  }
   // `.cache/clang/ModuleCache` as a consecutive segment run.
   for (let i = 0; i + 2 < segs.length; i++) {
     if (segs[i] === ".cache" && segs[i + 1] === "clang" && segs[i + 2] === "ModuleCache") return true;
