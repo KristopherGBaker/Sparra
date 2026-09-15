@@ -143,7 +143,9 @@ knob list is also in `docs/configuration.md`. The few that matter most:
   contractGenerator, contractEvaluator, generator, evaluator, evaluatorSecond, reviewer, reflector.
 - **`build.maxBudgetUsdPerItem` / `maxTokensPerItem` / `zeroCostTokenCap`** — per-item spend caps;
   crossing halts the item `BUDGET_EXCEEDED` and the run continues (`0` = no cap). `zeroCostTokenCap`
-  is the fallback when the USD cap is active but cost reports `$0`/unknown.
+  is the fallback when the USD cap is active but cost reports `$0`/unknown. The USD cap is a
+  **pre-re-ask** ceiling: a cap death that forfeited its report adds one bounded recovery turn
+  (≤ **$4**), so size for `cap + min($4, cap)` (`build.jsonReask: false` makes it absolute).
 - **`build.maxTurnsPerSession`** — per-session turn cap (default 80); `role run`/`eval --max-turns`
   and MCP `run_role`'s `maxTurns` override it per call.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.

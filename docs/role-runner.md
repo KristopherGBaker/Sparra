@@ -318,6 +318,18 @@ differs, since session ids aren't portable across backends. Every result returns
 + `backend` for exactly this. On the CLI, pass the same values as
 `--resume-session <id> --resume-backend <backend>` to `sparra role run`.
 
+**A run that never returns an envelope is still resumable.** The session id is written to
+`<traceDir>/sessions.jsonl` the moment the backend reports it — at session **start**, not on
+completion — one JSON line per session (`{role, backend, model, sessionId, traceSeq, cwd, startedAt,
+resumedFrom?}`), appended so a re-ask/resume chain stays traceable. A run killed by an MCP client
+abort, a provider session limit, or a `kill -9` leaves no envelope and therefore no `sessionId`
+field, and the work in the unit worktree then had to be **re-run** rather than resumed (field:
+three deaths in two days, one of them abandoning 864 lines of tests, captures, and a real layout bug
+already fixed). Read the id out of that file and pass it as `resumeSessionId`. The MCP server pins
+the trace dir before launching, so its keep-alive progress messages name the file up front
+(non-evaluator roles — the evaluator's trace dir stays withheld); otherwise it is the newest
+`role-run-<kind>-<stamp>-<id>/` under `.sparra/traces/`.
+
 **Provider limits / empty completions.** If a backend hits a rate/usage/session limit — or
 returns a **silent empty completion** (which the Codex backend detects and stamps with an
 **explicit `emptyCompletion` marker** on its result, classifying it as a limit rather than a bogus
@@ -372,6 +384,12 @@ the run ended**, and every writer result carries:
   contract under `## Agreed caveats (evaluator requirements)`, so the generator implements them and
   the evaluator grades them; a conductor driving the loop itself must carry them in the same way
   rather than dropping them.
+- **`runnerVersion`** — the Sparra code that produced the envelope, `<package version>+<short HEAD>`.
+  The `sparra-run` MCP server imports `src/**` once at launch and `tsx` does **not** hot-reload, so a
+  fix landed on disk does not reach an already-running server. Compare against
+  `git -C <sparra> rev-parse --short HEAD`: a mismatch means **restart the MCP server**, not that the
+  fix is wrong. (Field: two `degraded` runs whose denials a committed holdout fix had already
+  addressed, with no way to tell whether the run had it.)
 - **`degraded: true` + `deniedInputs: [{tool, target, reason}]`** — the guard **refused one or more
   of the role's reads**, so whatever it produced was built without an input it went looking for.
   Independent of the classification matrix below (a degraded run can still be `ok`), because a
@@ -446,6 +464,16 @@ usable verdict-shaped reply the recovered verdict is parsed into `result.verdict
 **stay set** (cap telemetry is never laundered). A failed/disabled re-ask, or a provider-limit death
 (resuming a limited session is futile — mirrors the generator rule), leaves today's **forced-fail
 "no verdict parsed" verdict** so the conductor can decide a full re-eval. Fires at most once.
+
+**Keep-alive over MCP.** An MCP client aborts a tool call that sends nothing for its idle window
+(observed: `sent no response or progress for 1800s`), and the runs that go quiet are the
+**verify-heavy** ones — a unit with two `xcodebuild` gates plus a determinism rerun spends long
+stretches inside a single `Bash` call with nothing crossing the boundary, so the guard reliably
+killed exactly the runs that had cost the most. When the client supplies a `progressToken`, the
+`run_role` tool emits a `notifications/progress` keep-alive every 60s for the life of the call
+(`src/mcp/heartbeat.ts`). It is a liveness signal about the **tool call**, not the model: a
+genuinely wedged session keeps beating, so every message carries the **elapsed time** and the
+decision to cancel stays with the conductor watching that number climb.
 
 **Live progress (non-evaluator roles).** A backgrounded role streams its transcript to disk as it
 works (`TraceWriter` appends per step). For a **non-evaluator** role the result and MCP payload

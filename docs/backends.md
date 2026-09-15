@@ -129,6 +129,24 @@ naming the mutated files. Set `exercise.sandbox: read-only` to keep the strict p
 (scratch-needing tools will `EPERM`). The **Claude** evaluator exercises via an in-process runner
 and is unaffected.
 
+**Build output is not an artifact write.** The protected surface excludes well-known
+build-output/module-cache paths regardless of the project's own `.gitignore`, matched as *families*
+rather than literal names — a derived-data root under any spelling (`DerivedData`, `.derivedData`,
+`derived-data`, `.derivedData-load`), an Xcode `*.build` intermediates dir, a `*.noindex` build dir,
+`.build`, `.swiftpm-home/`, any `.cache/clang/ModuleCache` run (see
+[build loop](build-loop.md#holdout--isolation-wall-optional)). Otherwise running the very gates the
+contract demands voids the verdict: a judge that built into `.derivedData-load` had 7,664 compiler
+intermediates counted as injected files and a 93.0/80 pass reported as `verdict: fail`.
+
+**A judge that wants to WRITE has somewhere to put it.** Writing an adversarial probe is a
+legitimate and valuable thing for a judge to do, so every writable judge's task carries a
+**WRITABLE SCRATCH** note (`judgeWriteScratchText` in `src/build/judgeScratch.ts`): `$TMPDIR` is
+redirected per session to a scratch root outside the workspace, `mktemp -d` lands there, and a probe
+that must compile inside the package should work on a **copy** of the tree. Without being told,
+a judge that wanted a probe reached for the only tree it knew about — the artifact — and traded a
+good probe for a distrusted verdict. Read-only judges don't get the note (their writes are blocked
+anyway).
+
 #### `exercise.sandbox: danger-full-access` — when writable scratch isn't the problem
 
 Some gates aren't starved of scratch, they're **denied by policy**: an **iOS/macOS** exercise talks to

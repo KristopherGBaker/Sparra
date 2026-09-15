@@ -88,7 +88,8 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   relevant to an item; the generator/contract-generator then prefer the CODEBASE_MAP section(s)
   covering those seams (plus a listing of the files) over a blind head-slice of the map. Paths only —
   no file bodies. Omitted → the head-slice (unchanged). Editable in `items.json`. See `docs/build-loop.md`.
-- **`build.maxBudgetUsdPerItem` / `maxTokensPerItem` / `zeroCostTokenCap`** — per-item caps;
+- **`build.maxBudgetUsdPerItem` / `maxTokensPerItem` / `zeroCostTokenCap`** — per-item caps (the USD
+  cap is **pre-re-ask**: a capped run may add one ≤ $4 recovery turn — size for `cap + min($4, cap)`);
   crossing USD/tokens halts the item `BUDGET_EXCEEDED` and the run continues. `0` = no cap.
   `zeroCostTokenCap` applies only when the USD cap is active, cost reports zero/unknown, and
   `maxTokensPerItem` is off. The standalone role surfaces override the USD cap per call:
