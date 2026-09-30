@@ -68,8 +68,8 @@ describe("bin registration", () => {
       dependencies: Record<string, string>;
     };
     expect(pkg.bin["sparra-bridge"]).toBe("./bin/sparra-bridge.mjs");
-    // Unchanged dependency set (this unit is packaging + docs only).
-    expect(Object.keys(pkg.dependencies).sort()).toEqual(["@anthropic-ai/claude-agent-sdk", "yaml", "zod"]);
+    // Pinned dependency set: the bridge packaging adds none (`@typesafe-ai/sdk` is the reflect-dedupe judge).
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(["@anthropic-ai/claude-agent-sdk", "@typesafe-ai/sdk", "yaml", "zod"]);
   });
 
   it("bin/sparra-bridge.mjs exists, is executable, and has a node shebang", () => {

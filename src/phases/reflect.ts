@@ -13,6 +13,25 @@ import { ensureDir, exists, moveFile, readText, writeText } from "../util/io.ts"
 import { loadInbox, triageUpstream, parseInbox, incrementFinding, type InboxFinding } from "./upstreamTriage.ts";
 import { appendLearning } from "../memory.ts";
 import { readHoldout, redactHoldout } from "../build/holdout.ts";
+import type { ReflectDedupeConfig } from "../config.ts";
+import {
+  createJevJudge,
+  judgeNewFindings,
+  normalizeDedupeConfig,
+  withSuggestions,
+  type JevClientFactory,
+  type PairJudge,
+} from "./reflectDedupe.ts";
+
+/** Optional semantic-dedupe inputs for `routeUpstreamFinding`; absent → exact-only routing. */
+export interface RouteOptions {
+  /** The `reflect.dedupe` config block. */
+  dedupe?: ReflectDedupeConfig;
+  /** Injected pair judge (tests); when absent the real Jev judge is built from `dedupe` + the env key. */
+  judge?: PairJudge;
+  /** Injected SDK-client factory for the real judge (tests). */
+  clientFactory?: JevClientFactory;
+}
 
 /** The user-level Sparra home (cross-project), overridable via SPARRA_HOME (mirrors SPARRA_DEBUG). */
 export function sparraHome(): string {
@@ -44,10 +63,21 @@ function extractGist(text: string): string {
  * ONLY recurrences adds NO new inbox file — returns null. Fail-safe: an unmatched `RECURRENCE-OF`
  * tag is treated as a NEW finding (never silently dropped).
  *
+ * Opt-in semantic dedupe (`options.dedupe.enabled`, see `reflectDedupe.ts`): AFTER the exact path, each
+ * still-NEW finding is judged pairwise against every live finding. A very-high-confidence same-defect
+ * match bumps that finding's counter in place (no new entry); a middle-band match is surfaced as a
+ * `POSSIBLE-RECURRENCE-OF:` line under the new finding's heading. Fail-open: a disabled/unconfigured
+ * matcher or any judge failure leaves the exact-only result untouched.
+ *
  * Collision-safe: two concurrent new-finding routings with the same stamp still produce distinct
  * files via a non-time randomUUID token (no cross-process lock needed).
  */
-export async function routeUpstreamFinding(project: string, stamp: string, content: string): Promise<string | null> {
+export async function routeUpstreamFinding(
+  project: string,
+  stamp: string,
+  content: string,
+  options: RouteOptions = {},
+): Promise<string | null> {
   const dir = upstreamInboxDir();
   await ensureDir(dir);
 
@@ -69,6 +99,8 @@ export async function routeUpstreamFinding(project: string, stamp: string, conte
   const newParts: string[] = [];
   let hasNewFinding = false;
   const incrementTargets: InboxFinding[] = [];
+  // Slots in `newParts` holding findings that survived the exact path (candidates for semantic dedupe).
+  const pending: { part: number; text: string }[] = [];
 
   for (const seg of segments) {
     if (seg.kind === "text") {
@@ -86,8 +118,42 @@ export async function routeUpstreamFinding(project: string, stamp: string, conte
       }
       // Unmatched RECURRENCE-OF → fail-safe to NEW
     }
+    pending.push({ part: newParts.length, text: seg.text });
     newParts.push(seg.text);
     hasNewFinding = true;
+  }
+
+  // Semantic dedupe of the still-new findings (opt-in; skipped → exact-only result, unchanged).
+  const dedupeCfg = options.dedupe;
+  if (dedupeCfg?.enabled === true && pending.length > 0 && liveFindings.length > 0) {
+    const cfg = normalizeDedupeConfig(dedupeCfg);
+    const judge = options.judge ?? createJevJudge(cfg, options.clientFactory);
+    if (!judge) {
+      warn(`reflect.dedupe is enabled but $${cfg.apiKeyEnv} is not set — using exact RECURRENCE-OF matching only.`);
+    } else {
+      const { decisions, failures, errorNames } = await judgeNewFindings(pending.map((p) => p.text), liveFindings, judge, cfg);
+      if (failures > 0) {
+        warn(`reflect.dedupe: ${failures} pair judgment(s) failed (${errorNames.join(", ")}) — treated as no match.`);
+      }
+      let suggested = 0;
+      const dropped = new Set<number>();
+      decisions.forEach((d, i) => {
+        const slot = pending[i]!;
+        if (d.mergeInto) {
+          incrementTargets.push(d.mergeInto.finding);
+          dropped.add(slot.part);
+          info(`Semantic recurrence: merged into "${d.mergeInto.finding.title}" (p=${d.mergeInto.same.toFixed(2)}).`);
+        } else if (d.suggestions.length > 0) {
+          newParts[slot.part] = withSuggestions(slot.text, d.suggestions);
+          suggested += d.suggestions.length;
+        }
+      });
+      if (suggested > 0) info(`Semantic recurrence: ${suggested} possible-recurrence suggestion(s) added (see POSSIBLE-RECURRENCE-OF lines).`);
+      if (dropped.size > 0) {
+        for (const idx of [...dropped].sort((a, b) => b - a)) newParts.splice(idx, 1);
+        hasNewFinding = pending.length > dropped.size;
+      }
+    }
   }
 
   // Apply increments: group by file, apply sequentially to an in-memory string.
@@ -380,6 +446,10 @@ export async function cmdReflect(
     reason?: string;
     now?: () => Date;
     runSessionFn?: (p: RunSessionParams) => Promise<RunResult>;
+    /** Test seam: injected semantic-dedupe judge (production builds the real Jev judge from config). */
+    dedupeJudge?: PairJudge;
+    /** Test seam: injected SDK-client factory for the real Jev judge. */
+    dedupeClientFactory?: JevClientFactory;
   } = {}
 ): Promise<void> {
   if (opts.upstream)
@@ -535,7 +605,11 @@ Write ONLY inside ${path.relative(ctx.root, outDir)}/.`;
   if (exists(upstreamFile)) {
     const content = (await readText(upstreamFile)) ?? "";
     if (content.trim()) {
-      const dest = await routeUpstreamFinding(path.basename(ctx.root), stamp, redactHoldout(content, await readHoldout(ctx)));
+      const dest = await routeUpstreamFinding(path.basename(ctx.root), stamp, redactHoldout(content, await readHoldout(ctx)), {
+        dedupe: ctx.config.reflect?.dedupe,
+        judge: opts.dedupeJudge,
+        clientFactory: opts.dedupeClientFactory,
+      });
       if (dest) {
         ok(`Harness-level findings → ${dest}`);
         info(`Triage them in the Sparra repo with ${color.bold("sparra reflect --upstream")}.`);

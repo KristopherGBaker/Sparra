@@ -612,6 +612,33 @@ export interface SparraConfig {
    * `src/scriptHooks.ts` (`runScriptHooks`) and docs/configuration.md.
    */
   scriptHooks: ScriptHooks;
+
+  /** `reflect` phase knobs. */
+  reflect: {
+    /** Opt-in semantic recurrence matching for the upstream (harness-level) inbox. */
+    dedupe: ReflectDedupeConfig;
+  };
+}
+
+/**
+ * Semantic dedupe of routed harness findings against the live upstream inbox via TypeSafe's Jev
+ * model (`src/phases/reflectDedupe.ts`). Enabling it SENDS holdout-redacted finding text to TypeSafe.
+ */
+export interface ReflectDedupeConfig {
+  /** Opt-in. Off → exact `RECURRENCE-OF` routing only, byte-identical to before. */
+  enabled: boolean;
+  /** Pinned Jev version ID (not the moving `jev-latest` alias). */
+  model: string;
+  /** NAME of the env var holding the TypeSafe API key — never the key itself. */
+  apiKeyEnv: string;
+  /** Noul score ≥ this (and relation `same_defect`) auto-merges into the live finding. */
+  autoThreshold: number;
+  /** Noul score ≥ this (below auto) surfaces a `POSSIBLE-RECURRENCE-OF:` suggestion. */
+  suggestThreshold: number;
+  /** Max suggestion lines per new finding. */
+  maxSuggestions: number;
+  /** Max concurrent pair-judge requests. */
+  concurrency: number;
 }
 
 function role(model: ModelRef, effort?: RoleConfig["effort"]): RoleConfig {
@@ -726,6 +753,17 @@ export function defaultConfig(): SparraConfig {
     },
     docsDir: "",
     scriptHooks: {},
+    reflect: {
+      dedupe: {
+        enabled: false,
+        model: "jev-1.13.0",
+        apiKeyEnv: "TYPESAFE_API_KEY",
+        autoThreshold: 0.9,
+        suggestThreshold: 0.5,
+        maxSuggestions: 3,
+        concurrency: 8,
+      },
+    },
   };
 }
 
