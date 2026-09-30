@@ -10,7 +10,7 @@ import { cmdSnapshot, cmdFreeze } from "./phases/freeze.ts";
 import { cmdPrototype, cmdLogFinding } from "./phases/prototype.ts";
 import { cmdBuild } from "./phases/build.ts";
 import { parseSteps } from "./build/interactive.ts";
-import { cmdReflect } from "./phases/reflect.ts";
+import { cmdReflect, type ShippedSeams } from "./phases/reflect.ts";
 import { cmdBatch } from "./phases/batch.ts";
 import { cmdStatus } from "./phases/status.ts";
 import { cmdNew } from "./phases/new.ts";
@@ -48,8 +48,8 @@ ${color.bold("Commands")}
                                                 Phase C: autonomous generator/evaluator loop (resumable; --step pauses for human steering)
   reflect [--apply] [--run <runId>] [--traces <glob-or-dir>]
                                                 self-improvement: propose/apply prompt edits from build or role-run traces
-  reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "<text>"] [--clear]
-                                                list harness-level findings ranked by recurrence ×N DESC (global 1-based index) in the shared inbox (~/.sparra/reflections); --done/--wontdo triage individual findings to archive/; --clear archives ALL
+  reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "<text>"] [--clear] [--check-shipped [--commits <n>]]
+                                                list harness-level findings ranked by recurrence ×N DESC (global 1-based index) in the shared inbox (~/.sparra/reflections); --done/--wontdo triage individual findings to archive/; --clear archives ALL; --check-shipped (alone, not with --done/--wontdo/--clear) lists, then judges each finding against the last --commits <n> non-merge commits (default reflect.shippedCheck.commits) via TypeSafe Jev and PRINTS a ready-to-run --done suggestion for findings a commit already fixed — never triages; sends finding + commit text to TypeSafe, needs the reflect.dedupe.apiKeyEnv key (unset → warn, skipped)
   prompts [status|sync|audit [--apply] [--source default|effective]] [--role <r>] [--dry-run]
                                                 compare/sync .sparra/prompts with the built-in defaults; audit = concision review (--apply coverage-gated; --source default audits DEFAULT_PROMPTS, report-only)
   batch [-k N]                                  run N builds of the frozen plan; summarize failures
@@ -99,6 +99,9 @@ export const HOOKABLE_PHASES: ReadonlySet<string> = new Set([
   "batch",
 ]);
 
+/** Test seams `dispatchPhase` forwards to `cmdReflect` (injected `--check-shipped` judge/factory/commit source). */
+export type ReflectDeps = ShippedSeams;
+
 /** The body of one hookable phase — extracted so `dispatchPhase` can wrap it with `withPhaseHooks`
  *  without duplicating the existing case logic. */
 async function runPhaseBody(
@@ -106,6 +109,7 @@ async function runPhaseBody(
   ctx: Awaited<ReturnType<typeof loadCtx>>,
   positionals: string[],
   flags: Record<string, unknown>,
+  reflectDeps: ReflectDeps = {},
 ): Promise<void> {
   switch (cmd) {
     case "orient":
@@ -137,6 +141,9 @@ async function runPhaseBody(
         done: flags.done as string | boolean | undefined,
         wontdo: flags.wontdo as string | boolean | undefined,
         reason: typeof flags.reason === "string" ? flags.reason : undefined,
+        checkShipped: flags["check-shipped"] as boolean | string | undefined,
+        commits: flags.commits as string | boolean | undefined,
+        ...reflectDeps,
       });
       break;
     case "batch":
@@ -156,10 +163,16 @@ export async function dispatchPhase(
   ctx: Awaited<ReturnType<typeof loadCtx>>,
   positionals: string[],
   flags: Record<string, unknown>,
-  deps: PhaseHooksDeps = {},
+  deps: PhaseHooksDeps & ReflectDeps = {},
 ): Promise<void> {
   if (HOOKABLE_PHASES.has(cmd)) {
-    const result = await withPhaseHooks(cmd, ctx, () => runPhaseBody(cmd, ctx, positionals, flags), deps);
+    const { shippedJudge, shippedClientFactory, commitSource } = deps;
+    const result = await withPhaseHooks(
+      cmd,
+      ctx,
+      () => runPhaseBody(cmd, ctx, positionals, flags, { shippedJudge, shippedClientFactory, commitSource }),
+      deps,
+    );
     if (!result.ok) {
       const gf = result.gateFailure;
       err(

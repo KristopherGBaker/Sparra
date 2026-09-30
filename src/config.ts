@@ -617,7 +617,23 @@ export interface SparraConfig {
   reflect: {
     /** Opt-in semantic recurrence matching for the upstream (harness-level) inbox. */
     dedupe: ReflectDedupeConfig;
+    /** `sparra reflect --upstream --check-shipped`: flag inbox findings a recent commit already fixed. */
+    shippedCheck: ReflectShippedCheckConfig;
   };
+}
+
+/**
+ * Knobs for the explicit `--check-shipped` check (`src/phases/reflectShipped.ts`). The model and API
+ * key come from `reflect.dedupe`; the flag itself is the consent to send inbox finding text and
+ * commit messages to TypeSafe, so `reflect.dedupe.enabled` is NOT required.
+ */
+export interface ReflectShippedCheckConfig {
+  /** Most recent non-merge commits of the repo sparra runs in that each live finding is judged against. */
+  commits: number;
+  /** Noul score ≥ this (and choice `fixes`) makes a "likely shipped" suggestion. */
+  threshold: number;
+  /** Max concurrent pair-judge requests. */
+  concurrency: number;
 }
 
 /**
@@ -763,6 +779,7 @@ export function defaultConfig(): SparraConfig {
         maxSuggestions: 3,
         concurrency: 8,
       },
+      shippedCheck: { commits: 30, threshold: 0.8, concurrency: 8 },
     },
   };
 }

@@ -22,6 +22,14 @@ import {
   type JevClientFactory,
   type PairJudge,
 } from "./reflectDedupe.ts";
+import {
+  runShippedCheck,
+  validateShippedFlags,
+  type CommitSource,
+  type ShippedCheckOptions,
+  type ShippedClientFactory,
+  type ShippedJudge,
+} from "./reflectShipped.ts";
 
 /** Optional semantic-dedupe inputs for `routeUpstreamFinding`; absent → exact-only routing. */
 export interface RouteOptions {
@@ -31,6 +39,16 @@ export interface RouteOptions {
   judge?: PairJudge;
   /** Injected SDK-client factory for the real judge (tests). */
   clientFactory?: JevClientFactory;
+}
+
+/** Test seams for `--check-shipped`; production leaves all unset (real Jev judge + real `git log`). */
+export interface ShippedSeams {
+  /** Injected (finding, commit) judge. */
+  shippedJudge?: ShippedJudge;
+  /** Injected SDK-client factory for the real judge. */
+  shippedClientFactory?: ShippedClientFactory;
+  /** Injected commit reader. */
+  commitSource?: CommitSource;
 }
 
 /** The user-level Sparra home (cross-project), overridable via SPARRA_HOME (mirrors SPARRA_DEBUG). */
@@ -207,6 +225,8 @@ async function showUpstream(opts: {
   wontdo?: string | boolean;
   reason?: string;
   now?: () => Date;
+  /** `--check-shipped`: after the listing, print `--done` suggestions for findings a recent commit fixed. */
+  shipped?: { ctx: Ctx } & ShippedCheckOptions;
 }): Promise<void> {
   banner("REFLECT · UPSTREAM");
   const dir = upstreamInboxDir();
@@ -244,6 +264,7 @@ async function showUpstream(opts: {
         `or ${color.bold("--clear")} to archive all.`
     );
   }
+  if (opts.shipped) await runShippedCheck(opts.shipped.ctx, findings, opts.shipped);
 }
 
 function listReflectDirs(reflectRoot: string): string[] {
@@ -450,10 +471,25 @@ export async function cmdReflect(
     dedupeJudge?: PairJudge;
     /** Test seam: injected SDK-client factory for the real Jev judge. */
     dedupeClientFactory?: JevClientFactory;
-  } = {}
+    /** `--check-shipped` (with `--upstream`): flag inbox findings a recent commit already fixed. */
+    checkShipped?: boolean | string;
+    /** `--commits <n>`: how many recent commits `--check-shipped` compares against (needs `--check-shipped`). */
+    commits?: string | number | boolean;
+  } & ShippedSeams = {}
 ): Promise<void> {
+  // Validate FIRST: a bad flag combination must reach no judge, client, or model session.
+  const shipped = validateShippedFlags(opts);
   if (opts.upstream)
-    return showUpstream({ clear: opts.clear, done: opts.done, wontdo: opts.wontdo, reason: opts.reason, now: opts.now });
+    return showUpstream({
+      clear: opts.clear,
+      done: opts.done,
+      wontdo: opts.wontdo,
+      reason: opts.reason,
+      now: opts.now,
+      shipped: shipped.check
+        ? { ctx, commits: shipped.commits, judge: opts.shippedJudge, clientFactory: opts.shippedClientFactory, commitSource: opts.commitSource }
+        : undefined,
+    });
   if (opts.apply) return applyReflection(ctx);
   const run = opts.runSessionFn ?? runSession;
 

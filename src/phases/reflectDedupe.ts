@@ -26,13 +26,16 @@ export interface PairVerdict {
 /** Judge one (new, live) pair. Rejects on any failure — callers treat a rejection as "no match". */
 export type PairJudge = (findingA: string, findingB: string) => Promise<PairVerdict>;
 
-/** The slice of `TypeSafeClient` the judge uses — small so tests inject a fake. */
-export interface JevClient {
-  systemOne(request: { state: { finding_a: string; finding_b: string }; questions: JevQuestions; model: string }): PromiseLike<unknown>;
+/**
+ * The slice of `TypeSafeClient` a judge uses — small so tests inject a fake. State/questions are
+ * generic so `reflectShipped.ts` reuses the seam with its own (finding, commit) request shape.
+ */
+export interface JevClient<State = { finding_a: string; finding_b: string }, Questions = JevQuestions> {
+  systemOne(request: { state: State; questions: Questions; model: string }): PromiseLike<unknown>;
 }
 
 /** Builds the SDK client. Must not touch the network (the real constructor doesn't). */
-export type JevClientFactory = (init: { apiKey: string; model: string }) => JevClient;
+export type JevClientFactory<Client = JevClient> = (init: { apiKey: string; model: string }) => Client;
 
 /** Each finding is clipped to this many characters (title + body) before a request is built. */
 export const MAX_FINDING_CHARS = 1200;
@@ -75,6 +78,11 @@ export function clipFinding(text: string): string {
     .filter((l) => !/^<!-- sparra-/.test(l) && !/^POSSIBLE-RECURRENCE-OF:/.test(l))
     .join("\n")
     .trim();
+  return clipChars(cleaned);
+}
+
+/** Clip to `MAX_FINDING_CHARS` without splitting a surrogate pair (shared with the shipped check's commit text). */
+export function clipChars(cleaned: string): string {
   if (cleaned.length <= MAX_FINDING_CHARS) return cleaned;
   let end = MAX_FINDING_CHARS;
   const last = cleaned.charCodeAt(end - 1);
