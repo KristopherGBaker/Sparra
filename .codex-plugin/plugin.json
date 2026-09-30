@@ -1,6 +1,6 @@
 {
   "name": "sparra",
-  "version": "0.1.0-jevshipped0930",
+  "version": "0.1.0-jevshadow0930",
   "description": "Conduct Sparra's adversarial cross-model build and evaluation loop from Codex.",
   "author": {
     "name": "Kristopher Baker",
