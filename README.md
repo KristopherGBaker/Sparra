@@ -140,6 +140,7 @@ Sparra is a harness, not a fixed pipeline. The [iOS/macOS support](docs/ios.md) 
 | [Agent backends](docs/backends.md) | Claude + Codex, per-role backends, OpenAI-compatible endpoints, skills |
 | [iOS / macOS](docs/ios.md) | Simulator builds, `xcodebuildmcp`, XcodeGen, multimodal UI grading |
 | [Configuration](docs/configuration.md) | every knob, the `.sparra/` on-disk layout, resuming |
+| [Jev judgments](docs/jev.md) | the opt-in TypeSafe Jev seams (reflect dedupe, shipped check, env-blocked annotation, conduct shadow), their design rules and evidence, and untried candidates |
 
 ## Requirements
 
@@ -147,6 +148,7 @@ Sparra is a harness, not a fixed pipeline. The [iOS/macOS support](docs/ios.md) 
   and `sparra-run-mcp` are on `PATH`.
 - At least one agent backend: an **Anthropic credential** (`ANTHROPIC_API_KEY` or a Claude Code
   login), or `npm i @openai/codex-sdk` plus an authenticated **Codex CLI**. → [docs/backends.md](docs/backends.md)
+- Optional **TypeSafe Jev** judgments (all off by default): a `TYPESAFE_API_KEY` in your environment. → [docs/jev.md](docs/jev.md)
 - Optional **iOS/macOS** exercising: macOS + Xcode + a Simulator + `xcodebuildmcp` + `xcodegen`. → [docs/ios.md](docs/ios.md)
 
 No build step — the bins run the TypeScript directly via `tsx`, so a `git pull` takes effect immediately.

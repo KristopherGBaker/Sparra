@@ -160,6 +160,10 @@ knob list is also in `docs/configuration.md`. The few that matter most:
   gate, and cross-model re-grade gate (all off by default; see subskill for semantics).
 - **`evaluator.envBlockJudge`** — opt-in Jev annotation of failed assertions that likely couldn't
   run in the grader's sandbox; freezes their pivot streaks, never changes the verdict (off by default).
+- **TypeSafe Jev knobs** (`envBlockJudge`, `reflect.dedupe`, `--check-shipped`, `conduct.shadowJudge`)
+  all need `$TYPESAFE_API_KEY` (never in config), are fail-open, and only annotate/suggest — never grade.
+  Before proposing a NEW Jev use, read **[docs/jev.md](../../docs/jev.md)**: its design rules, and the
+  candidates already tested and rejected (contract overreach, rubber-stamp passes).
 - **`git.autoCommit` / `pullBeforeWork`**, **`build.skills` / `extraReadDirs`**, **`scriptHooks`** —
   per-item conventional commits, pre-build ff-only sync, agent skills per role, extra read-only
   dirs, and external lifecycle hooks.
