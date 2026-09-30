@@ -271,6 +271,47 @@ describe("parseVerdict — un-run parity", () => {
     expect(verdict.scores.functionality).toBe(67);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  const STRING_ID_JSON =
+    "```json\n" +
+    JSON.stringify({
+      assertions: [
+        { id: 1, pass: true, evidence: "ok" },
+        { id: "6b", pass: false, evidence: "sub-assertion observed failure" },
+        { id: "H4", pass: false, evidence: "holdout gate could not execute: simctl unavailable" },
+      ],
+      unrunAssertionIds: ["H4"],
+      scores: { design: 90, originality: 90, craft: 90, functionality: 95 },
+      verdict: "fail",
+      blocking: ["6b failed"],
+      notes: "H4 UN-RUN",
+    }) +
+    "\n```";
+
+  it("preserves non-numeric assertion ids (\"6b\", \"H4\") and honors a string un-run id in the cap", async () => {
+    const { ctx, dir } = await makeCtx(false);
+    const verdict = parseVerdict(ctx, STRING_ID_JSON, "mixed");
+    expect(verdict.assertions.map((a) => a.id)).toEqual([1, "6b", "H4"]);
+    expect(verdict.unrunAssertionIds).toEqual(["H4"]);
+    expect(verdict.scores.functionality).toBe(50); // 1/2 runnable (6b counted, H4 not)
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("runRole renders string ids verbatim in the persisted verdict: #6b under Failed, #H4 under Un-run, no NaN", async () => {
+    const { ctx, dir } = await makeCtx();
+    const r = await runRole({ ctx, roleKind: "evaluator", brief: "grade", runSessionFn: recorder(STRING_ID_JSON).fn });
+    const body = fs.readFileSync(r.verdictPath!, "utf8");
+    expect(body).not.toContain("NaN");
+    expect(body).toContain("- un-run assertions: #H4");
+    expect(body).toContain("## Failed assertions (1/2 runnable)");
+    const failed = body.split("## Failed assertions")[1]!.split("## Un-run assertions")[0]!;
+    const unrunSection = body.split("## Un-run assertions (no signal)")[1]!.split("## Blocking")[0]!;
+    expect(failed).toContain("- #6b: sub-assertion observed failure");
+    expect(failed).not.toContain("#H4");
+    expect(unrunSection).toContain("- #H4: holdout gate could not execute");
+    expect(unrunSection).not.toContain("#6b");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("runRole — safety intent + wiring", () => {

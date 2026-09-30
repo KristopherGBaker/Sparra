@@ -258,3 +258,53 @@ describe("assertionsToEscalate — escalation trigger set (U2)", () => {
     expect(assertionsToEscalate({ "2": 9 }, unrun, 2)).toEqual([]);
   });
 });
+
+describe("assertion streaks — non-numeric ids (\"6a\", \"6b\") keep SEPARATE keys", () => {
+  it("two distinct failing string ids get separate streak keys (no shared NaN key)", () => {
+    const v = assertionVerdict([
+      { id: "6a", pass: false, evidence: "a" },
+      { id: "6b", pass: false, evidence: "b" },
+    ]);
+    const first = updateAssertionStreaks(assertionItem(), v);
+    expect(first).toEqual({ "6a": 1, "6b": 1 });
+    expect(first["NaN"]).toBeUndefined();
+    const second = updateAssertionStreaks(assertionItem(first), assertionVerdict([{ id: "6b", pass: false, evidence: "b" }, { id: "6a", pass: true, evidence: "ok" }]));
+    expect(second).toEqual({ "6a": 0, "6b": 2 });
+  });
+
+  it("a tracked \"6b\" streak resets to 0 when 6b passes, and a tracked key ABSENT from the verdict also resets", () => {
+    const passed = updateAssertionStreaks(assertionItem({ "6b": 3 }), assertionVerdict([{ id: "6b", pass: true, evidence: "ok" }, { id: 1, pass: false, evidence: "x" }]));
+    expect(passed["6b"]).toBe(0);
+    expect(passed["1"]).toBe(1);
+    const absent = updateAssertionStreaks(assertionItem({ "6b": 3 }), assertionVerdict([{ id: 1, pass: false, evidence: "x" }]));
+    expect(absent["6b"]).toBe(0);
+  });
+
+  it("a tracked \"6b\" streak is untouched when 6b is un-run", () => {
+    const v = assertionVerdict(
+      [{ id: "6b", pass: false, evidence: "env" }, { id: 1, pass: false, evidence: "real" }],
+      { unrunAssertionIds: ["6b"] },
+    );
+    const out = updateAssertionStreaks(assertionItem({ "6b": 3 }), v);
+    expect(out["6b"]).toBe(3);
+    expect(out["1"]).toBe(1);
+  });
+
+  it("compares by key across number/string forms (verdict id 7 vs un-run \"7\")", () => {
+    const v = assertionVerdict([{ id: 7, pass: false, evidence: "env" }, { id: 1, pass: false, evidence: "real" }], {
+      unrunAssertionIds: ["7"],
+    });
+    const out = updateAssertionStreaks(assertionItem({ "7": 2 }), v);
+    expect(out["7"]).toBe(2);
+    expect(assertionsToEscalate({ "7": 9, "1": 9 }, v, 2)).toEqual([1]);
+  });
+
+  it("assertionsToEscalate returns \"6b\" at threshold, not below, and never an un-run string id", () => {
+    const v = assertionVerdict([
+      { id: "6b", pass: false, evidence: "b" },
+      { id: "H4", pass: false, evidence: "env" },
+    ], { unrunAssertionIds: ["H4"] });
+    expect(assertionsToEscalate({ "6b": 2, H4: 9 }, v, 2)).toEqual(["6b"]);
+    expect(assertionsToEscalate({ "6b": 1 }, v, 2)).toEqual([]);
+  });
+});

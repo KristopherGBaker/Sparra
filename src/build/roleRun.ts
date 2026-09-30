@@ -24,7 +24,8 @@ import { contractModeClauses, deviationPolicy, rubricText, calibrationText, exis
 import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION, RETIRED_HOLDOUT_INSTRUCTION } from "./contract.ts";
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
-import { RUBRIC_CRITERIA, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict } from "./types.ts";
+import { assertionKey, assertionKeySet, normalizeAssertionId, normalizeUnrunIds } from "./assertionId.ts";
+import { RUBRIC_CRITERIA, type AssertionId, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
@@ -719,11 +720,10 @@ function parseExerciseStatus(v: unknown): ExerciseStatus {
   return v === "blocked" || v === "mixed" ? v : "ran";
 }
 
-function unrunIdsFrom(v: unknown): number[] {
+function unrunIdsFrom(v: unknown): AssertionId[] {
   const raw = v as { unrunAssertionIds?: unknown; unRunAssertionIds?: unknown; unrunAssertions?: unknown };
   const arr = raw?.unrunAssertionIds ?? raw?.unRunAssertionIds ?? raw?.unrunAssertions;
-  if (!Array.isArray(arr)) return [];
-  return [...new Set(arr.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  return normalizeUnrunIds(arr);
 }
 
 /** Parse the raw `holdoutContradictions` off a model verdict into typed entries (defensive: ignores
@@ -741,9 +741,9 @@ function holdoutContradictionsFrom(v: unknown): HoldoutContradiction[] {
     }));
 }
 
-function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[]): Verdict["assertions"] {
-  const unrun = new Set(unrunIds);
-  return assertions.filter((a) => !unrun.has(a.id));
+function runnableAssertions(assertions: Verdict["assertions"], unrunIds: AssertionId[]): Verdict["assertions"] {
+  const unrun = assertionKeySet(unrunIds);
+  return assertions.filter((a) => !unrun.has(assertionKey(a.id)));
 }
 
 /** Fill the union of placeholders the standard role prompts use. Unknown placeholders are
@@ -955,13 +955,13 @@ function renderInteractiveVerdict(
   fallbackFrom?: { backend: string; model?: string },
   retired: RetiredHoldout[] = []
 ): string {
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
-  const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  const failed = verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
   const fallbackNote = fallbackFrom ? ` — fell back from ${fallbackFrom.backend}/${fallbackFrom.model ?? "?"}` : "";
   // U3: surface the durable, holdout-SAFE retirement section (keyed by holdoutId) — "" when nothing
   // was retired, keeping the `--out` file byte-identical to today's for the no-retirement case.
   const retirementSection = retired.length ? `\n${renderRetiredHoldouts(retired)}` : "";
-  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => verdict.unrunAssertionIds?.includes(a.id)).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n`;
+  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => unrun.has(assertionKey(a.id))).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n`;
 }
 
 /** Parse + normalize an evaluator verdict the same way the build loop does.
@@ -1003,12 +1003,12 @@ export function parseVerdict(ctx: Ctx, resultText: string, harnessStatus: Exerci
   let capNote = "";
   const assertions = Array.isArray(parsed.assertions)
     ? parsed.assertions.map((a) => ({
-        id: Number((a as { id?: unknown })?.id ?? 0),
+        id: normalizeAssertionId((a as { id?: unknown })?.id),
         pass: Boolean((a as { pass?: unknown })?.pass),
         evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
       }))
     : [];
-  const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
+  const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => assertionKey(a.id) === assertionKey(id)));
   if (ctx.config.rubric.anchorFunctionality) {
     const runnable = runnableAssertions(assertions, unrunAssertionIds);
     const passed = runnable.filter((a) => a.pass).length;

@@ -24,11 +24,15 @@ export interface WorkItem {
 
 export type ExerciseStatus = "ran" | "blocked" | "mixed";
 
+/** A verdict assertion id: plain integers, or labels like `"6b"` / `"H4"`. Normalize with
+ *  `normalizeAssertionId` and compare by `assertionKey` (both in `assertionId.ts`). */
+export type AssertionId = number | string;
+
 export interface Verdict {
-  assertions: { id: number; pass: boolean; evidence: string }[];
+  assertions: { id: AssertionId; pass: boolean; evidence: string }[];
   /** Assertion ids the evaluator could not execute for an environment/tooling reason. These are
    *  no-signal, distinct from failed assertions, and excluded from assertion-anchored caps. */
-  unrunAssertionIds?: number[];
+  unrunAssertionIds?: AssertionId[];
   scores: { design: number; originality: number; craft: number; functionality: number };
   weightedTotal: number;
   verdict: "pass" | "fail";
@@ -40,7 +44,7 @@ export interface Verdict {
   notes: string;
   /** Set by the build loop when the generator's `assertionsClaimed` contradicted this verdict
    *  (build/claims.ts) — the round's calibration gap (assertion ids + count only). */
-  claimMismatches?: { count: number; ids: number[] };
+  claimMismatches?: { count: number; ids: AssertionId[] };
   /** Holdout assertions the evaluator flagged CONTRACT-CONTRADICTED — each demands behavior the
    *  agreed contract explicitly forbids, or forbids behavior it explicitly mandates, citing the
    *  clause. A flag is NOT an artifact pass or fail: a VALID one (evaluate.ts validates the cited

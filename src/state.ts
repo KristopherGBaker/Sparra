@@ -1,5 +1,6 @@
 import { readJson, writeJson, exists } from "./util/io.ts";
 import type { Paths } from "./paths.ts";
+import type { AssertionId } from "./build/types.ts";
 
 export type Mode = "greenfield" | "existing";
 
@@ -40,7 +41,7 @@ export interface ItemState {
     round: number;
     verdictPath: string;
     blocking: string[];
-    failedAssertions: { id: number; evidence: string }[];
+    failedAssertions: { id: AssertionId; evidence: string }[];
   };
   /** Cumulative USD spent on this item across all rounds (feeds the budget guard). */
   costUsd?: number;

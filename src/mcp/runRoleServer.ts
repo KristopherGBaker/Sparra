@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
 import { runRole, defaultRoleRunTraceDir, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
+import { assertionKey, assertionKeySet } from "../build/assertionId.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { sessionsPath } from "../sdk/session.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
@@ -140,8 +141,8 @@ export function buildRunRolePayload(
         // excludes it from the persisted verdict's "Failed assertions" section. Keeps a conductor's
         // stop report and re-grade feedback from treating no-signal as a real bounce.
         failedAssertions: (() => {
-          const unrun = new Set(r.verdict.unrunAssertionIds ?? []);
-          return r.verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
+          const unrun = assertionKeySet(r.verdict.unrunAssertionIds);
+          return r.verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
         })(),
         // The auto-persisted redacted verdict (always written for the evaluator) — surfaced so the
         // conductor/reflect can find it. Distinct from the caller-chosen `outPath`. Holdout-safe:

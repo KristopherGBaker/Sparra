@@ -15,6 +15,8 @@ import { buildRecoverySpec, classifyRecovery, type RecoveryCaps } from "./recove
 import type { UnitOutcome } from "./types.ts";
 import type { UnitRoleSpecs } from "./roleSpecs.ts";
 import type { AttemptInput, AttemptKind } from "../build/attemptLedger.ts";
+import { assertionKey, normalizeAssertionId } from "../build/assertionId.ts";
+import type { AssertionId } from "../build/types.ts";
 
 /**
  * `src/conduct/unitRunner.ts` — the conductor-BRAIN unit orchestrations for `sparra conduct`.
@@ -78,7 +80,7 @@ export interface ConductUnitDeps {
    *  the poisoned assertion, preserving its id + rationale as an INERT annotation — never a gradeable
    *  assertion. Called ONLY when the contract-defect signature holds; the strike is immediately followed
    *  by a re-EVALUATION of the existing artifact (no generate round). */
-  strikeAssertion: (assertionId: number, rationale: string) => Promise<void>;
+  strikeAssertion: (assertionId: AssertionId, rationale: string) => Promise<void>;
   /** Publish a pivot / generalize-spec judgment decision to project memory (best-effort, serialized
    *  through the coordinator's one writer). Called at the ACTUAL decision call sites so a discarded
    *  change still teaches a later unit/run. Absent → no decision learning (deterministic path / tests). */
@@ -141,7 +143,7 @@ function resumedContract(r: { agreed: boolean; forced: boolean }): ContractNegot
 
 /** The failing assertion ids reported by one round's evaluator (already redacted to genuine failures
  *  by the runner — un-run/no-signal assertions are excluded upstream). */
-function failedAssertionIds(summary: ParentSummary): number[] {
+function failedAssertionIds(summary: ParentSummary): AssertionId[] {
   return (summary.failedAssertions ?? []).map((a) => a.id);
 }
 
@@ -156,21 +158,22 @@ function failedAssertionIds(summary: ParentSummary): number[] {
  * the failed set (it passed there, or that round failed a different id) breaks the signature, as does a
  * final round with two or more distinct failing ids.
  */
-export function detectContractDefect(rounds: ConductRoundRecord[]): number | undefined {
+export function detectContractDefect(rounds: ConductRoundRecord[]): AssertionId | undefined {
   if (rounds.length === 0) return undefined;
   const finalIds = failedAssertionIds(rounds[rounds.length - 1]!.evaluator);
   // The final round must isolate exactly ONE failing assertion (no OTHER failing ids).
   if (finalIds.length !== 1) return undefined;
   const poisoned = finalIds[0]!;
-  // That id must appear in the failed set of EVERY completed round.
+  const poisonedKey = assertionKey(poisoned);
+  // That id must appear in the failed set of EVERY completed round (compared by key).
   for (const r of rounds) {
-    if (!failedAssertionIds(r.evaluator).includes(poisoned)) return undefined;
+    if (!failedAssertionIds(r.evaluator).some((id) => assertionKey(id) === poisonedKey)) return undefined;
   }
   return poisoned;
 }
 
 /** The rationale recorded on a contract-defect strike (audit trail + inert contract annotation). */
-function contractDefectRationale(assertionId: number): string {
+function contractDefectRationale(assertionId: AssertionId): string {
   return (
     `contract-defect signature: assertion #${assertionId} failed every round while all other ` +
     `assertions passed — the artifact is correct and the assertion is the defect`
@@ -184,7 +187,7 @@ function contractDefectRationale(assertionId: number): string {
  */
 async function strikeAndReEvaluate(
   deps: ConductUnitDeps,
-  args: { poisonedId: number; round: number; priorVerdictPaths: string[]; rounds: ConductRoundRecord[] },
+  args: { poisonedId: AssertionId; round: number; priorVerdictPaths: string[]; rounds: ConductRoundRecord[] },
 ): Promise<{ outcome: UnitOutcome; finalVerdict?: ParentSummary; rounds: ConductRoundRecord[] }> {
   const { poisonedId, round, rounds } = args;
   // 1. Strike the poisoned assertion (surgical: only it becomes inert; every other assertion unchanged).
@@ -265,8 +268,11 @@ function assertionRegion(lines: string[]): [number, number] {
  *      (positional/unnumbered-bullet lists — the evaluator numbers those by order);
  *   3. else — a fully-numbered list with no matching ordinal, or a position out of range — it is
  *      UNRESOLVED (`-1`): never silently strike the wrong line.
+ * A non-numeric id (`"6b"`, `"H4"`) names no contract ordinal, so it is always UNRESOLVED (`-1`).
  */
-export function resolveAssertionLineIndex(lines: string[], assertionId: number): number {
+export function resolveAssertionLineIndex(lines: string[], id: AssertionId): number {
+  const assertionId = normalizeAssertionId(id);
+  if (typeof assertionId !== "number") return -1;
   const [start, end] = assertionRegion(lines);
   const openers: AssertionOpener[] = [];
   for (let i = start; i < end; i++) {
@@ -301,7 +307,7 @@ export function resolveAssertionLineIndex(lines: string[], assertionId: number):
  */
 export async function strikeContractAssertion(
   contractPath: string,
-  assertionId: number,
+  assertionId: AssertionId,
   rationale: string,
 ): Promise<void> {
   let text: string;

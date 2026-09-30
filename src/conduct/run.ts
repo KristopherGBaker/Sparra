@@ -14,6 +14,7 @@ import {
 } from "../../conductors/core/index.ts";
 import { runRole as coreRunRole } from "../../conductors/core/index.ts";
 import { newRunId, type Ctx } from "../context.ts";
+import type { AssertionId } from "../build/types.ts";
 import { formatRunStartAnnouncement } from "./announce.ts";
 import { makeOnRequestWritten } from "./decisionParked.ts";
 import { loadPrompt } from "../prompts.ts";
@@ -316,7 +317,7 @@ function factsFromConductRounds(rounds: ConductRoundRecord[]): {
   bestRound?: number;
   pivots: number;
   blocking: string[];
-  failedAssertions: { id: number; evidence: string }[];
+  failedAssertions: { id: AssertionId; evidence: string }[];
   verdictPath?: string;
 } {
   let bestScore: number | undefined;

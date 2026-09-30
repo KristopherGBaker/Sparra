@@ -292,6 +292,64 @@ describe("evaluateItem — exercising evaluator scratch + integrity guard", () =
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("preserves non-numeric assertion ids (\"6b\", \"H4\"): un-run string id is honored, no #NaN anywhere", async () => {
+    const { ctx, dir } = await makeCtx();
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: "6b", pass: false, evidence: "sub-assertion observed failure" },
+          { id: "H4", pass: false, evidence: "holdout gate could not execute: simctl unavailable" },
+        ],
+        unrunAssertionIds: ["H4"],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 95 },
+        verdict: "fail",
+        blocking: ["6b failed"],
+        notes: "H4 UN-RUN",
+      }) +
+      "\n```";
+    const out = await run(ctx, dir, recorder(json), cleanIntegrityDeps);
+    expect(out.verdict.assertions.map((a) => a.id)).toEqual([1, "6b", "H4"]);
+    expect(out.verdict.unrunAssertionIds).toEqual(["H4"]);
+    // Cap: runnable = {1, 6b} (H4 excluded) → 1/2 passed → 50; H4 is NOT counted as a failure.
+    expect(out.verdict.scores.functionality).toBe(50);
+    const written = fs.readFileSync(ctx.paths.verdictFile(ITEM.id, 1), "utf8");
+    expect(written).not.toContain("NaN");
+    expect(written).toContain("un-run assertions: #H4");
+    expect(written).toContain("1/2 assertions passed; 1 un-run excluded");
+    expect(written).toContain("## Failed assertions (1/2 runnable)");
+    const failed = written.split("## Failed assertions")[1]!.split("## Un-run assertions")[0]!;
+    const unrunSection = written.split("## Un-run assertions (no signal)")[1]!.split("## Blocking")[0]!;
+    expect(failed).toContain("- #6b: sub-assertion observed failure");
+    expect(failed).not.toContain("#H4");
+    expect(unrunSection).toContain("- #H4: holdout gate could not execute");
+    expect(unrunSection).not.toContain("#6b");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("numeric-string ids and un-run entries normalize to numbers; duplicates and non-positive un-run ids drop", async () => {
+    const { ctx, dir } = await makeCtx();
+    const json =
+      "```json\n" +
+      JSON.stringify({
+        assertions: [
+          { id: "1", pass: true, evidence: "ok" },
+          { id: " 2 ", pass: false, evidence: "env" },
+        ],
+        unrunAssertionIds: ["2", 2, 0, -1, "", "9"],
+        scores: { design: 90, originality: 90, craft: 90, functionality: 90 },
+        verdict: "pass",
+        blocking: [],
+        notes: "n",
+      }) +
+      "\n```";
+    const out = await run(ctx, dir, recorder(json), cleanIntegrityDeps);
+    expect(out.verdict.assertions.map((a) => a.id)).toEqual([1, 2]);
+    expect(out.verdict.unrunAssertionIds).toEqual([2]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("grants exerciseScratch on a REAL linked worktree with state.build.branch UNSET (Item E, anti-no-op)", async () => {
     const { ctx, dir } = await makeCtx();
     // A real offline git repo + linked worktree; only local `git` runs (no model/network).

@@ -1,6 +1,7 @@
 import type { SparraConfig } from "../config.ts";
 import type { ItemState } from "../state.ts";
-import { RUBRIC_CRITERIA, type Verdict } from "./types.ts";
+import { assertionKey, assertionKeySet } from "./assertionId.ts";
+import { RUBRIC_CRITERIA, type AssertionId, type Verdict } from "./types.ts";
 
 export interface PivotDecision {
   pivot: boolean;
@@ -20,8 +21,8 @@ export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config
   if (verdict.exerciseStatus === "blocked") {
     return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
   }
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
-  const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(a.id));
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(assertionKey(a.id)));
   if (allAssertionsUnrun) {
     return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
   }
@@ -60,31 +61,28 @@ export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config
 export function updateAssertionStreaks(item: ItemState, verdict: Verdict): Record<string, number> {
   const streaks = { ...(item.assertionFailStreak ?? {}) };
   if (verdict.exerciseStatus === "blocked") return streaks;
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
-  const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(a.id));
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(assertionKey(a.id)));
   if (allAssertionsUnrun) return streaks;
-  // Ids that FAILED with a live signal this round (un-run ids are no-signal, excluded).
-  const failing = new Set(verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id)).map((a) => a.id));
+  // Keys of the ids that FAILED with a live signal this round (un-run ids are no-signal, excluded).
+  const failing = new Set(verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id))).map((a) => assertionKey(a.id)));
   // Reset every previously-tracked id that is NOT failing this round and still carries a signal
   // (i.e. it is not un-run now) — a fixed/absent assertion drops back to 0.
   for (const key of Object.keys(streaks)) {
-    if (unrun.has(Number(key))) continue; // no signal — leave this id's streak as-is
-    if (!failing.has(Number(key))) streaks[key] = 0;
+    if (unrun.has(key)) continue; // no signal — leave this id's streak as-is
+    if (!failing.has(key)) streaks[key] = 0;
   }
   // Advance the failing ids.
-  for (const id of failing) {
-    const key = String(id);
-    streaks[key] = (streaks[key] ?? 0) + 1;
-  }
+  for (const key of failing) streaks[key] = (streaks[key] ?? 0) + 1;
   return streaks;
 }
 
 /** Failed assertion ids whose streak has reached the escalation threshold (`>= after`, `after > 0`).
  *  Un-run ids never qualify. Empty when escalation is disabled (`after <= 0`) or nothing is at streak. */
-export function assertionsToEscalate(streaks: Record<string, number>, verdict: Verdict, after: number): number[] {
+export function assertionsToEscalate(streaks: Record<string, number>, verdict: Verdict, after: number): AssertionId[] {
   if (after <= 0) return [];
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
   return verdict.assertions
-    .filter((a) => !a.pass && !unrun.has(a.id) && (streaks[String(a.id)] ?? 0) >= after)
+    .filter((a) => !a.pass && !unrun.has(assertionKey(a.id)) && (streaks[assertionKey(a.id)] ?? 0) >= after)
     .map((a) => a.id);
 }

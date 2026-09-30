@@ -14,6 +14,7 @@ import {
 import { JUDGMENT_OPTIONS, buildDecisionRequest, type JudgmentKind } from "../src/conduct/decision.ts";
 import { defaultConfig, type RoleConfig } from "../src/config.ts";
 import type { ParentSummary, RunRoleSpec } from "../conductors/core/index.ts";
+import type { AssertionId } from "../src/build/types.ts";
 
 // ─────────────────────────── fixtures ───────────────────────────
 const role = defaultConfig().roles.generator as RoleConfig;
@@ -55,7 +56,7 @@ function makeDeps(ctl: Ctl): {
   calls: {
     gen: number;
     eval: number;
-    strike: { id: number; rationale: string }[];
+    strike: { id: AssertionId; rationale: string }[];
     notes: { kind: JudgmentKind; answer: string; rationale?: string }[];
     judge: JudgmentKind[];
     generalize: number;
@@ -65,7 +66,7 @@ function makeDeps(ctl: Ctl): {
   const calls = {
     gen: 0,
     eval: 0,
-    strike: [] as { id: number; rationale: string }[],
+    strike: [] as { id: AssertionId; rationale: string }[],
     notes: [] as { kind: JudgmentKind; answer: string; rationale?: string }[],
     judge: [] as JudgmentKind[],
     generalize: 0,
@@ -431,5 +432,49 @@ describe("non-signature unit-exhausted path is unchanged (assertion 2)", () => {
     expect(calls.judge).toContain("unit-exhausted");
     expect(calls.judge).not.toContain("contract-defect");
     expect(calls.strike).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────── non-numeric assertion ids ("6b", "H4") ───────────────────────────
+describe("non-numeric assertion ids — detection + fail-closed strike", () => {
+  const evIds = (failedIds: (number | string)[]): ParentSummary =>
+    ({
+      roleKind: "evaluator",
+      verdict: "fail",
+      weightedTotal: 40,
+      passThreshold: 70,
+      blocking: [],
+      failedAssertions: failedIds.map((id) => ({ id, pass: false, evidence: "e" })),
+      verdictPath: "/v.md",
+    }) as unknown as ParentSummary;
+  const roundIds = (n: number, ids: (number | string)[]): ConductRoundRecord => ({ round: n, evaluator: evIds(ids), pivoted: false });
+
+  it("detectContractDefect returns \"6b\" when it failed every round and was the final round's only failure", () => {
+    const rounds = [roundIds(1, ["6b", 2]), roundIds(2, ["6b"]), roundIds(3, ["6b"])];
+    expect(detectContractDefect(rounds)).toBe("6b");
+  });
+
+  it("a different string id in an earlier round breaks the signature", () => {
+    const rounds = [roundIds(1, ["6a"]), roundIds(2, ["6b"]), roundIds(3, ["6b"])];
+    expect(detectContractDefect(rounds)).toBeUndefined();
+  });
+
+  it("resolveAssertionLineIndex → -1 for a non-numeric id, even with unnumbered bullets", () => {
+    const lines = "## Assertions\n\n- one\n- two\n".split("\n");
+    expect(resolveAssertionLineIndex(lines, "6b")).toBe(-1);
+    expect(resolveAssertionLineIndex(lines, "H4")).toBe(-1);
+  });
+
+  it("strikeContractAssertion with \"6b\" fails closed and leaves the contract byte-identical", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strike-"));
+    try {
+      const file = path.join(dir, "contract.md");
+      const original = "# Contract\n\n## Assertions\n\n1. a\n2. b\n6. c\n";
+      fs.writeFileSync(file, original);
+      await expect(strikeContractAssertion(file, "6b", "why")).rejects.toThrow(/could not be resolved/);
+      expect(fs.readFileSync(file, "utf8")).toBe(original);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,4 +1,5 @@
-import type { Verdict } from "./types.ts";
+import { assertionKey, assertionKeySet } from "./assertionId.ts";
+import type { AssertionId, Verdict } from "./types.ts";
 
 /**
  * Between-round generator feedback, rendered from the `Verdict` ONLY.
@@ -35,7 +36,7 @@ export interface FeedbackOptions {
   /** Assertion ids to ESCALATE: render their evidence UNCAPPED and prepend a diagnose-first
    *  instruction naming them (set by the patch branch once an assertion's fail streak reaches
    *  `build.assertionEscalateAfter`). Other assertions stay capped. */
-  escalateAssertionIds?: number[];
+  escalateAssertionIds?: AssertionId[];
 }
 
 /** Char index where the LAST error-bearing line begins, or -1 if none matches. */
@@ -81,13 +82,13 @@ export function truncateEvidence(evidence: string, cap: number): string {
  *  ESCALATED ids (`escalateAssertionIds`), whose evidence is rendered UNCAPPED. */
 function failedAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): string[] {
   const cap = opts.evidenceCap ?? EVIDENCE_CAP;
-  const escalate = new Set(opts.escalateAssertionIds ?? []);
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  const escalate = assertionKeySet(opts.escalateAssertionIds);
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
   return verdict.assertions
-    .filter((a) => !a.pass && !unrun.has(a.id))
+    .filter((a) => !a.pass && !unrun.has(assertionKey(a.id)))
     .map((a) => {
       const evidence = (a.evidence ?? "").trim();
-      const rendered = escalate.has(a.id) ? evidence : truncateEvidence(evidence, cap);
+      const rendered = escalate.has(assertionKey(a.id)) ? evidence : truncateEvidence(evidence, cap);
       return `#${a.id}: ${rendered || "(no evidence recorded)"}`;
     });
 }
@@ -95,9 +96,9 @@ function failedAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): str
 /** UN-RUN assertions are no-signal environment/tooling misses, not behavioral failures. */
 function unrunAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): string[] {
   const cap = opts.evidenceCap ?? EVIDENCE_CAP;
-  const unrun = new Set(verdict.unrunAssertionIds ?? []);
+  const unrun = assertionKeySet(verdict.unrunAssertionIds);
   return verdict.assertions
-    .filter((a) => unrun.has(a.id))
+    .filter((a) => unrun.has(assertionKey(a.id)))
     .map((a) => {
       const evidence = (a.evidence ?? "").trim();
       const capped = truncateEvidence(evidence, cap);

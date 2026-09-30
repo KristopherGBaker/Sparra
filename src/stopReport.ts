@@ -1,6 +1,7 @@
 import { ensureDir, writeText } from "./util/io.ts";
 import { warn as defaultWarn } from "./util/log.ts";
 import path from "node:path";
+import type { AssertionId } from "./build/types.ts";
 
 /**
  * `src/stopReport.ts` — structured stop reports for every TERMINAL NON-PASS outcome.
@@ -64,7 +65,7 @@ export interface StopReportInput {
   /** Redacted `blocking[]` bullets from the MOST RECENT verdict. */
   blocking: string[];
   /** Genuinely-failed assertions (UN-RUN excluded upstream) from the MOST RECENT verdict. */
-  failedAssertions: { id: number; evidence: string }[];
+  failedAssertions: { id: AssertionId; evidence: string }[];
   /** Path to the most recent verdict file (holdout-redacted on disk), or `unknown`/`false` when none. */
   verdictPath: string | "unknown" | false;
   /** Suggested next action, derived mechanically from the tripped limit. */

@@ -28,7 +28,8 @@ import {
 } from "./holdout.ts";
 import { RETIRED_HOLDOUT_INSTRUCTION } from "./contract.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
-import { RUBRIC_CRITERIA, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict, type WorkItem } from "./types.ts";
+import { assertionKey, assertionKeySet, normalizeAssertionId, normalizeUnrunIds } from "./assertionId.ts";
+import { RUBRIC_CRITERIA, type AssertionId, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 
@@ -109,19 +110,18 @@ function retirementBlock(records: RetiredHoldout[]): string {
   return `\n${RETIRED_HOLDOUT_INSTRUCTION}\n\nRETIRED HOLDOUTS (settled — do not re-raise):\n${renderRetiredHoldouts(records)}\n`;
 }
 
-function unrunIdsFrom(v: unknown): number[] {
+function unrunIdsFrom(v: unknown): AssertionId[] {
   const raw = v as { unrunAssertionIds?: unknown; unRunAssertionIds?: unknown; unrunAssertions?: unknown };
   const arr = raw?.unrunAssertionIds ?? raw?.unRunAssertionIds ?? raw?.unrunAssertions;
-  if (!Array.isArray(arr)) return [];
-  return [...new Set(arr.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  return normalizeUnrunIds(arr);
 }
 
-function runnableAssertions(assertions: Verdict["assertions"], unrunIds: number[]): Verdict["assertions"] {
-  const unrun = new Set(unrunIds);
-  return assertions.filter((a) => !unrun.has(a.id));
+function runnableAssertions(assertions: Verdict["assertions"], unrunIds: AssertionId[]): Verdict["assertions"] {
+  const unrun = assertionKeySet(unrunIds);
+  return assertions.filter((a) => !unrun.has(assertionKey(a.id)));
 }
 
-function allAssertionsUnrun(assertions: Verdict["assertions"], unrunIds: number[]): boolean {
+function allAssertionsUnrun(assertions: Verdict["assertions"], unrunIds: AssertionId[]): boolean {
   return assertions.length > 0 && runnableAssertions(assertions, unrunIds).length === 0;
 }
 
@@ -408,7 +408,7 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
     }
     const rawAssertions = Array.isArray(parsed.assertions)
       ? parsed.assertions.map((a) => ({
-          id: Number((a as { id?: unknown })?.id ?? 0),
+          id: normalizeAssertionId((a as { id?: unknown })?.id),
           pass: Boolean((a as { pass?: unknown })?.pass),
           evidence: String((a as { evidence?: unknown })?.evidence ?? ""),
         }))
@@ -470,7 +470,7 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
     // FAILED assertion, functionality is CEILINGED at round(100 × passed/total) — a cap only
     // lowers, never raises, so an already-low score stands. Zero assertions → no cap (nothing
     // to anchor to; also guards the division). Retired-holdout assertions are already excluded above.
-    const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => a.id === id));
+    const unrunAssertionIds = unrunIdsFrom(parsed).filter((id) => assertions.some((a) => assertionKey(a.id) === assertionKey(id)));
     if (ctx.config.rubric.anchorFunctionality) {
       const runnable = runnableAssertions(assertions, unrunAssertionIds);
       const passed = runnable.filter((a) => a.pass).length;
@@ -555,7 +555,7 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
     verdict.blocking = verdict.blocking.map((b) => redactHoldout(b, holdoutText));
     verdict.notes = redactHoldout(verdict.notes, holdoutText);
     verdict.assertions = verdict.assertions.map((a) => ({
-      id: Number((a as { id?: unknown })?.id ?? 0),
+      id: normalizeAssertionId((a as { id?: unknown })?.id),
       pass: Boolean((a as { pass?: unknown })?.pass),
       evidence: redactHoldout(String((a as { evidence?: unknown })?.evidence ?? ""), holdoutText),
     }));
@@ -578,9 +578,9 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
   const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(resultText, holdoutText) : resultText;
 
   const unrunIds = verdict.unrunAssertionIds ?? [];
-  const unrun = new Set(unrunIds);
-  const failedAssertions = verdict.assertions.filter((a) => !a.pass && !unrun.has(a.id));
-  const unrunAssertions = verdict.assertions.filter((a) => unrun.has(a.id));
+  const unrun = assertionKeySet(unrunIds);
+  const failedAssertions = verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
+  const unrunAssertions = verdict.assertions.filter((a) => unrun.has(assertionKey(a.id)));
   const runnableCount = verdict.assertions.length - unrunAssertions.length;
   // Durable, holdout-SAFE retirement section (keyed by holdoutId, names the cited clause) — the
   // channel later rounds thread from (`readPriorRetirements`), mirroring the ACCEPTED-BLOCKING file.

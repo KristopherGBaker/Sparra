@@ -63,6 +63,34 @@ describe("renderPatchFeedback — per-assertion evidence (pure function of the V
     expect(fb).not.toContain("ok");
   });
 
+  it("renders a failing string id verbatim (#6b) and never lists an un-run \"H4\" as a failure", () => {
+    const fb = renderPatchFeedback(
+      mixedVerdict({
+        assertions: [
+          { id: 1, pass: true, evidence: "ok" },
+          { id: "6b", pass: false, evidence: "sub-assertion broke" },
+          { id: "H4", pass: false, evidence: "simctl unavailable" },
+        ],
+        unrunAssertionIds: ["H4"],
+      })
+    );
+    expect(fb).not.toContain("NaN");
+    const failedSection = fb.split("Un-run assertions")[0]!;
+    expect(failedSection).toContain("#6b: sub-assertion broke");
+    expect(failedSection).not.toContain("H4");
+    expect(fb).toContain("#H4: simctl unavailable"); // only under the un-run section
+  });
+
+  it("escalates a string id by key: uncapped evidence + diagnose-first names #6b", () => {
+    const long = "x".repeat(EVIDENCE_CAP + 500);
+    const v = mixedVerdict({ assertions: [{ id: "6b", pass: false, evidence: long }], unrunAssertionIds: [] });
+    const capped = renderPatchFeedback(v);
+    expect(capped).toContain(TRUNCATION_MARKER);
+    const fb = renderPatchFeedback(v, { escalateAssertionIds: ["6b"] });
+    expect(fb).toContain("DIAGNOSE FIRST: assertion(s) #6b");
+    expect(fb).toContain(long);
+  });
+
   it("includes every blocking[] item (no regression from the ids-only format)", () => {
     const fb = renderPatchFeedback(mixedVerdict());
     expect(fb).toContain("- add returns the wrong sum");

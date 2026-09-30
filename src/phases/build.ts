@@ -45,7 +45,8 @@ import {
 import type { LimitHit } from "../sdk/backend.ts";
 import { appendLearning, readMemory, hasLearning, hasTechniqueNote, distillTechnique } from "../memory.ts";
 import { promptDrift, summarizePromptDrift } from "../prompts.ts";
-import type { WorkItem } from "../build/types.ts";
+import type { AssertionId, WorkItem } from "../build/types.ts";
+import { assertionKey, assertionKeySet } from "../build/assertionId.ts";
 import type { RoleConfig } from "../config.ts";
 import { writeStopReport, type StopReportInput } from "../stopReport.ts";
 
@@ -746,7 +747,7 @@ export async function cmdBuild(
     let fresh = false;
     // (Q7c) Assertion ids where the generator's assertionsClaimed contradicted an evaluator
     // verdict this item — accumulated across rounds; surfaced as one memory note on completion.
-    const claimGapIds: number[] = [];
+    const claimGapIds: AssertionId[] = [];
     // Whether the most recent round's exercise was BLOCKED (inconclusive) rather than a real fail —
     // used so the terminal message doesn't call an unverifiable item a behavioral failure.
     let lastBlocked = false;
@@ -1128,13 +1129,13 @@ export async function cmdBuild(
         st.bestRound = st.round;
       }
       {
-        const unrun = new Set(ev.verdict.unrunAssertionIds ?? []);
+        const unrun = assertionKeySet(ev.verdict.unrunAssertionIds);
         st.lastVerdict = {
           round: st.round,
           verdictPath: ctx.paths.verdictFile(item.id, st.round, runId),
           blocking: ev.verdict.blocking,
           failedAssertions: ev.verdict.assertions
-            .filter((a) => !a.pass && !unrun.has(a.id))
+            .filter((a) => !a.pass && !unrun.has(assertionKey(a.id)))
             .map((a) => ({ id: a.id, evidence: a.evidence })),
         };
       }
@@ -1289,9 +1290,9 @@ export async function cmdBuild(
             // second grade is "no second opinion" → accept proceeds (never demote on an un-run gate).
             // A garbled, non-empty, non-limit completion normalizes to `fail` in evaluateItem and
             // DEMOTES here (fail-closed: a broken second grader must not launder a primary PASS).
-            const secondUnrun = new Set(ev2.verdict.unrunAssertionIds ?? []);
+            const secondUnrun = assertionKeySet(ev2.verdict.unrunAssertionIds);
             const secondAllUnrun =
-              ev2.verdict.assertions.length > 0 && ev2.verdict.assertions.every((a) => secondUnrun.has(a.id));
+              ev2.verdict.assertions.length > 0 && ev2.verdict.assertions.every((a) => secondUnrun.has(assertionKey(a.id)));
             const secondBlocked = ev2.verdict.exerciseStatus === "blocked";
             const realDisagreement =
               ev2.verdict.verdict === "fail" && !ev2.limitHit && !secondBlocked && !secondAllUnrun;
@@ -1436,10 +1437,10 @@ export async function cmdBuild(
         fresh = false;
         continue;
       }
-      const unrunIds = new Set(ev.verdict.unrunAssertionIds ?? []);
+      const unrunIds = assertionKeySet(ev.verdict.unrunAssertionIds);
       const allUnrun =
         ev.verdict.assertions.length > 0 &&
-        ev.verdict.assertions.every((a) => unrunIds.has(a.id));
+        ev.verdict.assertions.every((a) => unrunIds.has(assertionKey(a.id)));
       if (allUnrun) {
         lastRoundInconclusive = true;
         warn(`${item.id}: all contract assertions were UN-RUN in round ${st.round} — no behavioral signal; not counting as a failed round or pivoting.`);
