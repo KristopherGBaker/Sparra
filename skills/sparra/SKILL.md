@@ -280,7 +280,10 @@ UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/
   **harness-level** findings (about Sparra itself, not this project's prompts) into a shared user-level
   inbox `~/.sparra/reflections/` (`SPARRA_HOME` overrides), each finding written as its own `###` section.
   Only material findings (those that caused a bounce, a wasted round, a wrong grade, burned turns, or a forced
-  override) are routed; recurring ones increment a `×N` counter on the existing inbox entry (no duplicates).
+  override) are routed; recurring ones increment a `×N` counter on the existing inbox entry (no duplicates) —
+  by an exact `RECURRENCE-OF: <title>` tag, or (opt-in `reflect.dedupe.enabled`, key in the env var named by
+  `apiKeyEnv`, sends redacted finding text to TypeSafe) by a semantic Jev match: top-band same-defect scores
+  auto-merge, middle-band ones add `POSSIBLE-RECURRENCE-OF:` lines for you to triage; unavailable/failed → exact-only.
   From the Sparra repo, `sparra reflect --upstream` lists every finding ranked by recurrence `×N` DESC with a
   global 1-based index; `--done <ids>` / `--wontdo <ids>` (comma-separated, optional `--reason "<text>"`) triage
   individual findings into `archive/` and leave the un-triaged ones to resurface next run, while `--clear`

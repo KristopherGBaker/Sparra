@@ -257,6 +257,12 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
 - **`build.extraReadDirs`** — extra dirs the build (generator + evaluator) may READ (added to
   `additionalDirectories`). For big assets you don't want in git (e.g. a model): pre-stage once,
   list the dir, no commit/network. Absolute, `~`, or repo-relative.
+- **`reflect.dedupe`** — opt-in (`enabled: false`) semantic recurrence matching for the upstream
+  inbox via TypeSafe Jev. **Enabling sends holdout-redacted finding text to TypeSafe.** `model` is a
+  pinned ID (`jev-1.13.0`), `apiKeyEnv` NAMES the env var holding the key (default `TYPESAFE_API_KEY`;
+  never put the key in config). `same ≥ autoThreshold` (0.9) + `same_defect` auto-merges; `≥
+  suggestThreshold` (0.5) adds up to `maxSuggestions` (3) `POSSIBLE-RECURRENCE-OF:` lines;
+  `concurrency` (8) bounds requests. Unset key / judge failure / bad value → exact-only routing.
 - **`scriptHooks`** — user-configurable **external scripts** at harness lifecycle points
   (`onRunStart`/`onRunComplete`/`onPhaseStart`/`onPhaseEnd`/`onUnitStart`/`onUnitComplete`/
   `onDecisionParked`). `{}` (default) = no hooks, byte-identical to today. Each hook is a bare
