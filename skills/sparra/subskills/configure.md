@@ -257,6 +257,12 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
 - **`build.extraReadDirs`** — extra dirs the build (generator + evaluator) may READ (added to
   `additionalDirectories`). For big assets you don't want in git (e.g. a model): pre-stage once,
   list the dir, no commit/network. Absolute, `~`, or repo-relative.
+- **`conduct.shadowJudge`** — opt-in (`enabled: false`) SHADOW-MODE Jev judgment on `sparra conduct`
+  decisions. **Enabling sends the holdout-safe decision request (kind, question, scalar context) to
+  TypeSafe.** Jev's `choice`/`probabilities`/`confidence` are recorded as `shadow` beside each real
+  resolution in `run.json` and never change or fail it. `model` pinned (`jev-1.13.0`), `apiKeyEnv` NAMES
+  the env var (default `TYPESAFE_API_KEY`; never put the key in config), `timeoutMs` (5000) = max wait
+  AFTER the real answer. Unset key → one `warn`, no shadow; bad value → default + one `warn`.
 - **`reflect.dedupe`** — opt-in (`enabled: false`) semantic recurrence matching for the upstream
   inbox via TypeSafe Jev. **Enabling sends holdout-redacted finding text to TypeSafe.** `model` is a
   pinned ID (`jev-1.13.0`), `apiKeyEnv` NAMES the env var holding the key (default `TYPESAFE_API_KEY`;

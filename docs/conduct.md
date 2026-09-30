@@ -100,6 +100,31 @@ inspectable and one sequence never yields two records. A resolved record carries
 `brain-fallback`, and the trigger `via` ∈ `park` / `timeout` / `auto`. All payloads are
 **holdout-safe by construction** — built from `ParentSummary`-derived material only.
 
+### Shadow mode (Jev judgment)
+
+With only a handful of real decisions on record, TypeSafe's Jev model is not trusted to decide
+anything yet. Opt-in **shadow mode** (`conduct.shadowJudge.enabled: true`, key in the env var named by
+`apiKeyEnv`, default `TYPESAFE_API_KEY`) collects calibration data instead: at every judgment point Jev
+is also asked the same closed question — one `systemOne` request whose Choice options are exactly the
+request's `options` — and its answer is **recorded, never obeyed**. Only the holdout-safe request is
+sent (`kind`, `question`, scalar `context`; see [configuration](configuration.md)).
+
+The ask starts **concurrently** with the real resolution, so it never delays parking, the TTY prompt, or
+the brain; once the real answer is known the engine waits at most `timeoutMs` (default 5000) more. The
+resolved `run.json` record (unit decisions and run-level `landDecisions` alike, including a
+re-surfaced record on `--resume`) then carries an optional `shadow`:
+
+```json
+"shadow": { "model": "jev-1.13.0", "choice": "abandon", "probabilities": { "pivot": 0.2, "generalize-spec": 0.1, "abandon": 0.7 }, "confidence": 0.7, "agreed": false }
+```
+
+`agreed` is `choice === chosen`. Responses are untrusted: a missing/unknown `choice`, probabilities that
+are not exactly one finite number in `[0, 1]` per option, or a `confidence` outside `[0, 1]` yields
+`"shadow": { "model": …, "error": "invalid-response" }`; a failed request is `request-failed`, a late
+one `timeout`. A shadow problem **never** changes `chosen`/`source`/`via`/`rationale`, never fails a run,
+and warns at most once per run. Disabled (the default) — or enabled with the key unset — `run.json` has
+no `shadow` key at all. The out-of-band `--decide` write carries no shadow.
+
 ### Answering a parked decision from another terminal
 
 ```bash

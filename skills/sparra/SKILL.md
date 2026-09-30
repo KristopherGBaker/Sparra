@@ -111,7 +111,9 @@ successful land — never fatal on failure). **Resume** a crashed/interrupted ru
 `sparra conduct --resume <runId> [--commit|--merge|--land|--push] [--auto]`. **Inspect with zero
 spend**: `--status <runId> [--attempts]` / `--list`. A decision engine parks judgment points
 (park / park-timeout / `--auto`), answerable via file, TTY, `--decide <runId> <seq> <answer>`, or
-the HTTP bridge. Cross-unit learning appends holdout-safe outcome lines to `.sparra/memory.md`.
+the HTTP bridge. Opt-in `conduct.shadowJudge.enabled` (sends the holdout-safe decision request to
+TypeSafe) records Jev's answer beside each decision as `shadow` in `run.json` — informational, never
+decides. Cross-unit learning appends holdout-safe outcome lines to `.sparra/memory.md`.
 Full flag-by-flag reference (brain modes, resume semantics, bridge parity, multi-round re-grades,
 push/land gating details): **[subskills/configure.md](subskills/configure.md)** and
 **[docs/conduct.md](../../docs/conduct.md)**.

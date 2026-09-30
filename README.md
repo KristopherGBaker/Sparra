@@ -76,7 +76,8 @@ The holdout is passed **by path** and only the evaluator ever sees it; the runne
 > parks important decisions for a human (`--auto` to never park; `sparra conduct --decide` — or the HTTP
 > bridge's `POST /jobs/:id/decision` — to answer). A crashed or interrupted run is **continued in
 > place** with `sparra conduct --resume <runId>` (skips already-accepted units, re-enters the rest at
-> the right stage, appends to the same `run.json`), not restarted.
+> the right stage, appends to the same `run.json`), not restarted. Opt-in `conduct.shadowJudge` records
+> TypeSafe Jev's answer beside each decision (calibration data only — it never decides).
 > Flags + artifacts + safety properties: [docs/conduct.md](docs/conduct.md).
 
 > **Remote conductor (HTTP bridge).** Trigger `sparra` phases and role-runs on another Mac over
