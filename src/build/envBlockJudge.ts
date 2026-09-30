@@ -78,15 +78,16 @@ export interface EnvBlockDeps {
 
 const isFraction = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
 
-/**
- * Sanitize a possibly-hand-edited `evaluator.envBlockJudge` block: every bad value falls back to its
- * default and ONE `warn` names them all. Never throws.
- */
-export function normalizeEnvBlockJudgeConfig(cfg: Partial<EnvBlockJudgeConfig> | null | undefined): EnvBlockJudgeConfig {
+/** Sanitize without warning: the normalized block plus the names of every invalid field. */
+function sanitizeConfig(cfg: Partial<EnvBlockJudgeConfig> | null | undefined): { out: EnvBlockJudgeConfig; bad: string[] } {
   const def = defaultConfig().evaluator.envBlockJudge;
   const src = (cfg && typeof cfg === "object" ? cfg : {}) as Record<string, unknown>;
   const bad: string[] = [];
-  const out: EnvBlockJudgeConfig = { ...def, enabled: src.enabled === true };
+  const out: EnvBlockJudgeConfig = { ...def };
+  if (src.enabled !== undefined) {
+    if (typeof src.enabled === "boolean") out.enabled = src.enabled;
+    else bad.push("enabled");
+  }
   for (const k of ["model", "apiKeyEnv"] as const) {
     if (src[k] === undefined) continue;
     if (typeof src[k] === "string" && (src[k] as string).trim() !== "") out[k] = src[k] as string;
@@ -107,7 +108,19 @@ export function normalizeEnvBlockJudgeConfig(cfg: Partial<EnvBlockJudgeConfig> |
     if (Number.isInteger(src[k]) && (src[k] as number) > 0) out[k] = src[k] as number;
     else bad.push(k);
   }
-  if (bad.length > 0) warn(`evaluator.envBlockJudge: invalid ${bad.join(", ")} — using defaults for ${bad.length === 1 ? "it" : "them"}.`);
+  return { out, bad };
+}
+
+const invalidConfigMessage = (bad: string[]) =>
+  `invalid ${bad.join(", ")} — using defaults for ${bad.length === 1 ? "it" : "them"}`;
+
+/**
+ * Sanitize a possibly-hand-edited `evaluator.envBlockJudge` block: every bad value falls back to its
+ * default and ONE `warn` names them all. Never throws.
+ */
+export function normalizeEnvBlockJudgeConfig(cfg: Partial<EnvBlockJudgeConfig> | null | undefined): EnvBlockJudgeConfig {
+  const { out, bad } = sanitizeConfig(cfg);
+  if (bad.length > 0) warn(`evaluator.envBlockJudge: ${invalidConfigMessage(bad)}.`);
   return out;
 }
 
@@ -182,13 +195,24 @@ export async function annotateEnvBlock(
   cfgIn: Partial<EnvBlockJudgeConfig> | null | undefined,
   deps: EnvBlockDeps = {},
 ): Promise<EnvBlockAnnotation | undefined> {
-  if ((cfgIn as { enabled?: unknown } | null | undefined)?.enabled !== true) return undefined;
+  const rawEnabled = (cfgIn as { enabled?: unknown } | null | undefined)?.enabled;
+  if (rawEnabled !== true) {
+    // A non-boolean `enabled` normalizes to the default (off) — say so once; false/absent stays silent.
+    if (rawEnabled !== undefined && rawEnabled !== false) {
+      warn(`evaluator.envBlockJudge: ${invalidConfigMessage(sanitizeConfig(cfgIn).bad)}.`);
+    }
+    return undefined;
+  }
+  // At most ONE warn per verdict: every cause (config, key, request failures) is collected here.
+  const notes: string[] = [];
   try {
-    return await classify(verdict, cfgIn, deps);
+    return await classify(verdict, cfgIn, deps, notes);
   } catch {
     // Belt and braces: `classify` handles every expected failure itself.
-    warn("evaluator.envBlockJudge: classification failed unexpectedly — the verdict is unaffected.");
+    notes.push("classification failed unexpectedly — the verdict is unaffected");
     return undefined;
+  } finally {
+    if (notes.length > 0) warn(`evaluator.envBlockJudge: ${notes.join("; ")}.`);
   }
 }
 
@@ -196,11 +220,13 @@ async function classify(
   verdict: Verdict,
   cfgIn: Partial<EnvBlockJudgeConfig> | null | undefined,
   deps: EnvBlockDeps,
+  notes: string[],
 ): Promise<EnvBlockAnnotation | undefined> {
-  const cfg = normalizeEnvBlockJudgeConfig(cfgIn);
+  const { out: cfg, bad } = sanitizeConfig(cfgIn);
+  if (bad.length > 0) notes.push(invalidConfigMessage(bad));
   const apiKey = process.env[cfg.apiKeyEnv];
   if (!apiKey) {
-    warn(`evaluator.envBlockJudge: enabled but $${cfg.apiKeyEnv} is unset or empty — environment-block annotation skipped.`);
+    notes.push(`enabled but $${cfg.apiKeyEnv} is unset or empty — environment-block annotation skipped`);
     return undefined;
   }
   if (verdict.verdict === "pass" || verdict.exerciseStatus === "blocked") return undefined;
@@ -210,18 +236,11 @@ async function classify(
   const toSend = failed.filter((a) => !a.evidence.includes(HOLDOUT_MARKER));
   if (toSend.length === 0) return { model: cfg.model, assertions: [] };
 
-  let warned = false;
-  const noteError = (error: EnvBlockError) => {
-    if (warned) return;
-    warned = true;
-    warn(`evaluator.envBlockJudge: classification incomplete (${error}) — the verdict is unaffected.`);
-  };
-
   let client: EnvBlockClient;
   try {
     client = (deps.clientFactory ?? defaultEnvBlockClientFactory)({ apiKey, model: cfg.model });
   } catch {
-    noteError("request-failed");
+    notes.push("classification incomplete (request-failed) — the verdict is unaffected");
     return { model: cfg.model, assertions: [], error: "request-failed" };
   }
 
@@ -279,6 +298,6 @@ async function classify(
     }
   });
   const error = ERROR_PRECEDENCE.find((e) => errors.has(e));
-  if (error) noteError(error);
+  if (error) notes.push(`classification incomplete (${error}) — the verdict is unaffected`);
   return { model: cfg.model, assertions: flags, ...(error ? { error } : {}) };
 }

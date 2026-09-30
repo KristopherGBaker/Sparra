@@ -441,6 +441,93 @@ describe("key handling + gating (A11)", () => {
   });
 });
 
+describe("one warn per verdict, whatever the combination of causes", () => {
+  const badCfg = () => cfg({ autoNoul: 1.5 as never });
+
+  it("invalid config + unset key → ONE warn naming both causes, zero constructions", async () => {
+    delete process.env[KEY_ENV];
+    const fc = fakeClient(() => AUTO);
+    expect(await annotateEnvBlock(verdict(), badCfg(), { clientFactory: fc.factory })).toBeUndefined();
+    expect(envBlockWarns()).toHaveLength(1);
+    expect(envBlockWarns()[0]).toContain("autoNoul");
+    expect(envBlockWarns()[0]).toContain(`$${KEY_ENV}`);
+    expect(warns()).toHaveLength(1);
+    expect(fc.inits).toHaveLength(0);
+  });
+
+  it("invalid config + request-failed → ONE warn naming both causes; defaults applied", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const fc = fakeClient((r) => {
+      throw new Error(`boom ${r.state.verdict_item}`);
+    });
+    const out = await annotateEnvBlock(verdict(), badCfg(), { clientFactory: fc.factory });
+    expect(out).toMatchObject({ error: "request-failed" });
+    expect(warns()).toHaveLength(1);
+    expect(envBlockWarns()[0]).toContain("autoNoul");
+    expect(envBlockWarns()[0]).toContain("request-failed");
+  });
+
+  it("invalid config + throwing factory → ONE warn", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const out = await annotateEnvBlock(verdict(), badCfg(), {
+      clientFactory: () => {
+        throw new Error("nope");
+      },
+    });
+    expect(out).toMatchObject({ error: "request-failed" });
+    expect(warns()).toHaveLength(1);
+  });
+
+  it("invalid config + timeout / invalid-response → ONE warn each", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const bad = fakeClient(() => ({}));
+    expect(await annotateEnvBlock(verdict(), badCfg(), { clientFactory: bad.factory })).toMatchObject({ error: "invalid-response" });
+    expect(warns()).toHaveLength(1);
+
+    vi.mocked(warn).mockClear();
+    const clock = fakeTimer();
+    const hung = fakeClient(() => new Promise(() => {}));
+    const pending = annotateEnvBlock(verdict(), badCfg(), { clientFactory: hung.factory, timer: clock.timer });
+    await new Promise((r) => setImmediate(r));
+    clock.fire();
+    expect(await pending).toMatchObject({ error: "timeout" });
+    expect(warns()).toHaveLength(1);
+  });
+
+  it("invalid config alone (clean run) → ONE warn, annotation still produced", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const fc = fakeClient(() => AUTO);
+    const out = await annotateEnvBlock(verdict(), badCfg(), { clientFactory: fc.factory });
+    expect(out?.error).toBeUndefined();
+    expect(warns()).toHaveLength(1);
+    expect(envBlockWarns()[0]).toContain("autoNoul");
+  });
+
+  it("several request errors in one verdict still warn once", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const fc = fakeClient((_r, n) => {
+      if (n === 0) throw new Error("x");
+      return {};
+    });
+    await annotateEnvBlock(verdict(), cfg(), { clientFactory: fc.factory });
+    expect(warns()).toHaveLength(1);
+  });
+
+  it("non-boolean `enabled` → treated as disabled, ONE warn naming `enabled`, zero constructions", async () => {
+    process.env[KEY_ENV] = SECRET;
+    const fc = fakeClient(() => AUTO);
+    for (const enabled of ["yes", 1, null, {}]) {
+      vi.mocked(warn).mockClear();
+      const out = await annotateEnvBlock(verdict(), { ...cfg(), enabled } as never, { clientFactory: fc.factory });
+      expect(out).toBeUndefined();
+      expect(warns()).toHaveLength(1);
+      expect(warns()[0]).toContain("enabled");
+    }
+    expect(fc.inits).toHaveLength(0);
+    expect(fc.calls).toHaveLength(0);
+  });
+});
+
 describe("markdown section", () => {
   it("lists flagged ids, `_none_` when empty, and nothing when absent", () => {
     expect(renderEnvBlockSection(undefined)).toBe("");

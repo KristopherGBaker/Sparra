@@ -282,6 +282,22 @@ describe("evaluator.envBlockJudge (Jev env-blocked annotation)", () => {
     for (const k of Object.keys(bad) as (keyof typeof def)[]) expect(out[k]).toBe(def[k]);
   });
 
+  it.each([["yes"], [1], [null], [{}]])("normalize: non-boolean enabled %j → default false, one warn naming `enabled`", (enabled) => {
+    vi.mocked(warn).mockClear();
+    const out = normalizeEnvBlockJudgeConfig({ enabled } as never);
+    expect(out.enabled).toBe(false);
+    expect(vi.mocked(warn)).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(warn).mock.calls[0]![0])).toContain("enabled");
+  });
+
+  it("normalize: enabled true/false/absent are valid → no warn", () => {
+    vi.mocked(warn).mockClear();
+    expect(normalizeEnvBlockJudgeConfig({ enabled: true }).enabled).toBe(true);
+    expect(normalizeEnvBlockJudgeConfig({ enabled: false }).enabled).toBe(false);
+    expect(normalizeEnvBlockJudgeConfig({}).enabled).toBe(false);
+    expect(vi.mocked(warn)).not.toHaveBeenCalled();
+  });
+
   it("normalize: suspectNoul above autoNoul falls back to BOTH defaults with one warn", () => {
     vi.mocked(warn).mockClear();
     const out = normalizeEnvBlockJudgeConfig({ suspectNoul: 0.95, autoNoul: 0.6 });
