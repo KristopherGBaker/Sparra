@@ -79,7 +79,7 @@ sparra freeze          # the human gate — locks PLAN.md (+ CODEBASE_MAP/HOLDOU
 sparra build           # the autonomous generator↔evaluator loop
 sparra measure [dir]   # run measure.command → parse JSON metrics → diff vs baseline (compare-only; --set-baseline; --worktree)
 sparra reflect [--traces <glob-or-dir>] # propose prompt edits from build or role-run traces (--apply to accept)
-sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear]  # list/triage harness reflections in ~/.sparra/reflections (SPARRA_HOME), ranked by recurrence ×N DESC; --clear archives ALL
+sparra reflect --upstream [--done <ids>] [--wontdo <ids>] [--reason "…"] [--clear] [--check-shipped [--commits <n>]]  # list/triage harness reflections in ~/.sparra/reflections (SPARRA_HOME), ranked by recurrence ×N DESC; --clear archives ALL; --check-shipped prints (never applies) a --done line for findings a recent commit already fixed
 sparra prompts status  # 3-way drift vs defaults: same/stale(newer default)/local(your edit)/conflict/drifted/missing
 sparra prompts sync    # adopt STALE only (safe); --role <r> or --all force-overwrite (discards edits); --dry-run
 # A `stale` (newer-default) prompt is surfaced once on the build AND `sparra eval`/`role run`/`sparra-loop` paths.
@@ -287,4 +287,6 @@ UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/
   From the Sparra repo, `sparra reflect --upstream` lists every finding ranked by recurrence `×N` DESC with a
   global 1-based index; `--done <ids>` / `--wontdo <ids>` (comma-separated, optional `--reason "<text>"`) triage
   individual findings into `archive/` and leave the un-triaged ones to resurface next run, while `--clear`
-  archives ALL files at once. Nothing is applied automatically.
+  archives ALL files at once. `--upstream --check-shipped [--commits <n>]` (alone; sends finding + commit text to
+  TypeSafe, key from `reflect.dedupe.apiKeyEnv`) judges each finding against the last `n` non-merge commits and
+  prints a ready-to-run `--done … --reason "shipped (Jev check): <shas>"` — it never triages. Nothing is applied automatically.

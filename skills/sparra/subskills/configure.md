@@ -263,6 +263,12 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   never put the key in config). `same ≥ autoThreshold` (0.9) + `same_defect` auto-merges; `≥
   suggestThreshold` (0.5) adds up to `maxSuggestions` (3) `POSSIBLE-RECURRENCE-OF:` lines;
   `concurrency` (8) bounds requests. Unset key / judge failure / bad value → exact-only routing.
+- **`reflect.shippedCheck`** — knobs for `sparra reflect --upstream --check-shipped [--commits <n>]`, which
+  judges each live inbox finding against the last `commits` (30) non-merge commits of the current repo and
+  PRINTS a `--done` suggestion (never triages). Reuses `reflect.dedupe.model`/`apiKeyEnv` but needs no
+  `dedupe.enabled` (the flag is the consent; **sends finding + commit text to TypeSafe**). A pair suggests
+  only at Noul `≥ threshold` (0.8) AND choice `fixes`; `concurrency` (8) bounds requests. Unset key → warn,
+  listing only; bad value → default with one warn.
 - **`scriptHooks`** — user-configurable **external scripts** at harness lifecycle points
   (`onRunStart`/`onRunComplete`/`onPhaseStart`/`onPhaseEnd`/`onUnitStart`/`onUnitComplete`/
   `onDecisionParked`). `{}` (default) = no hooks, byte-identical to today. Each hook is a bare
