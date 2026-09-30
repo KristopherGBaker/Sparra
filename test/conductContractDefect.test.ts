@@ -454,6 +454,12 @@ describe("non-numeric assertion ids — detection + fail-closed strike", () => {
     expect(detectContractDefect(rounds)).toBe("6b");
   });
 
+  it("returns the NORMALIZED id: rounds carrying 7 and \"7\" yield the number 7", () => {
+    expect(detectContractDefect([roundIds(1, [7, 2]), roundIds(2, ["7"])])).toBe(7);
+    expect(detectContractDefect([roundIds(1, ["7"]), roundIds(2, [7])])).toBe(7);
+    expect(detectContractDefect([roundIds(1, [" 7 "]), roundIds(2, ["7"])])).toBe(7);
+  });
+
   it("a different string id in an earlier round breaks the signature", () => {
     const rounds = [roundIds(1, ["6a"]), roundIds(2, ["6b"]), roundIds(3, ["6b"])];
     expect(detectContractDefect(rounds)).toBeUndefined();

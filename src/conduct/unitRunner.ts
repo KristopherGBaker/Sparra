@@ -164,12 +164,14 @@ export function detectContractDefect(rounds: ConductRoundRecord[]): AssertionId 
   // The final round must isolate exactly ONE failing assertion (no OTHER failing ids).
   if (finalIds.length !== 1) return undefined;
   const poisoned = finalIds[0]!;
-  const poisonedKey = assertionKey(poisoned);
+  // Normalize before keying: a JSON round-trip can carry `"7"` (or `" 7 "`) where another round has `7`.
+  const poisonedId = normalizeAssertionId(poisoned);
+  const poisonedKey = assertionKey(poisonedId);
   // That id must appear in the failed set of EVERY completed round (compared by key).
   for (const r of rounds) {
-    if (!failedAssertionIds(r.evaluator).some((id) => assertionKey(id) === poisonedKey)) return undefined;
+    if (!failedAssertionIds(r.evaluator).some((id) => assertionKey(normalizeAssertionId(id)) === poisonedKey)) return undefined;
   }
-  return poisoned;
+  return poisonedId;
 }
 
 /** The rationale recorded on a contract-defect strike (audit trail + inert contract annotation). */

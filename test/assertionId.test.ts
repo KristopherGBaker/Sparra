@@ -9,6 +9,15 @@ describe("normalizeAssertionId", () => {
     expect(normalizeAssertionId(" 7 ")).toBe(7);
   });
 
+  it("integer literals within the safe range → number; beyond it stay strings (no precision loss)", () => {
+    expect(normalizeAssertionId("9007199254740991")).toBe(9007199254740991);
+    expect(normalizeAssertionId(" 9007199254740991 ")).toBe(9007199254740991);
+    expect(normalizeAssertionId("9007199254740992")).toBe("9007199254740992");
+    expect(normalizeAssertionId("9007199254740993")).toBe("9007199254740993");
+    expect(normalizeAssertionId(" 9007199254740993 ")).toBe("9007199254740993");
+    expect(normalizeAssertionId("-9007199254740993")).toBe("-9007199254740993");
+  });
+
   it("other non-empty strings → trimmed string", () => {
     expect(normalizeAssertionId("6b")).toBe("6b");
     expect(normalizeAssertionId(" H4 ")).toBe("H4");
