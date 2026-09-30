@@ -61,6 +61,21 @@ export interface DecisionRequest {
   context?: Record<string, string | number | boolean | null>;
 }
 
+/**
+ * A shadow-mode Jev judgment recorded beside a real resolution (never used to decide). On success
+ * `choice`/`probabilities`/`confidence`/`agreed` are set; on any failure only `model` + `error`
+ * (`timeout` | `invalid-response` | `request-failed`).
+ */
+export interface DecisionShadow {
+  model: string;
+  choice?: string;
+  probabilities?: Record<string, number>;
+  confidence?: number;
+  /** `choice ===` the real chosen answer. */
+  agreed?: boolean;
+  error?: string;
+}
+
 /** A resolved answer plus how it was reached. */
 export interface DecisionResolution {
   answer: string;
@@ -68,6 +83,8 @@ export interface DecisionResolution {
   rationale?: string;
   source: DecisionSource;
   via: DecisionVia;
+  /** Shadow-mode Jev judgment — present only when a shadow judge was configured. */
+  shadow?: DecisionShadow;
 }
 
 /**
@@ -97,6 +114,8 @@ export interface DecisionRecord {
   source?: DecisionSource;
   via?: DecisionVia;
   resolvedAt?: string;
+  /** Shadow-mode Jev judgment beside the real resolution (informational; absent when disabled). */
+  shadow?: DecisionShadow;
 }
 
 /** A brain's structured answer at a judgment point (or a driven llm turn). */

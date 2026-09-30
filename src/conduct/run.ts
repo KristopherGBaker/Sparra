@@ -39,6 +39,7 @@ import {
 } from "./decisionEngine.ts";
 import { buildUnitRoleSpecs, resolveSparraBin, type UnitRoleSpecs } from "./roleSpecs.ts";
 import { landAcceptedUnits, type LandingDeps, type LandingGit } from "./merge.ts";
+import { createShadowJudge, shadowEngineDeps, type ShadowClientFactory, type ShadowJudge } from "./shadowJudge.ts";
 import type { ConductCommitGit } from "./commit.ts";
 import { ensureUnitWorktree, type EnsureUnitWorktreeResult } from "../build/unitWorktree.ts";
 import { conductAttemptLedgerPath, recordAttemptLedger } from "../build/attemptLedger.ts";
@@ -149,6 +150,11 @@ export interface ConductDeps {
   onDecisionRequest?: (requestPath: string) => void;
   /** Test seam: every brain prompt (holdout-safety assertions). */
   onBrainPrompt?: (prompt: string) => void;
+  /** Shadow-mode Jev judge. A `ShadowJudge` is used as-is (tests); `null` forces none; `undefined`
+   *  builds one from `conduct.shadowJudge` config when enabled and the key env var is set. */
+  shadowJudge?: ShadowJudge | null;
+  /** Client factory for the config-built shadow judge (default: the real TypeSafe client). */
+  shadowClientFactory?: ShadowClientFactory;
 
   // ── commit/merge landing seams (all injectable so tests run with real-git fakes, no model calls) ──
   /** Injectable git seam for the merge path (rebase/ff/merge/abort/target selection). */
@@ -581,6 +587,7 @@ export async function runConduct(
   // and the post-accept merge-landing decisions (so seq never collides across the two).
   const seqRef = { n: 0 };
   const brain = await buildConductBrain(ctx, opts, deps, runDir);
+  const shadow = buildShadowJudge(ctx, deps);
 
   // The ONE coordinator-owned serialized learning writer for this run: every completion route + every
   // pivot/generalize-spec decision publishes through it, so concurrent completions never interleave a
@@ -609,6 +616,7 @@ export async function runConduct(
       sparraBin,
       trackedRunRole,
       brain,
+      shadow,
       seqRef,
       learningWriter,
     });
@@ -687,7 +695,7 @@ export async function runConduct(
 
   // 5. Opt-in commit/merge landing (no flags → this block never runs; behavior is byte-identical to
   // today). `--merge` implies `--commit`. Serialized across accepted units.
-  await runLanding(ctx, opts, deps, { runId, runDir, writer, state, brain, seqRef });
+  await runLanding(ctx, opts, deps, { runId, runDir, writer, state, brain, shadow, seqRef });
 
   state.status = "completed";
   await writer.write(state);
@@ -834,7 +842,8 @@ export async function resumeConduct(
     deps.appendLearningFn ? { appendLearningFn: deps.appendLearningFn } : {},
   );
 
-  const recovered = await recoverParkedDecisions(ctx, runOpts, deps, { runDir, state, writer, brain, seqRef });
+  const shadow = buildShadowJudge(ctx, deps);
+  const recovered = await recoverParkedDecisions(ctx, runOpts, deps, { runDir, state, writer, brain, shadow, seqRef });
 
   // Apply recovered terminal decisions to resumed units (only ones actually re-entering — a leftover
   // parked decision on an already-terminal unit is retired, never used to re-decide that unit).
@@ -916,6 +925,7 @@ export async function resumeConduct(
     sparraBin,
     trackedRunRole,
     brain,
+    shadow,
     seqRef,
     learningWriter,
     resumePlanByUnit,
@@ -935,6 +945,7 @@ export async function resumeConduct(
     writer,
     state,
     brain,
+    shadow,
     seqRef,
     restrictTo: new Set(reenter.map((u) => u.id)),
   });
@@ -967,6 +978,7 @@ async function runLanding(
     writer: RunStateWriter;
     state: ConductRunState;
     brain: Brain | undefined;
+    shadow: ShadowJudge | undefined;
     seqRef: { n: number };
     restrictTo?: Set<string>;
   },
@@ -998,6 +1010,7 @@ async function runLanding(
     ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
     timeoutSec,
     ...(p.brain ? { brainJudge: (r) => p.brain!.judge(r) } : {}),
+    ...(p.shadow ? { shadow: p.shadow } : {}),
     ...(deps.tty ? { tty: deps.tty } : {}),
     ...(deps.onDecisionRequest ? { onDecisionRequest: deps.onDecisionRequest } : {}),
     ...(deps.runScriptHooksFn ? { runScriptHooksFn: deps.runScriptHooksFn } : {}),
@@ -1031,6 +1044,7 @@ async function recoverParkedDecisions(
     state: ConductRunState;
     writer: RunStateWriter;
     brain: Brain | undefined;
+    shadow: ShadowJudge | undefined;
     seqRef: { n: number };
   },
 ): Promise<Map<string, UnitOutcome>> {
@@ -1087,6 +1101,7 @@ async function recoverParkedDecisions(
       sleep,
       ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
       ...(p.brain ? { brainJudge: (r) => p.brain!.judge(r) } : {}),
+      ...shadowEngineDeps(p.shadow),
       ...(tty ? { tty } : {}),
       // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the
       // preserved onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
@@ -1101,6 +1116,7 @@ async function recoverParkedDecisions(
     pending.via = res.via;
     if (res.rationale) pending.rationale = res.rationale;
     if (res.note) pending.note = res.note;
+    if (res.shadow) pending.shadow = res.shadow;
     pending.resolvedAt = new Date(nowMs()).toISOString();
     // Retire the STALE record in place (carry the same answer + a recovery note) so no interrupted
     // decision lingers pending after a resume.
@@ -1217,6 +1233,8 @@ interface BrainRunParams {
   trackedRunRole: RoleRunner;
   /** The conductor brain (built once in `runConduct`), or undefined for deterministic policy. */
   brain: Brain | undefined;
+  /** The run's shadow-mode Jev judge (built once), or undefined when shadow mode is off. */
+  shadow: ShadowJudge | undefined;
   /** Run-global monotonic decision sequence (shared with the landing phase so seq never collides). */
   seqRef: { n: number };
   /** The run's ONE serialized learning writer (shared with the deterministic + recovered-terminal
@@ -1260,6 +1278,16 @@ async function buildConductBrain(
     env: mergedBuildEnv(ctx.config),
     ...(deps.onBrainPrompt ? { onPrompt: deps.onBrainPrompt } : {}),
   });
+}
+
+/**
+ * Build the run's shadow-mode Jev judge ONCE (shared by the per-unit brain path, resume recovery and
+ * the landing decisions). An injected `deps.shadowJudge` wins (`null` = none); otherwise it is built
+ * from `conduct.shadowJudge` config — `undefined` (no client constructed) unless enabled with a key.
+ */
+function buildShadowJudge(ctx: Ctx, deps: ConductDeps): ShadowJudge | undefined {
+  if (deps.shadowJudge !== undefined) return deps.shadowJudge ?? undefined;
+  return createShadowJudge(ctx.config.conduct.shadowJudge, deps.shadowClientFactory);
 }
 
 /** What `runBrainUnits` reports back to its caller: a required `onUnitStart` gate failure on any
@@ -1370,6 +1398,7 @@ async function runBrainUnits(
         sleep,
         ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
         ...(brain ? { brainJudge: (r) => brain!.judge(r) } : {}),
+        ...shadowEngineDeps(p.shadow),
         ...(tty ? { tty } : {}),
         // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the
         // preserved onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
@@ -1385,6 +1414,7 @@ async function runBrainUnits(
       pending.via = res.via;
       if (res.rationale) pending.rationale = res.rationale;
       if (res.note) pending.note = res.note;
+      if (res.shadow) pending.shadow = res.shadow;
       pending.resolvedAt = new Date(nowMs()).toISOString();
       await p.writer.write(p.state);
       info(`conduct: decision #${s} [${kind}] → "${res.answer}" (source ${res.source}, via ${res.via})`);

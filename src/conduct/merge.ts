@@ -23,6 +23,7 @@ import { defaultUnitWorktreeDir, removeUnitWorktree } from "../build/unitWorktre
 import { commitUnit, type ConductCommitGit } from "./commit.ts";
 import { buildDecisionRequest, type DecisionRecord, type JudgmentKind } from "./decision.ts";
 import { resolveDecision, type DecisionEngineDeps, type TtySeam } from "./decisionEngine.ts";
+import { shadowEngineDeps, type ShadowJudge } from "./shadowJudge.ts";
 import { makeOnRequestWritten } from "./decisionParked.ts";
 import type { runScriptHooks } from "../scriptHooks.ts";
 import { exists } from "../util/io.ts";
@@ -154,6 +155,8 @@ export interface LandingDeps {
   pollMs?: number;
   timeoutSec: number;
   brainJudge?: (req: DecisionRequest) => Promise<BrainDecision | undefined>;
+  /** Shadow-mode Jev judge (recorded beside the resolution; never decides). */
+  shadow?: ShadowJudge;
   tty?: TtySeam;
   onDecisionRequest?: (requestPath: string) => void;
   /** The `runScriptHooks` invocation used to fire `onDecisionParked` when a merge-landing decision
@@ -437,6 +440,7 @@ async function parkMergeDecision(
     sleep: deps.sleep,
     ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
     ...(deps.brainJudge ? { brainJudge: deps.brainJudge } : {}),
+    ...shadowEngineDeps(deps.shadow),
     ...(deps.tty ? { tty: deps.tty } : {}),
     // On park: announce line (stdout) + always-fired best-effort onDecisionParked hook + the preserved
     // onDecisionRequest test seam, as a caught fire-and-forget (the seam stays sync).
@@ -454,6 +458,7 @@ async function parkMergeDecision(
   pending.via = res.via;
   if (res.rationale) pending.rationale = res.rationale;
   if (res.note) pending.note = res.note;
+  if (res.shadow) pending.shadow = res.shadow;
   pending.resolvedAt = new Date(deps.nowMs()).toISOString();
   await deps.writer.write(deps.state);
   info(`conduct: merge decision #${seq} on ${entry.id} → "${res.answer}" (target ${target.branch} unchanged).`);
@@ -644,6 +649,7 @@ async function parkLandDecision(ctx: Ctx, deps: LandingDeps, reason: string): Pr
     sleep: deps.sleep,
     ...(deps.pollMs !== undefined ? { pollMs: deps.pollMs } : {}),
     ...(deps.brainJudge ? { brainJudge: deps.brainJudge } : {}),
+    ...shadowEngineDeps(deps.shadow),
     ...(deps.tty ? { tty: deps.tty } : {}),
     onRequestWritten: makeOnRequestWritten(
       ctx,
@@ -659,6 +665,7 @@ async function parkLandDecision(ctx: Ctx, deps: LandingDeps, reason: string): Pr
   pending.via = res.via;
   if (res.rationale) pending.rationale = res.rationale;
   if (res.note) pending.note = res.note;
+  if (res.shadow) pending.shadow = res.shadow;
   pending.resolvedAt = new Date(deps.nowMs()).toISOString();
   await deps.writer.write(deps.state);
   warn(`conduct: --land blocked — ${reason} (default branch unchanged).`);

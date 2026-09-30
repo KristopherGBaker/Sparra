@@ -596,6 +596,8 @@ export interface SparraConfig {
      * stops at a local fast-forward) is unchanged unless you opt in HERE **and** pass `--push`.
      */
     push: boolean;
+    /** Opt-in SHADOW-MODE Jev judgment recorded next to each decision (never decides anything). */
+    shadowJudge: ShadowJudgeConfig;
   };
   /**
    * Subfolder (relative to the project root) for the human-facing docs Sparra
@@ -655,6 +657,23 @@ export interface ReflectDedupeConfig {
   maxSuggestions: number;
   /** Max concurrent pair-judge requests. */
   concurrency: number;
+}
+
+/**
+ * Shadow-mode TypeSafe Jev judgment on `sparra conduct` decisions (`src/conduct/shadowJudge.ts`).
+ * At every judgment point Jev is also asked, and its answer is RECORDED beside the real resolution in
+ * `run.json` (`shadow`) — it never changes or fails a decision. Enabling it SENDS the holdout-safe
+ * `DecisionRequest` (kind, question, scalar context) to TypeSafe.
+ */
+export interface ShadowJudgeConfig {
+  /** Opt-in. Off → no client is built and `run.json` carries no `shadow` key. */
+  enabled: boolean;
+  /** Pinned Jev version ID (not the moving `jev-latest` alias). */
+  model: string;
+  /** NAME of the env var holding the TypeSafe API key — never the key itself. */
+  apiKeyEnv: string;
+  /** How long (ms) to wait for the shadow AFTER the real resolution is known. */
+  timeoutMs: number;
 }
 
 function role(model: ModelRef, effort?: RoleConfig["effort"]): RoleConfig {
@@ -766,6 +785,7 @@ export function defaultConfig(): SparraConfig {
       decisions: { surface: "park-timeout", timeoutSec: 1800 },
       landToDefault: false,
       push: false,
+      shadowJudge: { enabled: false, model: "jev-1.13.0", apiKeyEnv: "TYPESAFE_API_KEY", timeoutMs: 5000 },
     },
     docsDir: "",
     scriptHooks: {},

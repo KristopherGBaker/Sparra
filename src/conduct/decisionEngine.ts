@@ -4,8 +4,9 @@ import * as readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
 import { ensureDir } from "../util/io.ts";
-import type { BrainDecision, DecisionRecord, DecisionRequest, DecisionResolution } from "./decision.ts";
+import type { BrainDecision, DecisionRecord, DecisionRequest, DecisionResolution, DecisionShadow } from "./decision.ts";
 import { runStatePath } from "./runState.ts";
+import { ShadowResponseError, validateShadowAnswer, type ShadowVerdict } from "./shadowJudge.ts";
 
 /**
  * `src/conduct/decisionEngine.ts` — the decision engine: surface a judgment point to a human via
@@ -45,6 +46,18 @@ export interface DecisionEngineDeps {
    *  ignores the extra `req`. The conduct side routes this through `handleDecisionParked` (announce
    *  line + `onDecisionParked` hook) and still preserves the pre-existing `onDecisionRequest` seam. */
   onRequestWritten?: (requestPath: string, req: DecisionRequest) => void;
+  /** SHADOW MODE (optional): ask Jev about the same request, CONCURRENTLY with the real resolution,
+   *  and record its answer as `DecisionResolution.shadow`. Never alters or fails the resolution; after
+   *  the real answer is known the engine waits at most `shadowTimeoutMs` more (via the injected
+   *  `sleep`). Rejects with a `ShadowResponseError` for an invalid response, anything else is
+   *  `request-failed`. */
+  shadowJudge?: (req: DecisionRequest) => Promise<ShadowVerdict>;
+  /** The model name recorded on a shadow that failed before returning one. */
+  shadowModel?: string;
+  /** Max ms to wait for the shadow AFTER the real resolution (default 5000). */
+  shadowTimeoutMs?: number;
+  /** Called with the `error` of every failed shadow (the conduct side warns once per run). */
+  onShadowError?: (error: string) => void;
 }
 
 /** The `decisions/` subfolder of a run dir. */
@@ -63,10 +76,80 @@ export async function resolveDecision(
   req: DecisionRequest,
   deps: DecisionEngineDeps,
 ): Promise<DecisionResolution> {
-  if (deps.surface === "auto") {
-    return decideAuto(req, deps, "auto");
+  // Start the shadow FIRST and never await it here, so it can't delay parking, the TTY, or the brain.
+  const shadow = deps.shadowJudge ? startShadow(req, deps) : undefined;
+  const res = deps.surface === "auto" ? await decideAuto(req, deps, "auto") : await park(req, deps);
+  if (!shadow) return res;
+  return { ...res, shadow: await settleShadow(shadow, res.answer, deps) };
+}
+
+/** A shadow outcome: a validated verdict, or the recorded failure. */
+type ShadowOutcome = { verdict: ShadowVerdict } | { error: string };
+
+/** A running shadow: `outcome` never rejects; `peek` is its result once settled, else undefined. */
+interface ShadowRun {
+  outcome: Promise<ShadowOutcome>;
+  peek: () => ShadowOutcome | undefined;
+}
+
+/** Kick off `deps.shadowJudge(req)`; every failure (sync throw, rejection, malformed result) becomes an
+ *  `{ error }` — the judge's output is untrusted and re-validated against `req.options`. */
+function startShadow(req: DecisionRequest, deps: DecisionEngineDeps): ShadowRun {
+  let result: ShadowOutcome | undefined;
+  const failed = (e: unknown): ShadowOutcome => ({ error: e instanceof ShadowResponseError ? "invalid-response" : "request-failed" });
+  let ask: Promise<ShadowVerdict>;
+  try {
+    ask = Promise.resolve(deps.shadowJudge!(req));
+  } catch (e) {
+    ask = Promise.reject(e);
   }
-  return park(req, deps);
+  const outcome = ask.then(
+    (v): ShadowOutcome => {
+      try {
+        return (result = { verdict: validateShadowAnswer(req.options, v) });
+      } catch (e) {
+        return (result = failed(e));
+      }
+    },
+    (e): ShadowOutcome => (result = failed(e)),
+  );
+  return { outcome, peek: () => result };
+}
+
+/** Wait (bounded by the injected clock/sleep) for the shadow AFTER the real resolution, then shape the
+ *  recorded {@link DecisionShadow}. Never throws. */
+async function settleShadow(run: ShadowRun, answer: string, deps: DecisionEngineDeps): Promise<DecisionShadow> {
+  const model = deps.shadowModel ?? "";
+  try {
+    // Already settled (the usual case: a human/brain took longer) → no timer is created at all.
+    if (run.peek() === undefined) {
+      const timedOut = deps.sleep(deps.shadowTimeoutMs ?? 5000).then(() => undefined);
+      await Promise.race([run.outcome, timedOut]);
+    }
+  } catch {
+    // A failing injected sleep must not fail the decision — take whatever has settled.
+  }
+  const out = run.peek();
+  const shadow: DecisionShadow =
+    out === undefined
+      ? { model, error: "timeout" }
+      : "error" in out
+        ? { model, error: out.error }
+        : {
+            model,
+            choice: out.verdict.choice,
+            probabilities: out.verdict.probabilities,
+            confidence: out.verdict.confidence,
+            agreed: out.verdict.choice === answer,
+          };
+  if (shadow.error) {
+    try {
+      deps.onShadowError?.(shadow.error);
+    } catch {
+      // reporting is best-effort
+    }
+  }
+  return shadow;
 }
 
 /** Brain-decides (source `brain`) or deterministic (`auto-deterministic` / `brain-fallback`). */
@@ -76,7 +159,13 @@ async function decideAuto(
   via: "auto" | "timeout",
 ): Promise<DecisionResolution> {
   if (deps.brainJudge) {
-    const d = await deps.brainJudge(req);
+    let d: BrainDecision | undefined;
+    try {
+      d = await deps.brainJudge(req);
+    } catch {
+      // A brain that THROWS is treated like one whose output stayed invalid: deterministic default.
+      return { answer: req.default, source: "brain-fallback", via, rationale: "brain threw; deterministic default" };
+    }
     if (d && req.options.includes(d.answer)) {
       return { answer: d.answer, source: "brain", via, ...(d.rationale ? { rationale: d.rationale } : {}) };
     }
