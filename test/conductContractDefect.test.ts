@@ -185,6 +185,35 @@ describe("contract-defect decision kind — options/default + request plumbing (
   });
 });
 
+// ─────────────────────────── Jev env-blocked ids are never a contract defect ───────────────────────────
+describe("detectContractDefect — an environment-blocked gate is never struck", () => {
+  const blockedEv = (failedIds: number[], envBlocked: AssertionId[]): ParentSummary => ({ ...ev(failedIds), envBlockedAssertionIds: envBlocked });
+
+  it("returns undefined when the poisoned id is env-blocked in the FINAL round (signature otherwise holds)", () => {
+    expect(detectContractDefect([round(1, [4]), round(2, [4]), round(3, [4])])).toBe(4); // control: same shape, no annotation
+    expect(detectContractDefect([round(1, [4]), round(2, [4]), { round: 3, evaluator: blockedEv([4], [4]), pivoted: false }])).toBeUndefined();
+  });
+
+  it("compares by key across number/string forms", () => {
+    expect(detectContractDefect([round(1, [4]), { round: 2, evaluator: blockedEv([4], ["4"]), pivoted: false }])).toBeUndefined();
+  });
+
+  it("only the FINAL round's annotation counts; another id or an empty list changes nothing", () => {
+    expect(detectContractDefect([{ round: 1, evaluator: blockedEv([4], [4]), pivoted: false }, round(2, [4])])).toBe(4);
+    expect(detectContractDefect([round(1, [4]), { round: 2, evaluator: blockedEv([4], [9]), pivoted: false }])).toBe(4);
+    expect(detectContractDefect([round(1, [4]), { round: 2, evaluator: blockedEv([4], []), pivoted: false }])).toBe(4);
+  });
+
+  it("buildDecisionRequest surfaces the env-blocked ids as scalar context, only when non-empty", () => {
+    const base = { seq: 1, unit: "unit-001", kind: "unit-exhausted", nowMs: 0, timeoutSec: 1800 } as const;
+    const req = buildDecisionRequest({ ...base, summary: blockedEv([4, 5], [4, "6b"]) });
+    expect(req.context?.envBlockedAssertions).toBe("4,6b");
+    expect(typeof req.context?.envBlockedAssertions).toBe("string");
+    expect(buildDecisionRequest({ ...base, summary: blockedEv([4], []) }).context).not.toHaveProperty("envBlockedAssertions");
+    expect(buildDecisionRequest({ ...base, summary: ev([4]) }).context).not.toHaveProperty("envBlockedAssertions");
+  });
+});
+
 // ─────────────────────────── assertion 4: surgical strike rewrite + fail-closed ───────────────────────────
 describe("resolveAssertionLineIndex — resolves the poisoned line across forms, else -1", () => {
   it("numbered list: resolves by explicit ordinal", () => {

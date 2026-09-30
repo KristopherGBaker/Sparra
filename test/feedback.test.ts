@@ -401,3 +401,40 @@ describe("cmdBuild — feedback paths carry per-assertion evidence", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("renderPatchFeedback — Jev env-block annotation (auto band only)", () => {
+  const SUFFIX = " — likely environment-blocked (Jev): confirm the gate runs before changing code";
+  const flag = (id: number, band: "auto" | "suspect") => ({ id, noul: 0.9, choice: "environment_blocked", confidence: 0.9, band });
+
+  it("an auto id's failure line carries the suffix; suspect and unflagged lines are unchanged", () => {
+    const annotated = mixedVerdict({ envBlock: { model: "m", assertions: [flag(2, "auto"), flag(4, "suspect")] } });
+    const fb = renderPatchFeedback(annotated);
+    expect(fb).toContain(`#2: ran add 2 3, saw 6${SUFFIX}\n`);
+    expect(fb).toMatch(/#4: crash: TypeError$/m); // suspect: no suffix
+    expect(fb.match(/likely environment-blocked/g)).toHaveLength(1);
+    // Nothing but the auto line's suffix changed.
+    expect(fb.replace(SUFFIX, "")).toBe(renderPatchFeedback(mixedVerdict()));
+  });
+
+  it("applies to the pivot/blocked renderers' failed lines, never to un-run or passed lines", () => {
+    const v = mixedVerdict({
+      assertions: [
+        { id: 1, pass: true, evidence: "fine" },
+        { id: 2, pass: false, evidence: "EPERM" },
+        { id: 3, pass: false, evidence: "no simulator" },
+      ],
+      unrunAssertionIds: [3],
+      envBlock: { model: "m", assertions: [flag(2, "auto")] },
+    });
+    expect(renderPivotFeedback(v, { criterion: "design", threshold: 50, rounds: 3 })).toContain(`#2: EPERM${SUFFIX}`);
+    const blocked = renderBlockedFeedback(v);
+    expect(blocked).toContain(`#2: EPERM${SUFFIX}`);
+    expect(blocked).toContain("#3: no simulator");
+    expect(blocked.match(/likely environment-blocked/g)).toHaveLength(1);
+  });
+
+  it("a verdict without a flagged id renders byte-identically", () => {
+    expect(renderPatchFeedback(mixedVerdict())).not.toContain("Jev");
+    expect(renderPatchFeedback(mixedVerdict({ envBlock: { model: "m", assertions: [] } }))).toBe(renderPatchFeedback(mixedVerdict()));
+  });
+});

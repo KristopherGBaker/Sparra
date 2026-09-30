@@ -1,4 +1,5 @@
 import type { RoleKind, RoleRunResult } from "./build/roleRun.ts";
+import type { AssertionId } from "./build/types.ts";
 
 /** The line-anchored marker a `contract-evaluator` emits in its critique to signal the contract is
  *  agreed. Single source of truth: the build-loop negotiator and the envelope builder both use it,
@@ -84,6 +85,11 @@ export interface RunRolePayload {
   passThreshold?: number;
   blocking?: NonNullable<RoleRunResult["verdict"]>["blocking"];
   failedAssertions?: NonNullable<RoleRunResult["verdict"]>["assertions"];
+  /** Evaluator only, and only when the opt-in Jev `evaluator.envBlockJudge` ran: the failed-assertion
+   *  ids it judged (auto band) likely COULD NOT EXECUTE in the grader's environment. Informational —
+   *  the ids stay in `failedAssertions`; a conductor should confirm the gate in a writable env rather
+   *  than treat them as a contract defect. Ids only, holdout-safe. Absent when the judge is off. */
+  envBlockedAssertionIds?: AssertionId[];
   resultText?: string;
   resultDigest?: string;
   verdictPath?: string;

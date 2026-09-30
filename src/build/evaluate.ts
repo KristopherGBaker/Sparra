@@ -29,6 +29,7 @@ import {
 import { RETIRED_HOLDOUT_INSTRUCTION } from "./contract.ts";
 import { calibrationText, existingTestsText, rubricText } from "./modeText.ts";
 import { assertionKey, assertionKeySet, normalizeAssertionId, normalizeUnrunIds } from "./assertionId.ts";
+import { annotateEnvBlock, renderEnvBlockSection, type EnvBlockDeps } from "./envBlockJudge.ts";
 import { RUBRIC_CRITERIA, type AssertionId, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
 import { createSandboxSessionEnv, judgeCapabilityNotesText, withJudgeSandboxFlag } from "./judgeScratch.ts";
@@ -192,6 +193,8 @@ export async function evaluateItem(args: {
    *  Normally supplied by the build loop from the durable verdict channel; when omitted, evaluateItem
    *  reads them itself from disk (`readPriorRetirements`, resume-safe). */
   priorRetirements?: RetiredHoldout[];
+  /** Injectable for tests: the Jev client factory + timeout clock behind `evaluator.envBlockJudge`. */
+  envBlockDeps?: EnvBlockDeps;
 }): Promise<EvalOutput> {
   const { ctx, item, contractText, workspaceDir, round } = args;
   const role = args.role ?? ctx.config.roles.evaluator;
@@ -577,6 +580,11 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
   }
   const safeRaw = holdoutLines(holdoutText).length ? redactHoldout(resultText, holdoutText) : resultText;
 
+  // Opt-in Jev annotation (evaluator.envBlockJudge): runs on the holdout-REDACTED verdict, annotates
+  // only, never changes pass/scores/unrun ids, and fails open (a no-op when off / keyless).
+  const envBlock = await annotateEnvBlock(verdict, ctx.config.evaluator?.envBlockJudge, args.envBlockDeps);
+  if (envBlock) verdict.envBlock = envBlock;
+
   const unrunIds = verdict.unrunAssertionIds ?? [];
   const unrun = assertionKeySet(unrunIds);
   const failedAssertions = verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
@@ -587,7 +595,7 @@ ${holdout}${retirement}${memory}${capabilityNotes}Exercise the artifact for real
   const retirementSection = retiredRecords.length ? `\n\n${renderRetiredHoldouts(retiredRecords)}` : "";
   await writeText(
     ctx.paths.verdictFile(item.id, round, args.runId),
-    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
+    `# Verdict — ${item.id} round ${round}\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${ctx.config.rubric.passThreshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${unrunIds.length ? unrunIds.map((id) => `#${id}`).join(", ") : "_none_"}\n${capNote ? `- ${capNote}\n` : ""}\n## Failed assertions (${failedAssertions.length}/${runnableCount} runnable)\n${failedAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}${renderEnvBlockSection(verdict.envBlock)}\n\n## Un-run assertions (no signal)\n${unrunAssertions.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n\n---\n\n<details><summary>raw evaluator output</summary>\n\n${safeRaw}\n\n</details>\n`
   );
 
   if (verdict.verdict === "pass") ok(`${item.id} PASSED round ${round} (${verdict.weightedTotal}).`);

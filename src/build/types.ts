@@ -52,6 +52,29 @@ export interface Verdict {
    *  persisted holdout-redacted, keyed by a stable `holdoutId`, so later rounds treat it as settled
    *  (mirrors ACCEPTED-BLOCKING). Conductor/generator-visible copies are holdout-redacted. */
   holdoutContradictions?: HoldoutContradiction[];
+  /** Opt-in Jev annotation (`evaluator.envBlockJudge`): which FAILED assertions likely could not
+   *  execute in the grader's environment. Informational — it never changes `verdict`, `pass`, scores
+   *  or `unrunAssertionIds`; only `auto`-band ids freeze pivot streaks. Absent unless the judge ran. */
+  envBlock?: EnvBlockAnnotation;
+}
+
+/** Why an env-block classification was incomplete (precedence: timeout > request-failed > invalid-response). */
+export type EnvBlockError = "timeout" | "request-failed" | "invalid-response";
+
+/** One flagged assertion: `auto` = confident it was environment-blocked; `suspect` = worth a look. */
+export interface EnvBlockFlag {
+  id: AssertionId;
+  noul: number;
+  choice: string;
+  confidence: number;
+  band: "auto" | "suspect";
+}
+
+export interface EnvBlockAnnotation {
+  model: string;
+  /** Flagged (auto or suspect) assertions only. */
+  assertions: EnvBlockFlag[];
+  error?: EnvBlockError;
 }
 
 /** An evaluator-flagged direct contradiction between a HOLDOUT check and the agreed contract.

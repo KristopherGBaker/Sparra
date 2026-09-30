@@ -212,6 +212,11 @@ export function buildDecisionRequest(params: {
     if (params.kind === "contract-defect" && s.failedAssertions && s.failedAssertions.length > 0) {
       context.failedAssertions = s.failedAssertions.map((a) => a.id).join(",");
     }
+    // Jev judged these failed assertions environment-blocked (could not run in the grader's sandbox):
+    // tell the brain/human so they confirm the gate in a writable env instead of striking or pivoting.
+    if (s.envBlockedAssertionIds && s.envBlockedAssertionIds.length > 0) {
+      context.envBlockedAssertions = s.envBlockedAssertionIds.join(",");
+    }
   }
   return {
     id: `${params.unit}-${params.seq}`,

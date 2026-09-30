@@ -158,6 +158,8 @@ knob list is also in `docs/configuration.md`. The few that matter most:
   workspace reset, scoring weights/pass threshold.
 - **`measure` / `review` / `evaluator.secondOpinion`** — opt-in post-accept QA diff, code-review
   gate, and cross-model re-grade gate (all off by default; see subskill for semantics).
+- **`evaluator.envBlockJudge`** — opt-in Jev annotation of failed assertions that likely couldn't
+  run in the grader's sandbox; freezes their pivot streaks, never changes the verdict (off by default).
 - **`git.autoCommit` / `pullBeforeWork`**, **`build.skills` / `extraReadDirs`**, **`scriptHooks`** —
   per-item conventional commits, pre-build ff-only sync, agent skills per role, extra read-only
   dirs, and external lifecycle hooks.
@@ -265,7 +267,9 @@ UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/
   concurrent-load pass itself — opt in via `build.flakinessLoadRerun` (off by default).
 - **UN-RUN ≠ FAIL.** A verdict can list `unrunAssertionIds` when the evaluator environment
   could not execute a gate; `exerciseStatus: mixed` means some gates ran and some were env-blocked,
-  while `blocked` means nothing ran. Treat UN-RUN as no signal, not a product failure.
+  while `blocked` means nothing ran. Treat UN-RUN as no signal, not a product failure. With the
+  opt-in `evaluator.envBlockJudge`, a FAILED assertion Jev judges env-blocked (`envBlock`, `auto`
+  band) likewise doesn't advance pivot streaks — but it stays a failure in the verdict.
 - **Never commits to your main branch.** Existing repos build on a worktree/branch; opt into
   per-item conventional commits *on that branch* with `git.autoCommit` (never main/in-place).
 - **Skills are declared, not ambient.** List them in `build.skills` / `roles.*.skills`;

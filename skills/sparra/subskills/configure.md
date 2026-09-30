@@ -142,7 +142,8 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   feedback UNCAPS that assertion's evidence and prepends a **diagnose-first** instruction naming the
   id — a register between a plain patch and a full GAN pivot. Pairs with **error-biased evidence
   truncation** (over-cap evidence keeps the error-bearing tail, not a blind head-slice). Blocked/
-  all-un-run rounds don't advance the streak; a pivot resets it. See `docs/build-loop.md`.
+  all-un-run rounds (and Jev `auto`-band ids, see `evaluator.envBlockJudge`) don't advance the
+  streak; a pivot resets it. See `docs/build-loop.md`.
 - **`exercise.mechanism`** — `cli` | `web` | `ios` | `computer-use` | `custom`.
 - **`build.verifyCommands`** — verification commands the **generator** may self-run (auto-approved)
   to stop "writing blind" — typecheck/test/build (e.g. `npm test`, `tsc`). A Claude
@@ -243,6 +244,15 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   `evaluatorSecond` is unset or resolves to the same effective backend+model as the
   actually-selected primary evaluator (after fallback). A limit/empty/blocked/all-un-run second
   grade never demotes (accept proceeds). Stops a lenient primary evaluator laundering slop.
+- **`evaluator.envBlockJudge: { enabled, model, apiKeyEnv, autoNoul, autoConfidence, suspectNoul,
+  concurrency, timeoutMs }`** — opt-in (off) TypeSafe **Jev annotation** of FAILED assertions that
+  likely *could not execute* in the evaluator's sandbox (EPERM, read-only FS, no simulator) and were
+  misfiled as failures. Sends ONLY each failed assertion's holdout-redacted `#<id>: <evidence>`
+  (≤1500 chars) to TypeSafe, and only when `$TYPESAFE_API_KEY` (or `apiKeyEnv`) is set. It NEVER
+  changes the verdict/scores/un-run ids; its one effect is that `auto`-band ids (noul ≥ 0.8,
+  `environment_blocked`, confidence ≥ 0.8) stop advancing the pivot/escalation streaks (all-`auto`
+  ⇒ the round is inconclusive like a blocked exercise) and reach a conductor as
+  `envBlockedAssertionIds`. `suspect` ids (noul ≥ 0.5) are informational. Fail-open.
 - **`git.autoCommit`** — when true, each accepted item is one **conventional commit** onto
   the Sparra worktree/branch (never your main branch; never in-place). Default false.
 - **`git.pullBeforeWork`** — opt-in (default false). When true, **before** `build`/`conduct`/

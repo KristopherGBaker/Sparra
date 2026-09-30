@@ -37,6 +37,7 @@ export const PARENT_SAFE_FIELDS = [
   "passThreshold",
   "blocking",
   "failedAssertions",
+  "envBlockedAssertionIds",
   "verdictPath",
   "critiquePath",
   "outPath",

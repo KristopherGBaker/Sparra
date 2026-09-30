@@ -13,6 +13,7 @@ weightedTotal: number?
 passThreshold: number?
 blocking: string[]?
 failedAssertions: object[]?
+envBlockedAssertionIds: (number|string)[]?
 resultText: string?
 resultDigest: string?
 verdictPath: string?

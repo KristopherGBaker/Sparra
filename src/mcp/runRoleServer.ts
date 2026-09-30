@@ -7,6 +7,7 @@ import { z } from "zod";
 import { loadCtxForRole, autoProbeCtx, type Ctx } from "../context.ts";
 import { runRole, defaultRoleRunTraceDir, validateEvalProvenance, validateBaselineCommand, validateReportPath, type RoleKind, type RoleRunRequest, type RoleRunResult } from "../build/roleRun.ts";
 import { assertionKey, assertionKeySet } from "../build/assertionId.ts";
+import { autoEnvBlockedIds } from "../build/envBlockJudge.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { sessionsPath } from "../sdk/session.ts";
 import { removeUnitWorktree } from "../build/unitWorktree.ts";
@@ -144,6 +145,9 @@ export function buildRunRolePayload(
           const unrun = assertionKeySet(r.verdict.unrunAssertionIds);
           return r.verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
         })(),
+        // Jev-judged environment-blocked ids (opt-in `evaluator.envBlockJudge`, auto band): present only
+        // when there are some, so a judge-off envelope is byte-identical. Ids only — holdout-safe.
+        ...(autoEnvBlockedIds(r.verdict).length ? { envBlockedAssertionIds: autoEnvBlockedIds(r.verdict) } : {}),
         // The auto-persisted redacted verdict (always written for the evaluator) — surfaced so the
         // conductor/reflect can find it. Distinct from the caller-chosen `outPath`. Holdout-safe:
         // a PATH under .sparra/verdicts/, never verdict/holdout contents.

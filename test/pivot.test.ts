@@ -308,3 +308,96 @@ describe("assertion streaks — non-numeric ids (\"6a\", \"6b\") keep SEPARATE k
     expect(assertionsToEscalate({ "6b": 1 }, v, 2)).toEqual([]);
   });
 });
+
+// ── Jev env-block annotation (`verdict.envBlock`): auto-band ids freeze the streaks ──
+const flag = (id: number | string, band: "auto" | "suspect") => ({ id, noul: 0.95, choice: "environment_blocked", confidence: 0.9, band });
+const withEnvBlock = (flags: ReturnType<typeof flag>[]): Partial<Verdict> => ({ envBlock: { model: "jev-1.13.0", assertions: flags } });
+
+describe("envBlock auto band — pivot streaks (Jev, informational annotation)", () => {
+  const cfg = defaultConfig(); // N = 3
+  const lowScores = { design: 40, originality: 40, craft: 40, functionality: 40 };
+
+  it("ALL failed runnable assertions auto → criterion streaks unchanged, no pivot, even at N-1", () => {
+    const item = makeItem({ design: 2, craft: 2, originality: 0 });
+    const v = assertionVerdict(
+      [{ id: 1, pass: false, evidence: "EPERM" }, { id: 2, pass: false, evidence: "EPERM" }, { id: 3, pass: true, evidence: "ok" }],
+      { scores: lowScores, ...withEnvBlock([flag(1, "auto"), flag(2, "auto")]) },
+    );
+    const out = updateStreaksAndDecide(item, v, cfg);
+    expect(out.pivot).toBe(false);
+    expect(out.criterion).toBeUndefined();
+    expect(out.streaks).toEqual({ design: 2, craft: 2, originality: 0 });
+  });
+
+  it("un-run ids are not failed-runnable: one auto + the rest un-run is still all-auto", () => {
+    const v = assertionVerdict(
+      [{ id: 1, pass: false, evidence: "EPERM" }, { id: 2, pass: false, evidence: "no simulator" }],
+      { scores: lowScores, unrunAssertionIds: [2], ...withEnvBlock([flag(1, "auto")]) },
+    );
+    const out = updateStreaksAndDecide(makeItem({ design: 2 }), v, cfg);
+    expect(out.pivot).toBe(false);
+    expect(out.streaks.design).toBe(2);
+  });
+
+  it("one auto + one non-flagged failure → the normal advance (and pivot at N)", () => {
+    const v = assertionVerdict([{ id: 1, pass: false, evidence: "EPERM" }, { id: 2, pass: false, evidence: "wrong sum" }], {
+      scores: lowScores,
+      ...withEnvBlock([flag(1, "auto")]),
+    });
+    const out = updateStreaksAndDecide(makeItem({ design: 2 }), v, cfg);
+    expect(out.pivot).toBe(true);
+    expect(out.criterion).toBe("design");
+    expect(out.streaks.design).toBe(3);
+  });
+
+  it("auto + a failure flagged only SUSPECT → normal advance", () => {
+    const v = assertionVerdict([{ id: 1, pass: false, evidence: "EPERM" }, { id: 2, pass: false, evidence: "maybe env" }], {
+      scores: lowScores,
+      ...withEnvBlock([flag(1, "auto"), flag(2, "suspect")]),
+    });
+    expect(updateStreaksAndDecide(makeItem({ design: 1 }), v, cfg).streaks.design).toBe(2);
+  });
+
+  it("suspect-only has NO effect on any of the three functions", () => {
+    const failing = [{ id: 1, pass: false, evidence: "maybe env" }];
+    const plain = assertionVerdict(failing, { scores: lowScores });
+    const suspect = assertionVerdict(failing, { scores: lowScores, ...withEnvBlock([flag(1, "suspect")]) });
+    expect(updateStreaksAndDecide(makeItem({ design: 2 }), suspect, cfg)).toEqual(updateStreaksAndDecide(makeItem({ design: 2 }), plain, cfg));
+    expect(updateAssertionStreaks(assertionItem({ "1": 1 }), suspect)).toEqual(updateAssertionStreaks(assertionItem({ "1": 1 }), plain));
+    expect(assertionsToEscalate({ "1": 5 }, suspect, 2)).toEqual([1]);
+  });
+
+  it("an auto id's assertion streak is neither advanced nor reset; assertionsToEscalate excludes it", () => {
+    const v = assertionVerdict(
+      [{ id: 1, pass: false, evidence: "EPERM" }, { id: "6b", pass: false, evidence: "real" }, { id: 3, pass: true, evidence: "ok" }],
+      withEnvBlock([flag(1, "auto")]),
+    );
+    const out = updateAssertionStreaks(assertionItem({ "1": 2, "6b": 1, "3": 4, "9": 3 }), v);
+    expect(out["1"]).toBe(2); // frozen, like an un-run id
+    expect(out["6b"]).toBe(2); // the real failure advances
+    expect(out["3"]).toBe(0); // a pass still resets
+    expect(out["9"]).toBe(0); // a tracked id ABSENT from the verdict still resets
+    expect(assertionsToEscalate({ "1": 9, "6b": 9 }, v, 2)).toEqual(["6b"]);
+  });
+
+  it("an ALL-auto-failing verdict keeps the auto streak while the passing sibling resets", () => {
+    const v = assertionVerdict([{ id: 1, pass: false, evidence: "EPERM" }, { id: 2, pass: true, evidence: "ok" }], withEnvBlock([flag(1, "auto")]));
+    const out = updateAssertionStreaks(assertionItem({ "1": 2, "2": 3 }), v);
+    expect(out).toEqual({ "1": 2, "2": 0 });
+  });
+
+  it("matches auto ids by KEY across number/string forms", () => {
+    const v = assertionVerdict([{ id: 7, pass: false, evidence: "EPERM" }], { scores: lowScores, ...withEnvBlock([flag("7", "auto")]) });
+    expect(updateStreaksAndDecide(makeItem({ design: 2 }), v, cfg).pivot).toBe(false);
+    expect(assertionsToEscalate({ "7": 9 }, v, 2)).toEqual([]);
+  });
+
+  it("a verdict WITHOUT envBlock behaves exactly as before (and an empty annotation is inert)", () => {
+    const failing = [{ id: 1, pass: false, evidence: "EPERM" }];
+    const plain = assertionVerdict(failing, { scores: lowScores });
+    const empty = assertionVerdict(failing, { scores: lowScores, ...withEnvBlock([]) });
+    const out = updateStreaksAndDecide(makeItem({ design: 2 }), plain, cfg);
+    expect(out.pivot).toBe(true);
+    expect(updateStreaksAndDecide(makeItem({ design: 2 }), empty, cfg)).toEqual(out);
+  });
+});

@@ -1,4 +1,5 @@
 import { assertionKey, assertionKeySet } from "./assertionId.ts";
+import { autoEnvBlockedKeys } from "./envBlockJudge.ts";
 import type { AssertionId, Verdict } from "./types.ts";
 
 /**
@@ -78,18 +79,22 @@ export function truncateEvidence(evidence: string, cap: number): string {
   return head + TRUNCATION_MARKER + tail;
 }
 
+/** Appended to a failed-assertion line Jev judged environment-blocked (`envBlock`, auto band). */
+export const ENV_BLOCKED_SUFFIX = " — likely environment-blocked (Jev): confirm the gate runs before changing code";
+
 /** `#<id>: <evidence>` lines for FAILED assertions only, evidence capped + marked — except
  *  ESCALATED ids (`escalateAssertionIds`), whose evidence is rendered UNCAPPED. */
 function failedAssertionLines(verdict: Verdict, opts: FeedbackOptions = {}): string[] {
   const cap = opts.evidenceCap ?? EVIDENCE_CAP;
   const escalate = assertionKeySet(opts.escalateAssertionIds);
   const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  const envBlocked = autoEnvBlockedKeys(verdict);
   return verdict.assertions
     .filter((a) => !a.pass && !unrun.has(assertionKey(a.id)))
     .map((a) => {
       const evidence = (a.evidence ?? "").trim();
       const rendered = escalate.has(assertionKey(a.id)) ? evidence : truncateEvidence(evidence, cap);
-      return `#${a.id}: ${rendered || "(no evidence recorded)"}`;
+      return `#${a.id}: ${rendered || "(no evidence recorded)"}${envBlocked.has(assertionKey(a.id)) ? ENV_BLOCKED_SUFFIX : ""}`;
     });
 }
 

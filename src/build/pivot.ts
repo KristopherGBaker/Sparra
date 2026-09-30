@@ -1,6 +1,7 @@
 import type { SparraConfig } from "../config.ts";
 import type { ItemState } from "../state.ts";
 import { assertionKey, assertionKeySet } from "./assertionId.ts";
+import { autoEnvBlockedKeys } from "./envBlockJudge.ts";
 import { RUBRIC_CRITERIA, type AssertionId, type Verdict } from "./types.ts";
 
 export interface PivotDecision {
@@ -24,6 +25,13 @@ export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config
   const unrun = assertionKeySet(verdict.unrunAssertionIds);
   const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(assertionKey(a.id)));
   if (allAssertionsUnrun) {
+    return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
+  }
+  // Every failed runnable assertion is one Jev judged environment-blocked (`envBlock`, auto band):
+  // the round carries no artifact signal, so — exactly like a blocked exercise — freeze the streaks.
+  const envBlocked = autoEnvBlockedKeys(verdict);
+  const failedRunnable = verdict.assertions.filter((a) => !a.pass && !unrun.has(assertionKey(a.id)));
+  if (failedRunnable.length > 0 && failedRunnable.every((a) => envBlocked.has(assertionKey(a.id)))) {
     return { pivot: false, criterion: undefined, streaks: { ...item.criterionFailStreak } };
   }
   const streaks = { ...item.criterionFailStreak };
@@ -56,12 +64,14 @@ export function updateStreaksAndDecide(item: ItemState, verdict: Verdict, config
  * signal this round (passed, or simply not failing/absent) resets to 0 — exactly as
  * `updateStreaksAndDecide` zeroes a criterion whose score is at/above threshold, so a fixed
  * assertion can't keep a stale streak and spuriously escalate. Un-run ids carry no signal and are
- * left untouched. Returns a fresh map (never mutates `item`).
+ * left untouched. An id Jev judged environment-blocked (`envBlock`, auto band) is treated exactly
+ * like an un-run id. Returns a fresh map (never mutates `item`).
  */
 export function updateAssertionStreaks(item: ItemState, verdict: Verdict): Record<string, number> {
   const streaks = { ...(item.assertionFailStreak ?? {}) };
   if (verdict.exerciseStatus === "blocked") return streaks;
   const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  for (const key of autoEnvBlockedKeys(verdict)) unrun.add(key);
   const allAssertionsUnrun = verdict.assertions.length > 0 && verdict.assertions.every((a) => unrun.has(assertionKey(a.id)));
   if (allAssertionsUnrun) return streaks;
   // Keys of the ids that FAILED with a live signal this round (un-run ids are no-signal, excluded).
@@ -78,10 +88,12 @@ export function updateAssertionStreaks(item: ItemState, verdict: Verdict): Recor
 }
 
 /** Failed assertion ids whose streak has reached the escalation threshold (`>= after`, `after > 0`).
- *  Un-run ids never qualify. Empty when escalation is disabled (`after <= 0`) or nothing is at streak. */
+ *  Un-run ids and Jev-judged environment-blocked (auto band) ids never qualify. Empty when escalation
+ *  is disabled (`after <= 0`) or nothing is at streak. */
 export function assertionsToEscalate(streaks: Record<string, number>, verdict: Verdict, after: number): AssertionId[] {
   if (after <= 0) return [];
   const unrun = assertionKeySet(verdict.unrunAssertionIds);
+  for (const key of autoEnvBlockedKeys(verdict)) unrun.add(key);
   return verdict.assertions
     .filter((a) => !a.pass && !unrun.has(assertionKey(a.id)) && (streaks[assertionKey(a.id)] ?? 0) >= after)
     .map((a) => a.id);

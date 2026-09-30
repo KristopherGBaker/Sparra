@@ -167,6 +167,10 @@ export function detectContractDefect(rounds: ConductRoundRecord[]): AssertionId 
   // Normalize before keying: a JSON round-trip can carry `"7"` (or `" 7 "`) where another round has `7`.
   const poisonedId = normalizeAssertionId(poisoned);
   const poisonedKey = assertionKey(poisonedId);
+  // A gate Jev judged environment-blocked in the FINAL round could not run — that is not a contract
+  // defect (the assertion is fine; the grader's sandbox is the problem), so never strike it.
+  const finalEnvBlocked = rounds[rounds.length - 1]!.evaluator.envBlockedAssertionIds ?? [];
+  if (finalEnvBlocked.some((id) => assertionKey(normalizeAssertionId(id)) === poisonedKey)) return undefined;
   // That id must appear in the failed set of EVERY completed round (compared by key).
   for (const r of rounds) {
     if (!failedAssertionIds(r.evaluator).some((id) => assertionKey(normalizeAssertionId(id)) === poisonedKey)) return undefined;

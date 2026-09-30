@@ -1,7 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// The logger is a no-op under vitest; replace `warn` with a spy so the normalization warns can be counted.
+vi.mock("../src/util/log.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/util/log.ts")>()),
+  warn: vi.fn(),
+}));
+
+import { warn } from "../src/util/log.ts";
+import { normalizeEnvBlockJudgeConfig } from "../src/build/envBlockJudge.ts";
 import { deepMerge, defaultConfig, loadConfig, writeDefaultConfig, type SparraConfig } from "../src/config.ts";
 import { allowVerifyBash } from "../src/sdk/scoping.ts";
 import { Paths } from "../src/paths.ts";
@@ -220,5 +229,72 @@ describe("rubric.anchorFunctionality knob (Q4)", () => {
     const merged = deepMerge<SparraConfig>(defaultConfig(), { rubric: { anchorFunctionality: false } });
     expect(merged.rubric.anchorFunctionality).toBe(false);
     expect(merged.rubric.passThreshold).toBe(defaultConfig().rubric.passThreshold); // sibling survives
+  });
+});
+
+describe("evaluator.envBlockJudge (Jev env-blocked annotation)", () => {
+  it("defaults equal the documented block, and are opt-in", () => {
+    expect(defaultConfig().evaluator.envBlockJudge).toEqual({
+      enabled: false,
+      model: "jev-1.13.0",
+      apiKeyEnv: "TYPESAFE_API_KEY",
+      autoNoul: 0.8,
+      autoConfidence: 0.8,
+      suspectNoul: 0.5,
+      concurrency: 4,
+      timeoutMs: 8000,
+    });
+  });
+
+  it("a config without it deep-merges to the defaults; a partial block merges over them (secondOpinion sibling kept)", () => {
+    const merged = deepMerge<SparraConfig>(defaultConfig(), { evaluator: { secondOpinion: { enabled: true } } });
+    expect(merged.evaluator.envBlockJudge).toEqual(defaultConfig().evaluator.envBlockJudge);
+    const partial = deepMerge<SparraConfig>(defaultConfig(), { evaluator: { envBlockJudge: { enabled: true, autoNoul: 0.9 } } });
+    expect(partial.evaluator.envBlockJudge).toEqual({ ...defaultConfig().evaluator.envBlockJudge, enabled: true, autoNoul: 0.9 });
+    expect(partial.evaluator.secondOpinion.enabled).toBe(false);
+  });
+
+  it("normalize: valid values pass through with no warn", () => {
+    vi.mocked(warn).mockClear();
+    const good = { enabled: true, model: "jev-x", apiKeyEnv: "K", autoNoul: 0.9, autoConfidence: 0.7, suspectNoul: 0.9, concurrency: 2, timeoutMs: 100 };
+    expect(normalizeEnvBlockJudgeConfig(good)).toEqual(good);
+    expect(normalizeEnvBlockJudgeConfig(undefined)).toEqual(defaultConfig().evaluator.envBlockJudge);
+    expect(vi.mocked(warn)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["autoNoul: 1.5", { autoNoul: 1.5 }],
+    ["autoNoul: NaN", { autoNoul: Number.NaN }],
+    ["autoConfidence: -0.1", { autoConfidence: -0.1 }],
+    ["suspectNoul: '0.5'", { suspectNoul: "0.5" }],
+    ["concurrency: 0", { concurrency: 0 }],
+    ["concurrency: 1.5", { concurrency: 1.5 }],
+    ["timeoutMs: -1", { timeoutMs: -1 }],
+    ["timeoutMs: '5'", { timeoutMs: "5" }],
+    ["model: ''", { model: "" }],
+    ["apiKeyEnv: 7", { apiKeyEnv: 7 }],
+  ])("normalize: invalid %s → default for it, exactly one warn", (_n, bad) => {
+    vi.mocked(warn).mockClear();
+    const def = defaultConfig().evaluator.envBlockJudge;
+    const out = normalizeEnvBlockJudgeConfig({ enabled: true, ...bad } as never);
+    expect(vi.mocked(warn)).toHaveBeenCalledTimes(1);
+    expect(out.enabled).toBe(true);
+    for (const k of Object.keys(bad) as (keyof typeof def)[]) expect(out[k]).toBe(def[k]);
+  });
+
+  it("normalize: suspectNoul above autoNoul falls back to BOTH defaults with one warn", () => {
+    vi.mocked(warn).mockClear();
+    const out = normalizeEnvBlockJudgeConfig({ suspectNoul: 0.95, autoNoul: 0.6 });
+    expect(out.suspectNoul).toBe(0.5);
+    expect(out.autoNoul).toBe(0.8);
+    expect(vi.mocked(warn)).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalize: several invalid values still produce ONE warn naming them", () => {
+    vi.mocked(warn).mockClear();
+    const out = normalizeEnvBlockJudgeConfig({ autoNoul: 1.5, concurrency: 0, timeoutMs: 0 } as never);
+    expect(out).toEqual(defaultConfig().evaluator.envBlockJudge);
+    expect(vi.mocked(warn)).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(warn).mock.calls[0]![0])).toMatch(/autoNoul.*concurrency.*timeoutMs/);
   });
 });

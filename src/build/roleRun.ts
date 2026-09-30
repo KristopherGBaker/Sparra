@@ -25,6 +25,7 @@ import { RE_CRITIQUE_INSTRUCTION, ACCEPTED_BLOCKING_INSTRUCTION, RETIRED_HOLDOUT
 import { appleConventions, isApplePlatform } from "./swiftConventions.ts";
 import { readMemory, memorySection } from "../memory.ts";
 import { assertionKey, assertionKeySet, normalizeAssertionId, normalizeUnrunIds } from "./assertionId.ts";
+import { annotateEnvBlock, renderEnvBlockSection, type EnvBlockDeps } from "./envBlockJudge.ts";
 import { RUBRIC_CRITERIA, type AssertionId, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict } from "./types.ts";
 import { extractJsonWhere } from "../util/extract.ts";
 import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
@@ -488,6 +489,8 @@ export interface RoleRunRequest {
   prewarmSwiftFn?: typeof prewarmSwiftPackages;
   /** Injectable for tests; defaults to the real git/fs source-integrity deps. */
   integrityDeps?: IntegrityDeps;
+  /** Injectable for tests: the Jev client factory + timeout clock behind `evaluator.envBlockJudge`. */
+  envBlockDeps?: EnvBlockDeps;
   /** Injectable for tests; lists the workspace's changed/untracked files (abs paths) — used to
    *  detect a writer that produced ZERO file changes (the permission-starved no-progress case).
    *  Defaults to `changedFiles` (git status --porcelain). */
@@ -961,7 +964,7 @@ function renderInteractiveVerdict(
   // U3: surface the durable, holdout-SAFE retirement section (keyed by holdoutId) — "" when nothing
   // was retired, keeping the `--out` file byte-identical to today's for the no-retirement case.
   const retirementSection = retired.length ? `\n${renderRetiredHoldouts(retired)}` : "";
-  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => unrun.has(assertionKey(a.id))).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n`;
+  return `# Verdict — ${roleKind} (${actualRole.backend ?? "claude"}/${actualRole.model}${fallbackNote})\n\n- verdict: **${verdict.verdict}**\n- weighted total: **${verdict.weightedTotal}** (threshold ${threshold})\n- scores: design ${verdict.scores.design}, originality ${verdict.scores.originality}, craft ${verdict.scores.craft}, functionality ${verdict.scores.functionality}\n- exercise status: **${verdict.exerciseStatus ?? "ran"}**\n- un-run assertions: ${verdict.unrunAssertionIds?.length ? verdict.unrunAssertionIds.map((id) => `#${id}`).join(", ") : "_none_"}\n\n## Failed assertions (${failed.length}/${verdict.assertions.length - (verdict.unrunAssertionIds?.length ?? 0)} runnable)\n${failed.map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}${renderEnvBlockSection(verdict.envBlock)}\n\n## Un-run assertions (no signal)\n${verdict.assertions.filter((a) => unrun.has(assertionKey(a.id))).map((a) => `- #${a.id}: ${a.evidence}`).join("\n") || "_none_"}\n\n## Blocking\n${verdict.blocking.map((b) => `- ${b}`).join("\n") || "_none_"}${retirementSection}\n\n## Notes\n${verdict.notes}\n`;
 }
 
 /** Parse + normalize an evaluator verdict the same way the build loop does.
@@ -2233,6 +2236,10 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
       );
       warn(`Integrity violation for role-run-${roleKind}: evaluator wrote ${mutatedArtifacts.length} artifact file(s) (reverted): ${mutatedArtifacts.join(", ")}.`);
     }
+    // Opt-in Jev annotation (evaluator.envBlockJudge) of the holdout-REDACTED failed assertions —
+    // annotates only (never pass/scores/unrun ids), fails open, a no-op when off / keyless.
+    const envBlock = await annotateEnvBlock(verdict, ctx.config.evaluator?.envBlockJudge, req.envBlockDeps);
+    if (envBlock) verdict.envBlock = envBlock;
     // Append a same-model-grade note to the verdict notes when the cross-model gate collapsed.
     if (sameModelGrade === true) {
       verdict.notes = (verdict.notes ? verdict.notes + "\n\n" : "") +

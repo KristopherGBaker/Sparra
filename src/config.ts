@@ -539,6 +539,8 @@ export interface SparraConfig {
     secondOpinion: {
       enabled: boolean;
     };
+    /** Opt-in Jev "couldn't run vs ran-and-failed" annotation of FAILED assertions. */
+    envBlockJudge: EnvBlockJudgeConfig;
   };
 
   batch: { K: number };
@@ -676,6 +678,30 @@ export interface ShadowJudgeConfig {
   timeoutMs: number;
 }
 
+/**
+ * TypeSafe Jev annotation of failed assertions that likely COULD NOT EXECUTE in the grader's
+ * environment (`src/build/envBlockJudge.ts`). It never changes a verdict; an `auto`-band assertion
+ * only stops advancing the pivot streaks. Enabling it SENDS the holdout-redacted evidence of each
+ * failed assertion (`#<id>: <evidence>`, ≤1500 chars) to TypeSafe — nothing else.
+ */
+export interface EnvBlockJudgeConfig {
+  /** Opt-in. Off → no client is built, no `envBlock` field, every artifact byte-identical. */
+  enabled: boolean;
+  /** Pinned Jev version ID (not the moving `jev-latest` alias). */
+  model: string;
+  /** NAME of the env var holding the TypeSafe API key — never the key itself. */
+  apiKeyEnv: string;
+  /** Auto band: noul ≥ this AND choice `environment_blocked` AND confidence ≥ `autoConfidence`. */
+  autoNoul: number;
+  autoConfidence: number;
+  /** Suspect band: noul ≥ this and not auto (informational only). Must be ≤ `autoNoul`. */
+  suspectNoul: number;
+  /** Max concurrent requests per verdict. */
+  concurrency: number;
+  /** Whole-classification budget (ms) per verdict. */
+  timeoutMs: number;
+}
+
 function role(model: ModelRef, effort?: RoleConfig["effort"]): RoleConfig {
   return effort ? { model, effort } : { model };
 }
@@ -778,7 +804,20 @@ export function defaultConfig(): SparraConfig {
     deviation: { strictness: "moderate" },
     review: { enabled: false, blockOn: "high" },
     // Off by default: opting in re-grades a PASS with a second evaluator on a different backend/model.
-    evaluator: { secondOpinion: { enabled: false } },
+    evaluator: {
+      secondOpinion: { enabled: false },
+      // Off by default: opting in sends holdout-redacted failed-assertion evidence to TypeSafe.
+      envBlockJudge: {
+        enabled: false,
+        model: "jev-1.13.0",
+        apiKeyEnv: "TYPESAFE_API_KEY",
+        autoNoul: 0.8,
+        autoConfidence: 0.8,
+        suspectNoul: 0.5,
+        concurrency: 4,
+        timeoutMs: 8000,
+      },
+    },
     batch: { K: 3 },
     conduct: {
       brain: "hybrid",
