@@ -53,9 +53,9 @@ calibration by bucket, and a keyword-regex baseline — then a full-population s
 - **Env-blocked** (240 labeled failed assertions): Noul ≥ 0.5 → 99% precision / 86% recall; the strict
   `auto` rule → 100% / 53%. The regex baseline had 53% precision with 61 harmful false positives.
 
-### Evaluated and not adopted (2026-09-30)
+### Evaluated and not adopted (2026-09-30 / 10-01)
 
-Both built from 671 role-run verdicts paired with their agreed contracts (7,873 non-holdout assertions).
+The first two were built from 671 role-run verdicts paired with their agreed contracts (7,873 non-holdout assertions).
 
 - **Contract overreach** — "does this failed assertion fault something the contract doesn't require?",
   meant to give `detectContractDefect` a semantic signal against the generalize-spec trap. Only ~11% of
@@ -68,6 +68,16 @@ Both built from 671 role-run verdicts paired with their agreed contracts (7,873 
   of passes are only partially evidenced, but Jev (Noul ≥ 0.9: 67% precision / 60% recall) barely beat
   an evidence-length heuristic. Its `contradicts` answer misread `rc=1, no matches` — the success of a
   negative `rg` sweep — as a failure.
+
+- **Conductor next-action (interactive `/sparra-loop`)** — reconstructed 512 interactive decisions from
+  role-run timelines (units keyed by contract heading/worktree; the next role-runs after each verdict
+  show what the conductor did) and asked Jev, from the holdout-redacted verdict summary, which of
+  *fix the artifact / amend the contract / accept the blockers and re-grade* fits each of 234
+  unambiguous failed-verdict decisions. Jev answered `fix_artifact` 225 times, mostly at confidence
+  ≥ 0.8 — 28% agreement, below the 47% majority-class baseline; a "does an item blame the contract?"
+  Noul ≥ 0.5 was 79% precise but caught only 10% of amendments. The decision depends on context the
+  verdict doesn't carry (the contract's intent, the unit's history, cost), so a Jev decision strategy
+  for interactive conducting is not worth a `record_decision` seam.
 
 **Lesson:** Jev works when the answer is local and literal in the text it sees (couldn't-run vs failed,
 same defect vs different). It fails when the answer depends on the contract's intent or on context
@@ -86,9 +96,9 @@ Run the offline experiment above before building any of these.
   on the class yet.
 - **Smaller ideas** — stall detection on non-evaluator traces; per-item skill selection; a
   materiality filter for reflect findings.
-- **A confidence-gated Jev conduct strategy** — a `JudgmentStrategy` that lets Jev resolve decisions
-  directly, falling back to the brain or a park below a confidence gate. Wait until `shadow` records
-  in `.sparra/conduct/*/run.json` are numerous enough to measure agreement (none existed on
-  2026-09-30).
+- **A confidence-gated Jev conduct strategy** — a `JudgmentStrategy` that lets Jev resolve headless
+  `sparra conduct` decisions directly, falling back to the brain or a park below a confidence gate.
+  The interactive next-action experiment above argues against it; only revisit if `shadow` records in
+  `.sparra/conduct/*/run.json` (none on 2026-10-01) show high agreement on the narrow decision kinds.
 - **Real-world check of `envBlockJudge`** — once new verdicts carry `envBlock` annotations, measure the
   strict band outside the original sample.
