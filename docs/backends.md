@@ -159,6 +159,14 @@ the **judge's exercise** (the evaluator + contract-evaluator), the same way `rol
 but with no sandbox left there is **no way to withhold the network** — Sparra therefore does not send an
 unenforceable `networkAccessEnabled: false`, and the isolated checkout is the only remaining boundary.
 
+**Swift/Xcode projects need it in practice.** Across past runs, 83% of Codex verdicts on Swift
+projects under `workspace-write` had un-run gates — `xcodebuild`/CoreSimulator, SwiftPM's own nested
+sandbox (`sandbox_apply`), and SwiftLint/clang cache writes are all refused — against 3% under
+`danger-full-access`. So when a Codex judge is about to exercise a Swift/Xcode project (a
+`Package.swift`, `project.yml`, `*.xcodeproj` or `*.xcworkspace` within two directory levels, or
+`exercise.mechanism: ios`) without full access, the runner warns at run start
+(`appleSandboxWarning`, `src/build/exerciseScratch.ts`).
+
 **Same safety gate as the write-role knob:** full access is honored **only on an isolated checkout** — a
 Sparra build branch **or** a linked git worktree. Denied, the exercise stays `read-only` and Sparra emits
 a **loud warning** naming the consequence (the gate will be UN-RUN, not graded) rather than quietly

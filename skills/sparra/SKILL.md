@@ -259,6 +259,8 @@ UN-RUN/no-signal ids; anything deeper → the role transcripts in `traces/<run>/
   move `decomposer` to Claude.
 - **iOS: launch screen is mandatory**, else letterbox → UI automation fails. Build in the
   project's own dir, not nested.
+- **Swift/Xcode + Codex judge → `exercise.sandbox: danger-full-access`.** Under `workspace-write`
+  most build/test gates come back UN-RUN (83% of past verdicts vs 3%); the runner warns when it's missing.
 - **Budgets on a subscription/Codex**: use `maxTokensPerItem`; `zeroCostTokenCap` is only the
   fallback when USD is active but cost is `$0`/unknown and `maxTokensPerItem` is off.
 - **`BUDGET_EXCEEDED` ≠ crash** — the item halts, the run continues to the next item.

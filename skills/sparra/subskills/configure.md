@@ -183,7 +183,9 @@ Seeded on `init`; edit and re-run (picked up live). Full knob list: `docs/config
   exercise needs CoreSimulatorService XPC, which scratch can't grant, so a `workspace-write` judge
   marks those gates UN-RUN; it lifts the sandbox (guard still armed, network no longer withholdable)
   and, like `roles.*.sandbox`, is honored only on an isolated checkout — denied, you get a loud
-  warning, not a silent read-only judge. The Claude evaluator exercises via the in-process runner
+  warning, not a silent read-only judge. **Use it on every Swift/Xcode project with a Codex judge**:
+  under `workspace-write` 83% of those verdicts had un-run gates (3% with full access), and the
+  runner warns at run start when a Codex judge exercises one without it. The Claude evaluator exercises via the in-process runner
   regardless.
 - **default writable-scratch env layer (all sandboxed build sessions)** — the **evaluator**,
   **contract-evaluator**, the **generator/writer**, AND the **contract-negotiation** sessions get a
