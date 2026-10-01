@@ -99,7 +99,11 @@ describe("session-start recording — the id is durable before the work, not aft
   it("is a no-op without a trace dir, and never throws on an unwritable one", () => {
     const noTrace = { ...req(), traceDir: "" };
     expect(withSessionRecording(noTrace)).toBe(noTrace); // untouched request
-    const wrapped = withSessionRecording(req({ traceDir: "/proc/nonexistent-sparra/traces" }));
+    // A trace dir under a regular FILE fails fast (ENOTDIR) on every OS. Never use /proc here: Node's
+    // recursive mkdir spins forever on procfs paths on Linux, which hung CI to the 6h job limit.
+    const blocker = path.join(dir, "afile");
+    fs.writeFileSync(blocker, "");
+    const wrapped = withSessionRecording(req({ traceDir: path.join(blocker, "traces") }));
     expect(() => wrapped.onEvent!({ kind: "init", sessionId: "s", model: "m" })).not.toThrow();
   });
 
