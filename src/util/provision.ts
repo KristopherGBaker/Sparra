@@ -158,6 +158,8 @@ export interface ProvisionDeps {
   platform?: NodeJS.Platform | string;
   /** Post-copy prune seam (see `prunePathBoundCaches`); defaults to the real fs. */
   pruneFs?: PruneFs;
+  /** Post-copy Node-package scan seam (see `unprovisionedNodePackages`); defaults to the real fs. */
+  nodeScanFs?: NodeScanFs;
 }
 
 export interface ProvisionSummary {
@@ -167,6 +169,95 @@ export interface ProvisionSummary {
   /** Path-bound caches discarded from the COPIES (never from the source) — see
    *  `PATH_BOUND_CACHE_DIRS`. Relative to the worktree, for a readable log/summary. */
   pruned: string[];
+  /** Node package dirs (worktree-relative, `.` for the root) that declare dependencies but still have
+   *  no `node_modules` after provisioning — see `unprovisionedNodePackages`. */
+  unprovisioned: string[];
+}
+
+/** Filesystem probes for `unprovisionedNodePackages` — injected so tests can fake a tree. */
+export interface NodeScanFs {
+  /** Subdirectory names of `dir` (empty when unreadable). */
+  listDirs: (dir: string) => string[];
+  /** File text, or `null` when absent/unreadable. */
+  readFile: (file: string) => string | null;
+  exists: (p: string) => boolean;
+}
+
+function realNodeScanFs(): NodeScanFs {
+  return {
+    listDirs: (dir) => {
+      try {
+        return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+      } catch {
+        return [];
+      }
+    },
+    readFile: (file) => {
+      try {
+        return fs.readFileSync(file, "utf8");
+      } catch {
+        return null;
+      }
+    },
+    exists,
+  };
+}
+
+/** Whether a `package.json` text declares at least one dependency or devDependency. */
+function declaresDeps(pkgText: string): boolean {
+  try {
+    const pkg = JSON.parse(pkgText) as { dependencies?: unknown; devDependencies?: unknown };
+    const nonEmpty = (v: unknown) => !!v && typeof v === "object" && Object.keys(v as object).length > 0;
+    return nonEmpty(pkg.dependencies) || nonEmpty(pkg.devDependencies);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Node package dirs in `workspaceDir` — the root and up to two levels below it, skipping hidden dirs
+ * and `node_modules` — whose `package.json` declares dependencies but which have no `node_modules`.
+ * Returned worktree-relative (`.` for the root), in walk order.
+ *
+ * A judge's sandbox has the network off, so such a package cannot install its deps there: its
+ * `tsc`/`vitest`/`eslint` exit 127 or `npm install --offline` fails with ENOTCACHED, and every gate
+ * that needs them comes back UN-RUN. A monorepo whose deps live in `dashboard/node_modules` while
+ * `git.provisionDeps.dirs` lists only `node_modules` hits exactly this.
+ */
+export function unprovisionedNodePackages(workspaceDir: string, fsd: NodeScanFs = realNodeScanFs()): string[] {
+  const missing: string[] = [];
+  const visit = (rel: string, depth: number) => {
+    const dir = path.join(workspaceDir, rel);
+    const pkg = fsd.readFile(path.join(dir, "package.json"));
+    if (pkg !== null && declaresDeps(pkg) && !fsd.exists(path.join(dir, "node_modules"))) missing.push(rel || ".");
+    if (depth <= 0) return;
+    for (const name of fsd.listDirs(dir)) {
+      if (name.startsWith(".") || name === "node_modules") continue;
+      visit(rel ? path.join(rel, name) : name, depth - 1);
+    }
+  };
+  visit("", 2);
+  return missing;
+}
+
+/**
+ * The provisioning warning for `unprovisionedNodePackages`' result (`undefined` when none are
+ * missing). Each dir gets its remedy: a `node_modules` that exists in the main checkout can be copied
+ * by listing it in `git.provisionDeps.dirs`; one that doesn't must be installed there first.
+ */
+export function unprovisionedWarning(missing: string[], root: string, existsFn: (p: string) => boolean = exists): string | undefined {
+  if (!missing.length) return undefined;
+  const lines = missing.map((rel) => {
+    const nm = rel === "." ? "node_modules" : path.join(rel, "node_modules");
+    return existsFn(path.join(root, nm))
+      ? `  - ${rel}: add \`${nm}\` to git.provisionDeps.dirs`
+      : `  - ${rel}: no ${nm} in the main checkout either — install its dependencies there first`;
+  });
+  return (
+    `provision: ${missing.length} Node package(s) in the worktree declare dependencies but have no ` +
+    `node_modules, so a sandboxed judge (network off) cannot run their tools and those gates will come ` +
+    `back UN-RUN:\n${lines.join("\n")}`
+  );
 }
 
 /** Default copy runner: spawn the argv (no shell), reporting ok/out like git.ts's `git()`. */
@@ -192,7 +283,7 @@ export function provisionWorkspaceDeps(
   cfg: { enabled: boolean; dirs: string[] },
   deps: ProvisionDeps = {}
 ): ProvisionSummary {
-  const summary: ProvisionSummary = { copied: [], skipped: [], failed: [], pruned: [] };
+  const summary: ProvisionSummary = { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] };
   if (workspaceDir === root || !cfg.enabled) return summary;
 
   const fsd: ProvisionFs = { exists: deps.exists ?? exists, isSymlink: deps.isSymlink ?? isSymlink };
@@ -231,6 +322,9 @@ export function provisionWorkspaceDeps(
       summary.failed.push(dir);
     }
   }
+  summary.unprovisioned = unprovisionedNodePackages(workspaceDir, deps.nodeScanFs);
+  const missingWarning = unprovisionedWarning(summary.unprovisioned, root, fsd.exists);
+  if (missingWarning) warn(missingWarning);
   return summary;
 }
 

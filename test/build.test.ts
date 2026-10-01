@@ -747,7 +747,7 @@ describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
       prepareWorkspace: () => ({ dir: wt, branch: "sparra/test", note: "t" }),
       provisionWorkspaceDeps: (root, ws, cfg) => {
         calls.push({ root, ws, cfg });
-        return { copied: [], skipped: [], failed: [], pruned: [] };
+        return { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] };
       },
       // U-X: the SwiftPM prewarm runs at PROVISIONING time (before any generate/evaluate).
       prewarmSwiftPackages: (root, ws, cfg) => {
@@ -778,7 +778,7 @@ describe("cmdBuild — worktree dep provisioning (CHANGE D)", () => {
       ...baseDeps(),
       provisionWorkspaceDeps: () => {
         called = true;
-        return { copied: [], skipped: [], failed: [], pruned: [] };
+        return { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] };
       },
       decompose: async () => [items[0]!],
       generateItem: async () => genOut(),

@@ -54,7 +54,7 @@ function fakeDeps(over: Partial<VerifiedBaselineDeps> = {}): VerifiedBaselineDep
   const base: VerifiedBaselineDeps = {
     resolveRefFn: () => BASE_SHA,
     addDetachedWorktreeFn: (_src, _wt, _ref) => ({ ok: true, out: "" }),
-    provisionFn: (_src, wt, _cfg) => { provisionCalls.push(wt); return { copied: [], skipped: [], failed: [], pruned: [] }; },
+    provisionFn: (_src, wt, _cfg) => { provisionCalls.push(wt); return { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }; },
     runCommandFn: async (cmd, _cwd) => { runCalls.push(cmd); return { exitCode: 0, combined: "all tests pass" }; },
     removeWorktreeFn: (_src, wt) => { removeCalls.push(wt); return { ok: true, out: "" }; },
     worktreeDirFn: (_src) => "/tmp/fake-baseline-wt",
@@ -104,7 +104,7 @@ describe("computeVerifiedBaseline — base tree, not HEAD/WIP", () => {
     const { ctx, dir } = await makeCtx();
     const order: string[] = [];
     const deps = fakeDeps({
-      provisionFn: (_src, wt, _cfg) => { order.push(`provision:${wt}`); return { copied: [], skipped: [], failed: [], pruned: [] }; },
+      provisionFn: (_src, wt, _cfg) => { order.push(`provision:${wt}`); return { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }; },
       runCommandFn: async (cmd, cwd) => { order.push(`run:${cmd}@${cwd}`); return { exitCode: 0, combined: "" }; },
     });
     await computeVerifiedBaseline(ctx, dir, "npm test", "HEAD~1", deps);
@@ -713,7 +713,7 @@ describe("computeVerifiedBaseline — tail-cap via real defaultRunCommandFn (ass
         resolveRefFn: () => BASE_SHA,
         // Fake add: create a real dir so node can spawn there, return ok.
         addDetachedWorktreeFn: (_src, wt, _ref) => { fs.mkdirSync(wt, { recursive: true }); return { ok: true, out: "" }; },
-        provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [] }),
+        provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }),
         // REAL defaultRunCommandFn — this is the actual tail-cap path under test.
         runCommandFn: defaultRunCommandFn,
         removeWorktreeFn: (_src, wt) => { fs.rmSync(wt, { recursive: true, force: true }); return { ok: true, out: "" }; },
@@ -746,7 +746,7 @@ describe("computeVerifiedBaseline — tail-cap via real defaultRunCommandFn (ass
       const deps: VerifiedBaselineDeps = {
         resolveRefFn: () => BASE_SHA,
         addDetachedWorktreeFn: (_src, wt, _ref) => { fs.mkdirSync(wt, { recursive: true }); return { ok: true, out: "" }; },
-        provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [] }),
+        provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }),
         runCommandFn: defaultRunCommandFn,
         removeWorktreeFn: (_src, wt) => { fs.rmSync(wt, { recursive: true, force: true }); return { ok: true, out: "" }; },
         worktreeDirFn: () => wtDir,

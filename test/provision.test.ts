@@ -13,6 +13,9 @@ import {
   swiftpmCacheDir,
   ensureSwiftpmCacheDir,
   type SwiftPrewarmDeps,
+  unprovisionedNodePackages,
+  unprovisionedWarning,
+  type NodeScanFs,
 } from "../src/util/provision.ts";
 import { createSandboxSessionEnv } from "../src/build/judgeScratch.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -424,5 +427,59 @@ describe("path-bound module-cache prune", () => {
     expect(summary.copied).toEqual(["node_modules"]);
     expect(summary.pruned).toEqual([]);
     expect(seen).toEqual([]); // not one readdir
+  });
+});
+
+describe("unprovisionedNodePackages — Node packages a sandboxed judge cannot install", () => {
+  /** A fake tree: dirs map to their subdir names, files to their text, plus extra existing paths. */
+  function fakeFs(tree: { dirs: Record<string, string[]>; files: Record<string, string>; present?: string[] }): NodeScanFs {
+    return {
+      listDirs: (d) => tree.dirs[d] ?? [],
+      readFile: (f) => tree.files[f] ?? null,
+      exists: (p) => p in tree.files || p in tree.dirs || (tree.present ?? []).includes(p),
+    };
+  }
+  const deps = JSON.stringify({ devDependencies: { typescript: "^5" } });
+
+  it("lists a root and a nested package that declare deps but have no node_modules", () => {
+    const fsd = fakeFs({
+      dirs: { "/wt": ["dashboard", "docs", "node_modules", ".git"], "/wt/dashboard": ["web"], "/wt/dashboard/web": [] },
+      files: { "/wt/package.json": deps, "/wt/dashboard/package.json": deps, "/wt/dashboard/web/package.json": deps },
+      present: ["/wt/dashboard/web/node_modules"],
+    });
+    expect(unprovisionedNodePackages("/wt", fsd)).toEqual([".", "dashboard"]);
+  });
+
+  it("ignores packages without dependencies, node_modules/hidden dirs, and anything deeper than two levels", () => {
+    const fsd = fakeFs({
+      dirs: { "/wt": ["a", "node_modules", ".cache"], "/wt/a": ["b"], "/wt/a/b": ["c"], "/wt/a/b/c": [] },
+      files: {
+        "/wt/package.json": JSON.stringify({ name: "root", workspaces: ["a"] }), // no deps of its own
+        "/wt/node_modules/package.json": deps,
+        "/wt/.cache/package.json": deps,
+        "/wt/a/b/c/package.json": deps, // three levels down
+        "/wt/a/package.json": "{ not json",
+      },
+    });
+    expect(unprovisionedNodePackages("/wt", fsd)).toEqual([]);
+  });
+
+  it("names the remedy per package: copy what the main checkout has, install what it lacks", () => {
+    const has = (p: string) => p === "/root/dashboard/node_modules";
+    const w = unprovisionedWarning([".", "dashboard"], "/root", has)!;
+    expect(w).toContain("dashboard: add `dashboard/node_modules` to git.provisionDeps.dirs");
+    expect(w).toContain(".: no node_modules in the main checkout either");
+    expect(w).toContain("UN-RUN");
+    expect(unprovisionedWarning([], "/root", has)).toBeUndefined();
+  });
+
+  it("provisionWorkspaceDeps records the unprovisioned packages in its summary", () => {
+    const summary = provisionWorkspaceDeps("/root", "/wt", { enabled: true, dirs: ["node_modules"] }, {
+      exists: () => false, // nothing to copy from
+      isSymlink: () => false,
+      run: () => ({ ok: true, out: "" }),
+      nodeScanFs: fakeFs({ dirs: { "/wt": ["dashboard"], "/wt/dashboard": [] }, files: { "/wt/dashboard/package.json": deps } }),
+    });
+    expect(summary.unprovisioned).toEqual(["dashboard"]);
   });
 });

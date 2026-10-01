@@ -1017,7 +1017,7 @@ function provisionSpy() {
   const calls: Array<{ root: string; workspace: string; cfg: { enabled: boolean; dirs: string[] } }> = [];
   const fn = ((root: string, workspace: string, cfg: { enabled: boolean; dirs: string[] }) => {
     calls.push({ root, workspace, cfg });
-    return { copied: [], skipped: [], failed: [], pruned: [] };
+    return { copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] };
   }) as unknown as typeof import("../src/util/provision.ts").provisionWorkspaceDeps;
   return { calls, fn };
 }
@@ -3061,7 +3061,7 @@ describe("runRole — unitWorktree (persistent generator tree)", () => {
     fs.writeFileSync(paths.holdout, `# Holdout\n\n- ${HOLDOUT_LINE}\n`);
     return { ctx: { root: dir, paths, config: defaultConfig(), store }, dir };
   }
-  const fakeProvision = () => vi.fn(() => ({ copied: [], skipped: [], failed: [], pruned: [] }));
+  const fakeProvision = () => vi.fn(() => ({ copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }));
   const cleanup = (ctx: Ctx, dir: string) => {
     for (const name of Object.keys(ctx.store.data.build.unitWorktrees ?? {})) {
       const rec = ctx.store.data.build.unitWorktrees![name]!;
@@ -3580,7 +3580,7 @@ describe("runRole — U-2: worktree-boundary threading (runner-level, Assertion 
       contract,
       workspace,
       isLinkedWorktreeFn: () => true,  // inject: force the worktree-boundary signal at roleRun.ts:762
-      provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [] }), // skip real dep copy
+      provisionFn: () => ({ copied: [], skipped: [], failed: [], pruned: [], unprovisioned: [] }), // skip real dep copy
       prewarmSwiftFn: () => ({ ran: false, ok: true, skipped: "not-a-swift-package" as const }), // skip prewarm
       changedFilesFn: () => [],        // skip git status in the progress probe
       hashFileFn: () => "hash",
