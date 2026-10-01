@@ -14,6 +14,8 @@ jobs:
   test:
     name: typecheck + test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    # A green run takes ~3 min; a synchronous hang can't be interrupted by vitest's testTimeout.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
