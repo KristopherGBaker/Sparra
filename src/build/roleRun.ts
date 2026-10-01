@@ -32,12 +32,12 @@ import { exists, readText, writeText, stampFromDate } from "../util/io.ts";
 import { addDetachedWorktreeAt, addWipWorktree, changedFiles, diffNames, fileContentHash, isLinkedWorktree, removeWipWorktree, revParse } from "../util/git.ts";
 import { ensureUnitWorktree, unitWorktreeWipGap, unitWorktreeWipWarning, type UnitWorktreeDeps } from "./unitWorktree.ts";
 import { provisionWorkspaceDeps, prewarmSwiftPackages } from "../util/provision.ts";
-import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
+import { appleSandboxWarning, exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { costUsdOrZero } from "./budget.ts";
 import { reaskBudgetUsd, reaskOverageNote, VERDICT_REASK_PROMPT, reportReaskOverrides } from "./jsonReask.ts";
 import { normalizeOutCapture } from "./outCapture.ts";
 import { mergedBuildEnv } from "./env.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, detectJudgeStack, judgeCapabilityNotesText, contractEvaluatorVerifyNoteText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 import { environmentNotesSection } from "../environment.ts";
 import { info, warn } from "../util/log.ts";
 
@@ -1888,11 +1888,26 @@ async function runRoleInPlace(req: RoleRunRequest): Promise<RoleRunResult> {
   };
   let res!: RunResult;
   let ranRole: RoleConfig = role;
+  let appleWarned = false; // at most once per role-run, on the first OS-sandboxed judge attempt
   for (let i = 0; i < chain.length; i++) {
     const attempt = chain[i]!;
     const be = attempt.backend ?? "claude";
     if (i > 0 && limitedBackends.has(be)) continue; // a fallback on an already-limited backend can't help
     ranRole = attempt;
+    if (isSandboxedJudge(roleKind) && !appleWarned) {
+      const appleWarning = appleSandboxWarning({
+        hasOsSandbox: getBackend(be).capabilities.sandbox,
+        mode: exerciseMode,
+        apple: detectJudgeStack(workspace).apple,
+        mechanism: ctx.config.exercise.mechanism,
+        refused: !!refusal,
+        roleLabel: `role-run-${roleKind}`,
+      });
+      if (appleWarning) {
+        warn(appleWarning);
+        appleWarned = true;
+      }
+    }
     // Backend-aware exercise wiring for THIS attempt (a fallback may switch backends): attach the
     // in-process exercise server + tools ONLY when the attempt backend can HOST it; on a backend
     // without inProcessMcp (Codex) the server would be silently dropped, so we attach nothing and

@@ -57,6 +57,34 @@ export function exerciseScratchEnabled(args: ExerciseSandboxArgs): boolean {
 }
 
 /**
+ * Warning for an OS-sandboxed judge (Codex) about to exercise a Swift/Xcode project without full
+ * access. Its `read-only`/`workspace-write` sandbox refuses CoreSimulator XPC, SwiftPM's own nested
+ * sandbox, and SwiftLint/clang cache writes outside the workspace, so the build/test gates come back
+ * UN-RUN instead of graded — across past runs 83% of such verdicts had un-run gates, against 3% under
+ * `danger-full-access`. Returns `undefined` when the judge has no OS sandbox (Claude), already has full
+ * access, isn't on a Swift/Xcode project (`apple`, or `exercise.mechanism: ios`), or when the
+ * full-access request was just refused (`fullAccessRefusalWarning` already explains that case).
+ */
+export function appleSandboxWarning(args: {
+  hasOsSandbox: boolean;
+  mode: ExerciseSandboxMode;
+  apple: boolean;
+  mechanism: string;
+  refused: boolean;
+  roleLabel: string;
+}): string | undefined {
+  if (!args.hasOsSandbox || args.mode === "danger-full-access" || args.refused) return undefined;
+  if (!args.apple && args.mechanism !== "ios") return undefined;
+  return (
+    `${args.roleLabel} will exercise a Swift/Xcode project under the '${args.mode}' OS sandbox, which ` +
+    `refuses xcodebuild/CoreSimulator, SwiftPM's own sandbox, and SwiftLint/clang cache writes — expect ` +
+    `its build and test gates to come back UN-RUN instead of graded. Set exercise.sandbox: ` +
+    `danger-full-access (honored only on a git worktree or Sparra build branch; the integrity guard ` +
+    `still reverts artifact writes, but network is not withheld).`
+  );
+}
+
+/**
  * Loud-refusal text for an `exercise.sandbox: danger-full-access` that the boundary gate DENIED —
  * the exercise mirror of `gateSandbox`'s warning for write roles. Full access is an explicit opt-in
  * taken to make a specific gate runnable (an iOS build), so silently handing back a read-only judge

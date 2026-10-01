@@ -7,7 +7,7 @@ import { evaluatorGuard } from "../sdk/guard.ts";
 import { skillsForRole } from "../sdk/skills.ts";
 import { buildExerciser, exerciseRunInstruction, type Exerciser } from "../sdk/exercise.ts";
 import { snapshotArtifact, enforceArtifactIntegrity, realIntegrityDeps, type IntegrityDeps } from "./integrity.ts";
-import { exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
+import { appleSandboxWarning, exerciseSandboxMode, fullAccessRefusalWarning } from "./exerciseScratch.ts";
 import { isLinkedWorktree } from "../util/git.ts";
 import { buildReadDirs } from "./readscope.ts";
 import { budgetExceeded, costUsdOrZero } from "./budget.ts";
@@ -32,7 +32,7 @@ import { assertionKey, assertionKeySet, normalizeAssertionId, normalizeUnrunIds 
 import { annotateEnvBlock, renderEnvBlockSection, type EnvBlockDeps } from "./envBlockJudge.ts";
 import { RUBRIC_CRITERIA, type AssertionId, type ExerciseStatus, type HoldoutContradiction, type RetiredHoldout, type Verdict, type WorkItem } from "./types.ts";
 import type { RoleConfig, SparraConfig } from "../config.ts";
-import { createSandboxSessionEnv, judgeCapabilityNotesText, withJudgeSandboxFlag } from "./judgeScratch.ts";
+import { createSandboxSessionEnv, detectJudgeStack, judgeCapabilityNotesText, withJudgeSandboxFlag } from "./judgeScratch.ts";
 
 export interface EvalOutput {
   verdict: Verdict;
@@ -223,6 +223,15 @@ export async function evaluateItem(args: {
     roleLabel: `evaluator-${item.id}`,
   });
   if (refusal) warn(refusal);
+  const appleWarning = appleSandboxWarning({
+    hasOsSandbox: getBackend(role.backend).capabilities.sandbox,
+    mode: exerciseMode,
+    apple: detectJudgeStack(workspaceDir).apple,
+    mechanism: ctx.config.exercise.mechanism,
+    refused: !!refusal,
+    roleLabel: `evaluator-${item.id}`,
+  });
+  if (appleWarning) warn(appleWarning);
   const integrityDeps = args.integrityDeps ?? realIntegrityDeps();
 
   const system = fill(await loadPrompt(ctx.paths, "evaluator"), {

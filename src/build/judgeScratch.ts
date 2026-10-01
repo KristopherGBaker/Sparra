@@ -162,12 +162,43 @@ export interface JudgeStack {
    * it is a false promise. Detected from the documented shared helper / a vitest entry point.
    */
   judgeSandboxSeam: boolean;
+  /** A Swift/Xcode project: a `Package.swift`, `project.yml`, `*.xcodeproj` or `*.xcworkspace` at the
+   *  root or up to two directory levels below it. */
+  apple: boolean;
 }
 
 /** Files that can wire the judge-sandbox flag, cheapest first. Bounded: no tree walk. */
 const SEAM_FILES = ["test/helpers/judgeEnv.ts", "vitest.setup.ts", "vitest.config.ts", "package.json"];
 
-/** Detect the graded project's stack from its workspace. Cheap (a handful of stats + small reads). */
+/** Directory names never descended into when looking for Swift/Xcode markers. */
+const APPLE_SCAN_SKIP = new Set(["node_modules", "DerivedData", "Pods", "Carthage", "build"]);
+
+/** Whether `name` (a file or dir entry) marks a Swift/Xcode project. */
+function isAppleMarker(name: string): boolean {
+  return name === "Package.swift" || name === "project.yml" || name.endsWith(".xcodeproj") || name.endsWith(".xcworkspace");
+}
+
+/**
+ * Bounded scan for a Swift/Xcode marker at `dir` and up to `depth` levels below it. Skips hidden and
+ * dependency/build dirs (and does not descend into a marker dir like `X.xcodeproj`). Unreadable dirs
+ * count as "no marker".
+ */
+export function hasAppleMarker(dir: string, depth = 2): boolean {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (entries.some((e) => isAppleMarker(e.name))) return true;
+  if (depth <= 0) return false;
+  return entries.some(
+    (e) => e.isDirectory() && !e.name.startsWith(".") && !APPLE_SCAN_SKIP.has(e.name) && hasAppleMarker(path.join(dir, e.name), depth - 1)
+  );
+}
+
+/** Detect the graded project's stack from its workspace. Cheap (a handful of stats + small reads, and
+ *  a directory scan two levels deep for the Swift/Xcode markers). */
 export function detectJudgeStack(workspaceDir: string): JudgeStack {
   const read = (rel: string): string | null => {
     try {
@@ -184,11 +215,12 @@ export function detectJudgeStack(workspaceDir: string): JudgeStack {
     node: pkg !== null,
     vitest: vitestConfig || (pkg !== null && /["']vitest["']\s*:/.test(pkg)),
     judgeSandboxSeam: SEAM_FILES.some((f) => read(f)?.includes(JUDGE_SANDBOX_FLAG) ?? false),
+    apple: hasAppleMarker(workspaceDir),
   };
 }
 
 /** A stack that claims nothing — the safe default when no workspace is known. */
-export const UNKNOWN_JUDGE_STACK: JudgeStack = { node: false, vitest: false, judgeSandboxSeam: false };
+export const UNKNOWN_JUDGE_STACK: JudgeStack = { node: false, vitest: false, judgeSandboxSeam: false, apple: false };
 
 /** The Codex-style sandbox modes a judge can run under (see `AgentRequest.sandbox` + `readOnly`). */
 export type JudgeSandboxMode = "read-only" | "workspace-write" | "danger-full-access";

@@ -5,6 +5,7 @@ import path from "node:path";
 import { defaultConfig } from "../src/config.ts";
 import {
   detectJudgeStack,
+  hasAppleMarker,
   UNKNOWN_JUDGE_STACK,
   JUDGE_SCRATCH_ENV_KEYS,
   judgeScratchEnvLayer,
@@ -24,7 +25,7 @@ import {
  * ABOUT. Stack detection now decides which of them are emitted, so the fixture has to say so; a
  * Swift/iOS project gets none of it (see the stack-conditioning describe at the end of this file).
  */
-const VITEST_STACK = { node: true, vitest: true, judgeSandboxSeam: true } as const;
+const VITEST_STACK = { node: true, vitest: true, judgeSandboxSeam: true, apple: false } as const;
 
 /** An on-disk Node/vitest workspace, so `judgeCapabilityNotesText` DETECTS the stack rather than
  *  being told — the detection is the thing under test for the stack-conditioning cases below. */
@@ -407,12 +408,33 @@ describe("judge capability notes — conditional on the graded project's stack",
 
   it("detects the stack from evidence, not from configuration", () => {
     const bare = project({ "README.md": "# thing\n" });
-    expect(detectJudgeStack(bare)).toEqual({ node: false, vitest: false, judgeSandboxSeam: false });
+    expect(detectJudgeStack(bare)).toEqual({ node: false, vitest: false, judgeSandboxSeam: false, apple: false });
     const viaConfig = project({ "package.json": "{}", "vitest.config.ts": "export default {};\n" });
     expect(detectJudgeStack(viaConfig)).toMatchObject({ node: true, vitest: true });
     expect(detectJudgeStack("/nonexistent/path")).toEqual(UNKNOWN_JUDGE_STACK);
     fs.rmSync(bare, { recursive: true, force: true });
     fs.rmSync(viaConfig, { recursive: true, force: true });
+  });
+
+  it("detects a Swift/Xcode project from a marker at the root or up to two levels below", () => {
+    const cases: Array<[Record<string, string>, boolean]> = [
+      [{ "Package.swift": "// swift-tools-version:6.0\n" }, true],
+      [{ "project.yml": "name: App\n" }, true],
+      [{ "App.xcodeproj/project.pbxproj": "" }, true],
+      [{ "App.xcworkspace/contents.xcworkspacedata": "" }, true],
+      [{ "Apps/Reader/project.yml": "name: Reader\n" }, true], // two levels down (Sumi's layout)
+      [{ "a/b/c/Package.swift": "" }, false], // three levels down: out of range
+      [{ "node_modules/pkg/Package.swift": "" }, false], // dependency dirs are not the project
+      [{ ".build/checkouts/Package.swift": "" }, false], // hidden dirs are skipped
+      [{ "README.md": "# thing\n" }, false],
+    ];
+    for (const [files, expected] of cases) {
+      const dir = project(files);
+      expect(hasAppleMarker(dir), JSON.stringify(files)).toBe(expected);
+      expect(detectJudgeStack(dir).apple, JSON.stringify(files)).toBe(expected);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    expect(hasAppleMarker("/nonexistent/path")).toBe(false);
   });
 });
 

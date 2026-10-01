@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  appleSandboxWarning,
   exerciseSandboxMode,
   exerciseScratchEnabled,
   fullAccessRefusalWarning,
@@ -129,5 +130,33 @@ describe("fullAccessRefusalWarning", () => {
   it("is silent on the everyday workspace-write fallback (in-place runs must not spam)", () => {
     expect(fullAccessRefusalWarning({ requested: "workspace-write", mode: "read-only", roleLabel: "r" })).toBeUndefined();
     expect(fullAccessRefusalWarning({ requested: "read-only", mode: "read-only", roleLabel: "r" })).toBeUndefined();
+  });
+});
+
+describe("appleSandboxWarning — OS-sandboxed judge on a Swift/Xcode project", () => {
+  const base = { hasOsSandbox: true, mode: "workspace-write" as const, apple: true, mechanism: "cli", refused: false, roleLabel: "role-run-evaluator" };
+
+  it("warns for a Codex-style judge under workspace-write, naming the knob and the boundary", () => {
+    const w = appleSandboxWarning(base);
+    expect(w).toContain("role-run-evaluator");
+    expect(w).toContain("'workspace-write'");
+    expect(w).toContain("UN-RUN");
+    expect(w).toContain("exercise.sandbox: danger-full-access");
+    expect(w).toContain("worktree");
+  });
+
+  it("warns under read-only too (an in-place run that fell back)", () => {
+    expect(appleSandboxWarning({ ...base, mode: "read-only" })).toContain("'read-only'");
+  });
+
+  it("warns on exercise.mechanism: ios even when no Swift marker was found", () => {
+    expect(appleSandboxWarning({ ...base, apple: false, mechanism: "ios" })).toBeDefined();
+  });
+
+  it("is silent with full access, without an OS sandbox (Claude), off Swift, or after a refusal", () => {
+    expect(appleSandboxWarning({ ...base, mode: "danger-full-access" })).toBeUndefined();
+    expect(appleSandboxWarning({ ...base, hasOsSandbox: false })).toBeUndefined();
+    expect(appleSandboxWarning({ ...base, apple: false, mechanism: "cli" })).toBeUndefined();
+    expect(appleSandboxWarning({ ...base, mode: "read-only", refused: true })).toBeUndefined();
   });
 });
